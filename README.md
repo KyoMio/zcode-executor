@@ -23,6 +23,28 @@ Paste this to your agent (Claude Code, Codex, or anything with a shell):
 
 > `Read https://github.com/kyomio/zcode-executor/blob/main/README.md and install zcode-executor by following its Install section, then run zcode-executor doctor.`
 
+## How to use
+
+You don't drive the CLI yourself. You describe the task to your agent, and it runs the skill: writes a task file, adds a worktree, dispatches to ZCode, waits, then checks the result with `git diff` and your tests before telling you it's done. If ZCode asks for something the gate won't pass on its own, the agent stops and asks you.
+
+Two ways to trigger it:
+
+**Call the skill directly**
+
+```
+/zcode-executor add a --json flag to the status command, keep the tests green
+```
+
+(The full name is `/zcode-executor:zcode-executor`; the short form works unless another plugin claims it.)
+
+**Or just say so in plain language**
+
+```
+Hand the lib/queue.mjs refactor off to zcode.
+```
+
+Either way, say what "done" looks like — which command should pass, which file should exist, what output you expect. The agent turns that into the acceptance criteria in the task file, and the task file is the contract; the message sent to ZCode is only a doorbell.
+
 ## Two layers
 
 - **Workflow layer** — dispatch and acceptance: task file → isolated worktree → local session id → background runner → `git diff` and tests. This is what the CLI commands and the skill are about.

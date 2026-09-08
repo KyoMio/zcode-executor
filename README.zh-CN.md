@@ -23,6 +23,28 @@ Claude Code 擅长把任务想清楚，ZCode 擅长用很低的成本把代码�
 
 > `Read https://github.com/kyomio/zcode-executor/blob/main/README.md and install zcode-executor by following its Install section, then run zcode-executor doctor.`
 
+## 怎么用
+
+命令行不用你自己敲。你把任务讲给你的 agent，它去跑这个 skill：写任务单、建执行副本、投给 ZCode、等它干完，再用 `git diff` 和你的测试核对结果，然后才回来告诉你成没成。中间 ZCode 要做闸门放不了的事，agent 会停下来问你。
+
+两种叫法：
+
+**直接调 skill**
+
+```
+/zcode-executor 给 status 命令加一个 --json 开关，测试要保持全绿
+```
+
+（全名是 `/zcode-executor:zcode-executor`，没有别的插件占用时短写就行。）
+
+**或者直接说人话**
+
+```
+把 lib/queue.mjs 的重构派单给 zcode。
+```
+
+两种叫法都一样：说清楚「做完」长什么样——跑哪条命令要过、哪个文件该出现、期望什么输出。agent 会把这些写成任务单里的验收标准，任务单才是契约，发给 ZCode 的那句话只是门铃。
+
 ## 两层结构
 
 - **工作流层**：派活与验收。任务单 → 隔离的 worktree → 本地会话 id → 后台 runner → `git diff` 与测试。CLI 命令和 skill 讲的都是这一层。
