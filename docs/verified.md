@@ -27,6 +27,9 @@
     这条 CI 覆盖不到（要真 zcode），是读代码得出的。
   - 路径包含判定用字符串前缀比较（`lib/review/hard.mjs`），Windows 大小写不敏感可能误判成越界。
     方向是保守的（多转人工，不会误放行），同样没被 CI 覆盖。
+- **两条用例在 CI 上偶发失败**：`run.test.mjs` 的「exitAfter:send 重投」与 `appserver.test.mjs` 的
+  「信封 id 只保留最近 5 个」。都起真子进程卡时序，同一个 commit 连跑三轮，前两轮各挂一条、第三轮全绿；
+  本机 Node 22 与 25 各跑三次都过。看红之前先重跑一次再判断。
 - 测试套件里六条用例是 Unix 专属手段（SIGSTOP 冻 runner、`/tmp` 符号链接归一），Windows 上跳过，不是产品缺陷。
 - ZCode App 装在哪（抄自 zcode-acp `resolve.js` 的 `bundledZcodeCandidates`）：macOS `/Applications/ZCode.app/…`
   与 `~/Applications/…`；Linux 常见于 `/opt/ZCode/resources/glm/zcode.cjs`、`/usr/share/zcode/resources/glm/zcode.cjs`，
