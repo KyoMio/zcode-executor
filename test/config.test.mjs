@@ -97,7 +97,8 @@ test('loadConfig：有文件时合并；allowedRoots 的 ~ 展开成绝对路径
       }),
     );
     const config = loadConfig(home);
-    assert.deepEqual(config.allowedRoots, [path.join(os.homedir(), 'wt'), '/abs/root']);
+    // path.resolve 后比：Windows 上 '/abs/root' 会补上当前盘符（D:\abs\root），POSIX 上原样
+    assert.deepEqual(config.allowedRoots, [path.join(os.homedir(), 'wt'), path.resolve('/abs/root')]);
     assert.equal(config.waitTimeoutSec, 60);
     assert.equal(config.preferredProvider, 'my-plan');
     assert.deepEqual(config.tiers, { fast: 'GLM-5.3' });

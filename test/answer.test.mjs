@@ -399,7 +399,7 @@ test('同一回合两个挂起：approve 后 applied true 且不等满 5 秒（�
   );
 });
 
-test('applied:false：runner 被挂起（SIGSTOP）活着但不消费 → approve 如实报 false（评审 T2.5b 第 6 条）', async (t) => {
+test('applied:false：runner 被挂起（SIGSTOP）活着但不消费 → approve 如实报 false（评审 T2.5b 第 6 条）', { skip: process.platform === 'win32' && '用 SIGSTOP 冻住 runner，Windows 没有这个信号' }, async (t) => {
   const env = await setupAnswer(t, {
     script: { turns: [{ permission: { toolName: 'Write', input: { file_path: 'x' }, reason: '副作用' } }] },
   });
@@ -464,7 +464,7 @@ test('events.jsonl 混入 {method,params} 通知行与坏行 → approve 仍报 
   );
 });
 
-test('挂起时 approve 与 cancel 并发 → eventType executor.deny、人读如实说被拒（T2.6b 第 2 条）', async (t) => {
+test('挂起时 approve 与 cancel 并发 → eventType executor.deny、人读如实说被拒（T2.6b 第 2 条）', { skip: process.platform === 'win32' && '用 SIGSTOP 冻住 runner，Windows 没有这个信号' }, async (t) => {
   // 冻住 runner 编排并发：approve 先写放行，cancel 再写 deny 并落 cancel 文件，SIGCONT 后
   // runner 见 cancel 文件替人拒答——approve 必须拿到 executor.deny 回执而不是谎报放行
   const build = async () => {
@@ -520,7 +520,7 @@ test('挂起时 approve 与 cancel 并发 → eventType executor.deny、人读�
   await waitFor(async () => (existsSync(path.join(second.env.runsDir, 'lock')) ? undefined : true), { timeoutMs: 20000 });
 });
 
-test('pending.json 坏 JSON：status/follow/send --wait/cancel 都退 1 且报中文（T2.6b 第 9 条）', async (t) => {
+test('pending.json 坏 JSON：status/follow/send --wait/cancel 都退 1 且报中文（T2.6b 第 9 条）', { skip: process.platform === 'win32' && '用 SIGSTOP 冻住 runner，Windows 没有这个信号' }, async (t) => {
   const env = await setupAnswer(t, {
     script: { turns: [{ permission: { toolName: 'Write', input: { file_path: 'x' }, reason: '副作用' } }] },
   });

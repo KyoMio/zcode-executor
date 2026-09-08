@@ -19,6 +19,15 @@
   而 `node --test` 匹配不到任何文件时**退出码是 0**（本机实测），于是整档 CI 假绿、`tests 0` 藏在日志里。
   去掉引号两边都对：POSIX 的 shell 自己展开，Windows 交给 node 的 glob。
 - **别拿目录当参数。** `node --test test/` 会把 `helpers.mjs`、`mock-appserver.mjs` 这些非测试文件也当测试跑，直接失败。
+- **Windows 上已知的真实差距（CI 实测，非测试问题）**：
+  - 队列文件名不能带冒号。ISO 时间戳直接当文件名在 Windows 上一律 ENOENT，`send` 全挂（已修，`lib/queue.mjs`）。
+  - `SIGTERM` 收不到。Node 的处理器不跑，runner 的收尾（state 定稿、删锁）不发生，退出码是 null 不是 0，
+    锁文件会残留。要支持得改成 Windows 上另找一种停机信号。
+  - `process.kill(-pid, 'SIGKILL')` 杀进程组不成立（`lib/appserver.mjs`），只能杀直接子进程，zcode 的孙子进程会成孤儿。
+    这条 CI 覆盖不到（要真 zcode），是读代码得出的。
+  - 路径包含判定用字符串前缀比较（`lib/review/hard.mjs`），Windows 大小写不敏感可能误判成越界。
+    方向是保守的（多转人工，不会误放行），同样没被 CI 覆盖。
+- 测试套件里六条用例是 Unix 专属手段（SIGSTOP 冻 runner、`/tmp` 符号链接归一），Windows 上跳过，不是产品缺陷。
 - ZCode App 装在哪（抄自 zcode-acp `resolve.js` 的 `bundledZcodeCandidates`）：macOS `/Applications/ZCode.app/…`
   与 `~/Applications/…`；Linux 常见于 `/opt/ZCode/resources/glm/zcode.cjs`、`/usr/share/zcode/resources/glm/zcode.cjs`，
   但官方说法是「解压出来的应用目录里」，位置不固定；Windows 是 `%LOCALAPPDATA%\Programs\ZCode\resources\glm\zcode.cjs`（未验）。

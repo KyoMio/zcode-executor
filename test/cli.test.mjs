@@ -414,7 +414,7 @@ test('new：白名单内的符号链接解析到外部 → 退出码 2（评审 
   assert.match(run.stderr, /不在白名单/);
 });
 
-test('new：/tmp 与 /private/tmp 两种写法都通（realpath 归一，评审 T2.2b 第 1 条）', async () => {
+test('new：/tmp 与 /private/tmp 两种写法都通（realpath 归一，评审 T2.2b 第 1 条）', { skip: process.platform === 'win32' && '验的是 /tmp 这类符号链接的归一，Windows 没有 /tmp' }, async () => {
   const mock = await startMock({});
   dirs.push(mock.dir);
   const home = await mkdtemp(path.join(os.tmpdir(), 'zcode-t22b-home-'));

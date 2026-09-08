@@ -48,7 +48,7 @@ test('新清单的关键字段照抄 .claude-plugin/plugin.json', () => {
     }
   }
   assert.equal(JSON.parse(read('.github/plugin/plugin.json')).skills, 'skills/');
-  assert.match(read('plugin.yaml'), /^provides_skills:\n  - zcode-executor$/m);
+  assert.match(read('plugin.yaml'), /^provides_skills:\r?\n  - zcode-executor$/m); // Windows checkout 是 CRLF
 });
 
 test('两份 README 都有七家代理的安装小节和 skill 链接命令', () => {

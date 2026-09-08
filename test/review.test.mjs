@@ -96,7 +96,7 @@ test('checkHardRules：Bash rm -rf / 无路径参数不命中，交模型审批'
   );
 });
 
-test('checkHardRules：/tmp 与 /private/tmp 写法互通（realpath 归一）', () => {
+test('checkHardRules：/tmp 与 /private/tmp 写法互通（realpath 归一）', { skip: process.platform === 'win32' && '验的是 /tmp 这类符号链接的归一，Windows 没有 /tmp' }, () => {
   // macOS 上 /tmp 是 /private/tmp 的符号链接；两种拼法必须算作同一个地方。
   // Linux 上 /tmp 就是本体，此用例退化为同路径，仍应通过。
   const base = fs.mkdtempSync(path.join('/tmp', 'zcx-review-'));

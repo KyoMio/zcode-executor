@@ -467,7 +467,9 @@ test('follow --stream：stderr 出现 stream: 行（评审 T2.4c 第 10 条）',
   assert.match(follow.stderr, /stream: Bash started/);
 });
 
-test('SIGTERM：runner 收到后 state exited、lock 删除、进程退出（评审 T2.4c 第 10 条）', async (t) => {
+// Windows 上 kill('SIGTERM') 直接终止进程，Node 的处理器不跑，收尾（写 state、删锁）也就不发生——
+// 这是真实差距不是测试问题，记在 verified.md「跨平台」一节。
+test('SIGTERM：runner 收到后 state exited、lock 删除、进程退出（评审 T2.4c 第 10 条）', { skip: process.platform === 'win32' && 'Windows 收不到 SIGTERM，优雅收尾不成立（已知差距）' }, async (t) => {
   const env = await setupOps(t, { script: { turns: [{ hang: true }] } });
   const { enqueue } = await import('../lib/queue.mjs');
   enqueue(env.home, env.entry.id, { text: '会被 SIGTERM 打断的投递' });
