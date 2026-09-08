@@ -35,15 +35,13 @@ Claude Code 擅长把任务想清楚，ZCode 擅长用很低的成本把代码�
 /zcode-executor 给 status 命令加一个 --json 开关，测试要保持全绿
 ```
 
-（全名是 `/zcode-executor:zcode-executor`，没有别的插件占用时短写就行。）
-
-**或者直接说人话**
+**或者直接提要求**
 
 ```
 把 lib/queue.mjs 的重构派单给 zcode。
 ```
 
-两种叫法都一样：说清楚「做完」长什么样——跑哪条命令要过、哪个文件该出现、期望什么输出。agent 会把这些写成任务单里的验收标准，任务单才是契约，发给 ZCode 的那句话只是门铃。
+两种用法都一样：说清楚「做完」的标准——跑哪条命令要过、哪个文件该出现、期望什么输出。agent 会把这些写成任务单里的验收标准，任务单才是契约，发给 ZCode 的那句话只是开始信号。
 
 ## 两层结构
 
@@ -161,7 +159,7 @@ npm install -g zcode-executor   # 零依赖，无构建
 zcode-executor doctor           # 零 token 自检
 ```
 
-不想装也可以直接 `npx zcode-executor doctor`。skill 随包一起发，在 `$(npm root -g)/zcode-executor/skills/zcode-executor/`，复制或软链到你的代理的 skills 目录即可。CLI 本身不依赖任何 Claude 专有的东西。
+不想装也可以直接 `npx zcode-executor doctor`。skill 随包一起，在 `$(npm root -g)/zcode-executor/skills/zcode-executor/`，复制或软链到你的代理的 skills 目录即可。CLI 本身不依赖任何 Claude 专有的东西。
 
 ```bash
 SKILL=$(npm root -g)/zcode-executor/skills/zcode-executor
@@ -196,6 +194,7 @@ ln -s "$PWD/skills/zcode-executor" ~/.claude/skills/zcode-executor
 
 ### 环境要求
 
+- macOS 或 Linux。ZCode App 的位置按各平台的惯例找（`/Applications/…`、`/opt/ZCode/…`、`/usr/share/zcode/…`），装在别处就用 `ZCODE_BIN` 指到 `zcode.cjs`。Windows 暂不支持：测试在 CI 上跑，但找 App 的位置和收场时清理进程组还是按 Unix 写的。
 - Node ≥ 22（ZCode 的 app-server 要 `node:sqlite`）。
 - 装好并登录过 ZCode 桌面 App（CLI 只读 `~/.zcode/v2/config.json` 来推 provider 表，从不写回）。
 
