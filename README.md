@@ -58,7 +58,7 @@ This repository is both the plugin and its own marketplace.
 
 ```bash
 claude plugin marketplace add kyomio/zcode-executor      # or a local path
-claude plugin install zcode-executor@kyomio-plugins --scope user
+claude plugin install zcode-executor@zcode-executor --scope user
 ```
 
 `bin/zcode-executor` is added to Bash's `PATH` while the plugin is enabled; the skill appears as `/zcode-executor:zcode-executor`. Saying "let zcode do it" triggers it.
@@ -67,7 +67,7 @@ claude plugin install zcode-executor@kyomio-plugins --scope user
 
 ```bash
 codex plugin marketplace add kyomio/zcode-executor        # or a local path
-codex plugin add zcode-executor@kyomio-plugins
+codex plugin add zcode-executor@zcode-executor
 ```
 
 Two differences from Claude Code: Codex does not put a plugin's `bin/` on `PATH` (the skill tells the agent where the binary lives), and the default `workspace-write` sandbox blocks writes to `~/.zcode-executor` — add it to `[sandbox_workspace_write] writable_roots` in `~/.codex/config.toml` or approve when prompted.

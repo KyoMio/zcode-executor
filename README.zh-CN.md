@@ -58,7 +58,7 @@ _时序图由 [archify](https://github.com/tt-a1i/archify) 从 [`assets/how-it-w
 
 ```bash
 claude plugin marketplace add kyomio/zcode-executor      # 或本地目录路径
-claude plugin install zcode-executor@kyomio-plugins --scope user
+claude plugin install zcode-executor@zcode-executor --scope user
 ```
 
 插件启用期间 `bin/zcode-executor` 自动进 Bash 的 `PATH`，skill 以 `/zcode-executor:zcode-executor` 出现；说「让 zcode 去做」就会触发。
@@ -67,7 +67,7 @@ claude plugin install zcode-executor@kyomio-plugins --scope user
 
 ```bash
 codex plugin marketplace add kyomio/zcode-executor        # 或本地目录路径
-codex plugin add zcode-executor@kyomio-plugins
+codex plugin add zcode-executor@zcode-executor
 ```
 
 和 Claude Code 两点不同：Codex 不把插件的 `bin/` 放进 `PATH`（skill 里写明了二进制在哪）；默认 `workspace-write` 沙箱不许写 `~/.zcode-executor`，在 `~/.codex/config.toml` 的 `[sandbox_workspace_write] writable_roots` 里加上它，或按提示批准。

@@ -1,7 +1,7 @@
 {
-  "name": "kyomio-plugins",
+  "name": "zcode-executor",
   "interface": {
-    "displayName": "kyomio plugins"
+    "displayName": "zcode-executor"
   },
   "plugins": [
     {

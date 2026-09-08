@@ -1,6 +1,6 @@
 {
-  "name": "kyomio-plugins",
-  "description": "kyomio 的 Claude Code 插件：zcode-executor 等",
+  "name": "zcode-executor",
+  "description": "zcode-executor 的 marketplace，本仓库既是插件也是自己的 marketplace",
   "owner": {
     "name": "kyomio"
   },
