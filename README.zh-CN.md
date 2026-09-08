@@ -6,7 +6,7 @@
 
 <p align="center">一个 Claude Code（也支持 Codex）插件：把一件想清楚的开发任务派给本机的 <a href="https://zcode.z.ai">ZCode</a>（GLM）执行，在隔离的 git worktree 里跑，每一次写操作都过「红线 + 模型审批」两道闸，最后用 <code>git diff</code> 和测试验收，而不是听执行端的自述。</p>
 
-<p align="center"><img src="https://img.shields.io/badge/version-v0.1.0-5B4CF0" alt="v0.1.0"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-298%20passing-brightgreen" alt="Tests"></p>
+<p align="center"><img src="https://img.shields.io/badge/version-v0.1.0-5B4CF0" alt="v0.1.0"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-303%20passing-brightgreen" alt="Tests"></p>
 
 ## 为什么
 
@@ -94,6 +94,66 @@ codex plugin add zcode-executor@zcode-executor
 
 和 Claude Code 两点不同：Codex 不把插件的 `bin/` 放进 `PATH`（skill 里写明了二进制在哪）；默认 `workspace-write` 沙箱不许写 `~/.zcode-executor`，在 `~/.codex/config.toml` 的 `[sandbox_workspace_write] writable_roots` 里加上它，或按提示批准。
 
+### GitHub Copilot CLI
+
+这份仓库同时也是 Copilot CLI 的插件 marketplace。
+
+```bash
+copilot plugin marketplace add kyomio/zcode-executor
+copilot plugin install zcode-executor@zcode-executor
+```
+
+### Gemini CLI
+
+仓库根的 `gemini-extension.json` 让它成为一个 Gemini CLI 扩展，`skills/` 下的技能装完即被自动发现。
+
+```bash
+gemini extensions install https://github.com/kyomio/zcode-executor
+```
+
+### Antigravity
+
+Antigravity 就是改名的 Gemini CLI（`agy`），复用同一份扩展清单。
+
+```bash
+agy plugin install https://github.com/kyomio/zcode-executor
+```
+
+### pi
+
+pi 认 `package.json` 里的 `pi` 字段，按 npm 包直接装。
+
+```bash
+pi install npm:zcode-executor
+```
+
+### OpenClaw
+
+不用清单，把技能放进它的用户技能目录即可：
+
+```bash
+ln -s "$(npm root -g)/zcode-executor/skills/zcode-executor" ~/.openclaw/skills/zcode-executor
+```
+
+### Hermes
+
+仓库根带了 Hermes 认的 `plugin.yaml`，装完再启用：
+
+```bash
+hermes plugins install kyomio/zcode-executor
+hermes plugins enable zcode-executor
+```
+
+### Grok Build
+
+`.grok-plugin/` 是给它 marketplace 装法用的清单，它也读 `~/.agents/skills/`，技能本身一条软链即可：
+
+```bash
+ln -s "$(npm root -g)/zcode-executor/skills/zcode-executor" ~/.grok/skills/zcode-executor
+```
+
+上面这七家和 Codex 一样，不会像 Claude Code 那样把插件的 `bin/` 放进 `PATH`——先 `npm install -g zcode-executor`，或让 skill 走 `npx zcode-executor` 兜底，SKILL.md 里两条兜底都写了。
+
 ### npm（任何代理，或者不用代理）
 
 ```bash
@@ -103,12 +163,36 @@ zcode-executor doctor           # 零 token 自检
 
 不想装也可以直接 `npx zcode-executor doctor`。skill 随包一起发，在 `$(npm root -g)/zcode-executor/skills/zcode-executor/`，复制或软链到你的代理的 skills 目录即可。CLI 本身不依赖任何 Claude 专有的东西。
 
+```bash
+SKILL=$(npm root -g)/zcode-executor/skills/zcode-executor
+mkdir -p ~/.claude/skills && ln -s "$SKILL" ~/.claude/skills/zcode-executor
+```
+
+目录换成下表里你自己代理的那个即可：
+
+| 代理 | 用户级 skills 目录 |
+| --- | --- |
+| Claude Code | `~/.claude/skills` |
+| Codex | `~/.codex/skills` |
+| Gemini CLI / Antigravity | `~/.gemini/skills` |
+| Grok Build | `~/.grok/skills` |
+| Hermes | `~/.hermes/skills` |
+| OpenClaw | `~/.openclaw/skills` |
+| opencode | `~/.config/opencode/skills` |
+| 通用（多家都读这个） | `~/.agents/skills` |
+
 ### 从源码
 
 ```bash
 git clone https://github.com/kyomio/zcode-executor && cd zcode-executor
 npm link && zcode-executor doctor
 ```
+
+```bash
+ln -s "$PWD/skills/zcode-executor" ~/.claude/skills/zcode-executor
+```
+
+目录换成上一小节表格里你自己代理的那个即可。
 
 ### 环境要求
 
@@ -167,7 +251,7 @@ zcode-executor 自己就是这么开发出来的：
 ## 开发
 
 ```bash
-npm test          # 298 个用例对剧本驱动的 mock app-server 跑，外加文档版本号一致性检查；不花 token
+npm test          # 303 个用例对剧本驱动的 mock app-server 跑，外加文档版本号一致性检查；不花 token
 node --check lib/**/*.mjs
 ```
 

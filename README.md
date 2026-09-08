@@ -6,7 +6,7 @@
 
 <p align="center">A plugin for Claude Code (and Codex) that hands a well-specified development task to the local <a href="https://zcode.z.ai">ZCode</a> agent (GLM), runs it in an isolated git worktree, guards every write with a hard-rule check plus a model-based review, and lets you verify the result with <code>git diff</code> and tests instead of trusting the agent's own report.</p>
 
-<p align="center"><img src="https://img.shields.io/badge/version-v0.1.0-5B4CF0" alt="v0.1.0"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-298%20passing-brightgreen" alt="Tests"></p>
+<p align="center"><img src="https://img.shields.io/badge/version-v0.1.0-5B4CF0" alt="v0.1.0"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-303%20passing-brightgreen" alt="Tests"></p>
 
 ## Why
 
@@ -94,6 +94,66 @@ codex plugin add zcode-executor@zcode-executor
 
 Two differences from Claude Code: Codex does not put a plugin's `bin/` on `PATH` (the skill tells the agent where the binary lives), and the default `workspace-write` sandbox blocks writes to `~/.zcode-executor` — add it to `[sandbox_workspace_write] writable_roots` in `~/.codex/config.toml` or approve when prompted.
 
+### GitHub Copilot CLI
+
+This repository doubles as a Copilot CLI plugin marketplace.
+
+```bash
+copilot plugin marketplace add kyomio/zcode-executor
+copilot plugin install zcode-executor@zcode-executor
+```
+
+### Gemini CLI
+
+A `gemini-extension.json` at the repo root makes it a Gemini CLI extension; the bundled `skills/` are discovered automatically.
+
+```bash
+gemini extensions install https://github.com/kyomio/zcode-executor
+```
+
+### Antigravity
+
+Antigravity is Gemini CLI under its new name (`agy`) and reuses the same extension manifest.
+
+```bash
+agy plugin install https://github.com/kyomio/zcode-executor
+```
+
+### pi
+
+pi reads the `pi` field in `package.json` and installs the package directly.
+
+```bash
+pi install npm:zcode-executor
+```
+
+### OpenClaw
+
+No manifest needed — link the skill into its user skills directory:
+
+```bash
+ln -s "$(npm root -g)/zcode-executor/skills/zcode-executor" ~/.openclaw/skills/zcode-executor
+```
+
+### Hermes
+
+The repo root ships a Hermes `plugin.yaml`; install, then enable:
+
+```bash
+hermes plugins install kyomio/zcode-executor
+hermes plugins enable zcode-executor
+```
+
+### Grok Build
+
+`.grok-plugin/` carries its marketplace manifests, and the skill itself is one symlink away (it also reads `~/.agents/skills/`):
+
+```bash
+ln -s "$(npm root -g)/zcode-executor/skills/zcode-executor" ~/.grok/skills/zcode-executor
+```
+
+None of the seven agents above puts the plugin's `bin/` on `PATH` the way Claude Code does — run `npm install -g zcode-executor` once, or let the skill fall back to `npx zcode-executor`; the SKILL.md covers both.
+
 ### npm (any agent, or no agent)
 
 ```bash
@@ -103,12 +163,36 @@ zcode-executor doctor           # zero-token self-check
 
 Or run it without installing: `npx zcode-executor doctor`. The skill ships in the package at `$(npm root -g)/zcode-executor/skills/zcode-executor/`; copy or symlink it into your agent's skills directory. The CLI itself has no Claude-specific dependency.
 
+```bash
+SKILL=$(npm root -g)/zcode-executor/skills/zcode-executor
+mkdir -p ~/.claude/skills && ln -s "$SKILL" ~/.claude/skills/zcode-executor
+```
+
+Swap in your own agent's directory from this table:
+
+| Agent | User skills directory |
+| --- | --- |
+| Claude Code | `~/.claude/skills` |
+| Codex | `~/.codex/skills` |
+| Gemini CLI / Antigravity | `~/.gemini/skills` |
+| Grok Build | `~/.grok/skills` |
+| Hermes | `~/.hermes/skills` |
+| OpenClaw | `~/.openclaw/skills` |
+| opencode | `~/.config/opencode/skills` |
+| Shared (several agents read it) | `~/.agents/skills` |
+
 ### From source
 
 ```bash
 git clone https://github.com/kyomio/zcode-executor && cd zcode-executor
 npm link && zcode-executor doctor
 ```
+
+```bash
+ln -s "$PWD/skills/zcode-executor" ~/.claude/skills/zcode-executor
+```
+
+Swap in your agent's directory from the table in the npm section above.
 
 ### Requirements
 
@@ -167,7 +251,7 @@ Exit codes: `0` done · `1` usage / cannot start · `2` refused (whitelist, unkn
 ## Development
 
 ```bash
-npm test          # 298 cases against a scripted mock app-server, plus a doc-version drift check; no tokens spent
+npm test          # 303 cases against a scripted mock app-server, plus a doc-version drift check; no tokens spent
 node --check lib/**/*.mjs
 ```
 

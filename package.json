@@ -15,7 +15,12 @@
     "templates",
     ".claude-plugin",
     ".codex-plugin",
+    ".github/plugin",
+    ".grok-plugin",
     ".agents",
+    "gemini-extension.json",
+    "plugin.yaml",
+    "__init__.py",
     "AGENTS.md",
     "README.md",
     "README.zh-CN.md",
@@ -28,7 +33,7 @@
   "scripts": {
     "test": "node --test 'test/*.test.mjs' && node scripts/sync-doc-version.mjs --check",
     "test:ci": "node --test --test-concurrency=1 'test/*.test.mjs' && node scripts/sync-doc-version.mjs --check",
-    "version": "node scripts/sync-doc-version.mjs && git add README.md README.zh-CN.md .claude-plugin/plugin.json .codex-plugin/plugin.json"
+    "version": "node scripts/sync-doc-version.mjs && git add README.md README.zh-CN.md .claude-plugin/plugin.json .codex-plugin/plugin.json .github/plugin/plugin.json .grok-plugin/plugin.json gemini-extension.json plugin.yaml"
   },
   "keywords": [
     "zcode",
@@ -40,8 +45,14 @@
     "agent",
     "worktree",
     "permission-gate",
-    "code-review"
+    "code-review",
+    "pi-package"
   ],
+  "pi": {
+    "skills": [
+      "./skills"
+    ]
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kyomio/zcode-executor.git"

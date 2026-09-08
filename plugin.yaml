@@ -1,0 +1,6 @@
+name: zcode-executor
+version: 0.1.0
+description: 把想清楚的开发任务派给本机 ZCode（GLM）执行，隔离在 worktree 里跑，红线加模型审批把关，用 git diff 和测试验收
+author: kyomio
+provides_skills:
+  - zcode-executor

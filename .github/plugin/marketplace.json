@@ -1,0 +1,15 @@
+{
+  "name": "zcode-executor",
+  "description": "zcode-executor 的 marketplace，本仓库既是插件也是自己的 marketplace",
+  "owner": {
+    "name": "kyomio"
+  },
+  "plugins": [
+    {
+      "name": "zcode-executor",
+      "source": "./",
+      "description": "把开发任务派给本机 ZCode 执行，worktree 隔离，红线加模型审批，git diff 验收",
+      "category": "productivity"
+    }
+  ]
+}

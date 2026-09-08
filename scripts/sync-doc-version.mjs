@@ -1,5 +1,6 @@
 // 本文件负责：把 package.json 的版本号同步到所有带版本号的地方——两份 README 的版本徽章、
-// .claude-plugin/plugin.json 与 .codex-plugin/plugin.json 的 version 字段。
+// 各代理的插件清单（.claude-plugin、.codex-plugin、.github/plugin、.grok-plugin 的 plugin.json、
+// gemini-extension.json、plugin.yaml）的 version 字段。
 // 挂在 npm 的 version 生命周期脚本上：`npm version patch` 改完 package.json 之后、建提交之前跑，
 // 改好的文件被同一个发版提交带走。`--check` 只报漂移不写文件，挂在 npm test 里给 CI 用。
 // 每个标记都是必需的：找不到就非零退出，不默默通过——静默无操作正是这个脚本要防的事。
@@ -17,9 +18,10 @@ const targets = [
     { file, label: '版本徽章', pattern: /badge\/version-v\d+\.\d+\.\d+[^"'\s]*-/, replace: `badge/version-v${version}-` },
     { file, label: '徽章 alt', pattern: /alt="v\d+\.\d+\.\d+[^"]*"/, replace: `alt="v${version}"` },
   ]),
-  ...['.claude-plugin/plugin.json', '.codex-plugin/plugin.json'].map((file) => ({
+  ...['.claude-plugin/plugin.json', '.codex-plugin/plugin.json', '.github/plugin/plugin.json', '.grok-plugin/plugin.json', 'gemini-extension.json'].map((file) => ({
     file, label: 'version 字段', pattern: /"version": "[^"]+"/, replace: `"version": "${version}"`,
   })),
+  { file: 'plugin.yaml', label: 'version 字段', pattern: /^version: .+$/m, replace: `version: ${version}` },
 ];
 
 const edits = new Map();
