@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "zcode-executor 怎么运转",
+    "subtitle": "Claude 规划，ZCode 写码，闸门决定谁来批，git 验收",
+    "locale": "zh-CN",
+    "viewBox": [
+      880,
+      800
+    ],
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "dispatch",
+        "label": "派活",
+        "focus": [
+          "claude",
+          "runner",
+          "zcode"
+        ],
+        "note": "任务单是契约，消息只是门铃。"
+      },
+      {
+        "id": "gate",
+        "label": "审批闸门",
+        "focus": [
+          "runner",
+          "gate",
+          "zcode",
+          "human"
+        ],
+        "note": "先红线后模型审批。模型只会放行或转人工，从不拒绝。"
+      },
+      {
+        "id": "verify",
+        "label": "验收",
+        "focus": [
+          "claude",
+          "runner",
+          "human"
+        ],
+        "note": "验收看 git diff 和测试，不看执行端自述。"
+      }
+    ],
+    "column_fit": "spread"
+  },
+  "participants": [
+    {
+      "id": "claude",
+      "type": "external",
+      "label": "Claude Code",
+      "sublabel": "规划端"
+    },
+    {
+      "id": "runner",
+      "type": "backend",
+      "label": "runner",
+      "sublabel": "zcode-executor"
+    },
+    {
+      "id": "gate",
+      "type": "backend",
+      "label": "闸门",
+      "sublabel": "红线 + 模型审批"
+    },
+    {
+      "id": "zcode",
+      "type": "cloud",
+      "label": "ZCode (GLM)",
+      "sublabel": "执行端"
+    },
+    {
+      "id": "human",
+      "type": "external",
+      "label": "你",
+      "sublabel": "最终拍板"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 267,
+      "label": "派活"
+    },
+    {
+      "from": 279,
+      "to": 588,
+      "label": "审批闸门"
+    },
+    {
+      "from": 599,
+      "to": 712,
+      "label": "验收"
+    }
+  ],
+  "messages": [
+    {
+      "from": "claude",
+      "to": "runner",
+      "y": 173,
+      "label": "new --cwd <执行副本> → 本地 id x_…",
+      "variant": "emphasis",
+      "note": "先写 tasks/T-001.md：任务单是契约"
+    },
+    {
+      "from": "claude",
+      "to": "runner",
+      "y": 206,
+      "label": "send <id> --task <文件> --wait",
+      "variant": "emphasis"
+    },
+    {
+      "from": "runner",
+      "to": "zcode",
+      "y": 239,
+      "label": "建或恢复会话，投递消息",
+      "variant": "emphasis"
+    },
+    {
+      "from": "zcode",
+      "to": "runner",
+      "y": 298,
+      "label": "审批请求（Write / Bash …）",
+      "variant": "security"
+    },
+    {
+      "from": "runner",
+      "to": "gate",
+      "y": 331,
+      "label": "红线：越出执行副本？碰凭据？",
+      "variant": "security"
+    },
+    {
+      "from": "gate",
+      "to": "zcode",
+      "y": 396,
+      "label": "放行（仅当有 allow_once 选项）",
+      "variant": "return",
+      "note": "模型审批：先快筛，再慢判"
+    },
+    {
+      "from": "gate",
+      "to": "claude",
+      "y": 429,
+      "label": "转人工 → 退出码 5 + pending.json",
+      "variant": "dashed",
+      "note": "模型从不拒绝，判不下来就是转人工"
+    },
+    {
+      "from": "claude",
+      "to": "human",
+      "y": 462,
+      "label": "AskUserQuestion",
+      "variant": "dashed"
+    },
+    {
+      "from": "human",
+      "to": "claude",
+      "y": 495,
+      "label": "决定",
+      "variant": "return"
+    },
+    {
+      "from": "claude",
+      "to": "runner",
+      "y": 528,
+      "label": "approve / deny / answer <id>",
+      "variant": "emphasis",
+      "note": "应答绑定请求 id"
+    },
+    {
+      "from": "runner",
+      "to": "zcode",
+      "y": 560,
+      "label": "把应答交回执行端",
+      "variant": "return"
+    },
+    {
+      "from": "zcode",
+      "to": "runner",
+      "y": 618,
+      "label": "回合结束",
+      "variant": "return"
+    },
+    {
+      "from": "runner",
+      "to": "claude",
+      "y": 651,
+      "label": "退出码 0 + 摘要",
+      "variant": "return",
+      "note": "闸门统计、改动文件"
+    },
+    {
+      "from": "claude",
+      "to": "human",
+      "y": 684,
+      "label": "git add -A && git diff --cached、跑测试：看证据不听自述",
+      "variant": "dashed"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "runner",
+      "from": 169,
+      "to": 251,
+      "type": "backend"
+    },
+    {
+      "participant": "zcode",
+      "from": 234,
+      "to": 626,
+      "type": "cloud"
+    },
+    {
+      "participant": "gate",
+      "from": 326,
+      "to": 435,
+      "type": "backend"
+    },
+    {
+      "participant": "human",
+      "from": 457,
+      "to": 501,
+      "type": "external"
+    },
+    {
+      "participant": "runner",
+      "from": 523,
+      "to": 657,
+      "type": "backend"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "契约，不是聊天",
+      "items": [
+        "任务单既是 ZCode 执行的内容，也是审批模型读到的授权依据",
+        "活儿在隔离的 git worktree 里干，从不碰主检出"
+      ]
+    },
+    {
+      "dot": "orange",
+      "title": "闸门从不拒绝",
+      "items": [
+        "越出执行副本的写一律停下等人",
+        "模型审批只产出放行或转人工，出错也落到转人工",
+        "自动放行要求有 allow_once 选项"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "证据胜过自述",
+      "items": [
+        "用 git diff 和测试验收",
+        "闸门每个决定都是 runs/<id>/events.jsonl 里的一条事件",
+        "一条会话一个后台 runner，命令行只读文件"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "How zcode-executor works",
+    "subtitle": "Claude plans, ZCode codes, the gate decides who gets asked, git verifies",
+    "locale": "en",
+    "viewBox": [
+      880,
+      800
+    ],
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "dispatch",
+        "label": "Dispatch",
+        "focus": [
+          "claude",
+          "runner",
+          "zcode"
+        ],
+        "note": "The task file is the contract; the message is only a doorbell."
+      },
+      {
+        "id": "gate",
+        "label": "Permission gate",
+        "focus": [
+          "runner",
+          "gate",
+          "zcode",
+          "human"
+        ],
+        "note": "Hard rules, then a model review. The model only allows or asks; it never denies."
+      },
+      {
+        "id": "verify",
+        "label": "Verify",
+        "focus": [
+          "claude",
+          "runner",
+          "human"
+        ],
+        "note": "Acceptance is git diff plus tests, never the agent's own report."
+      }
+    ],
+    "column_fit": "spread"
+  },
+  "participants": [
+    {
+      "id": "claude",
+      "type": "external",
+      "label": "Claude Code",
+      "sublabel": "planner"
+    },
+    {
+      "id": "runner",
+      "type": "backend",
+      "label": "runner",
+      "sublabel": "zcode-executor"
+    },
+    {
+      "id": "gate",
+      "type": "backend",
+      "label": "gate",
+      "sublabel": "rules + review"
+    },
+    {
+      "id": "zcode",
+      "type": "cloud",
+      "label": "ZCode (GLM)",
+      "sublabel": "executor"
+    },
+    {
+      "id": "human",
+      "type": "external",
+      "label": "You",
+      "sublabel": "final say"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 267,
+      "label": "Dispatch"
+    },
+    {
+      "from": 279,
+      "to": 588,
+      "label": "Permission gate"
+    },
+    {
+      "from": 599,
+      "to": 712,
+      "label": "Verify"
+    }
+  ],
+  "messages": [
+    {
+      "from": "claude",
+      "to": "runner",
+      "y": 173,
+      "label": "new --cwd <worktree> → local id x_…",
+      "variant": "emphasis",
+      "note": "First write tasks/T-001.md: the task file is the contract"
+    },
+    {
+      "from": "claude",
+      "to": "runner",
+      "y": 206,
+      "label": "send <id> --task <file> --wait",
+      "variant": "emphasis"
+    },
+    {
+      "from": "runner",
+      "to": "zcode",
+      "y": 239,
+      "label": "create or resume session, deliver message",
+      "variant": "emphasis"
+    },
+    {
+      "from": "zcode",
+      "to": "runner",
+      "y": 298,
+      "label": "permission request (Write / Bash …)",
+      "variant": "security"
+    },
+    {
+      "from": "runner",
+      "to": "gate",
+      "y": 331,
+      "label": "hard rules: outside the worktree? credentials?",
+      "variant": "security"
+    },
+    {
+      "from": "gate",
+      "to": "zcode",
+      "y": 396,
+      "label": "allow (only when allow_once exists)",
+      "variant": "return",
+      "note": "Model review: fast screen, then slow judgment"
+    },
+    {
+      "from": "gate",
+      "to": "claude",
+      "y": 429,
+      "label": "ask → exit 5 + pending.json",
+      "variant": "dashed",
+      "note": "The model never denies; undecidable means ask"
+    },
+    {
+      "from": "claude",
+      "to": "human",
+      "y": 462,
+      "label": "AskUserQuestion",
+      "variant": "dashed"
+    },
+    {
+      "from": "human",
+      "to": "claude",
+      "y": 495,
+      "label": "decision",
+      "variant": "return"
+    },
+    {
+      "from": "claude",
+      "to": "runner",
+      "y": 528,
+      "label": "approve / deny / answer <id>",
+      "variant": "emphasis",
+      "note": "Answers are bound to the request id"
+    },
+    {
+      "from": "runner",
+      "to": "zcode",
+      "y": 560,
+      "label": "reply to the permission request",
+      "variant": "return"
+    },
+    {
+      "from": "zcode",
+      "to": "runner",
+      "y": 618,
+      "label": "turn completed",
+      "variant": "return"
+    },
+    {
+      "from": "runner",
+      "to": "claude",
+      "y": 651,
+      "label": "exit 0 + summary",
+      "variant": "return",
+      "note": "gate stats, files touched"
+    },
+    {
+      "from": "claude",
+      "to": "human",
+      "y": 684,
+      "label": "git add -A && git diff --cached, run tests: evidence, not narrative",
+      "variant": "dashed"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "runner",
+      "from": 169,
+      "to": 251,
+      "type": "backend"
+    },
+    {
+      "participant": "zcode",
+      "from": 234,
+      "to": 626,
+      "type": "cloud"
+    },
+    {
+      "participant": "gate",
+      "from": 326,
+      "to": 435,
+      "type": "backend"
+    },
+    {
+      "participant": "human",
+      "from": 457,
+      "to": 501,
+      "type": "external"
+    },
+    {
+      "participant": "runner",
+      "from": 523,
+      "to": 657,
+      "type": "backend"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Contract, not chat",
+      "items": [
+        "The task file is what ZCode executes and what the review reads as your authorization",
+        "Work happens in an isolated git worktree, never in the main checkout"
+      ]
+    },
+    {
+      "dot": "orange",
+      "title": "The gate never denies",
+      "items": [
+        "Writes outside the worktree always stop for a human",
+        "Model review outputs allow or ask; failures fall back to ask",
+        "Auto-approval requires an allow_once option"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Evidence beats narrative",
+      "items": [
+        "Accept with git diff and your test suite",
+        "Every gate decision is an event in runs/<id>/events.jsonl",
+        "One background runner per session; the CLI only reads files"
+      ]
+    }
+  ]
+}

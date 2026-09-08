@@ -1,0 +1,15 @@
+{
+  "name": "kyomio-plugins",
+  "description": "kyomio 的 Claude Code 插件：zcode-executor 等",
+  "owner": {
+    "name": "kyomio"
+  },
+  "plugins": [
+    {
+      "name": "zcode-executor",
+      "source": "./",
+      "description": "把开发任务派给本机 ZCode 执行，worktree 隔离，红线加模型审批，git diff 验收",
+      "category": "productivity"
+    }
+  ]
+}

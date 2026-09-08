@@ -1,0 +1,19 @@
+{
+  "name": "kyomio-plugins",
+  "interface": {
+    "displayName": "kyomio plugins"
+  },
+  "plugins": [
+    {
+      "name": "zcode-executor",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "name": "zcode-executor",
+  "version": "0.1.0",
+  "description": "Claude plans, ZCode codes, git verifies. Hand a development task to the local ZCode (GLM) agent in an isolated git worktree, with a hard-rule + model-review permission gate. 把开发任务派给本机 ZCode 执行，worktree 隔离，红线加模型审批，git diff 验收",
+  "license": "Apache-2.0",
+  "author": "kyomio",
+  "type": "module",
+  "bin": {
+    "zcode-executor": "bin/zcode-executor"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "skills",
+    "templates",
+    ".claude-plugin",
+    ".codex-plugin",
+    ".agents",
+    "AGENTS.md",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test 'test/*.test.mjs' && node scripts/sync-doc-version.mjs --check",
+    "test:ci": "node --test --test-concurrency=1 'test/*.test.mjs' && node scripts/sync-doc-version.mjs --check",
+    "version": "node scripts/sync-doc-version.mjs && git add README.md README.zh-CN.md .claude-plugin/plugin.json .codex-plugin/plugin.json"
+  },
+  "keywords": [
+    "zcode",
+    "glm",
+    "claude-code",
+    "claude-code-plugin",
+    "codex",
+    "codex-plugin",
+    "agent",
+    "worktree",
+    "permission-gate",
+    "code-review"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kyomio/zcode-executor.git"
+  },
+  "homepage": "https://github.com/kyomio/zcode-executor#readme",
+  "bugs": "https://github.com/kyomio/zcode-executor/issues"
+}

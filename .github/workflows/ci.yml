@@ -1,0 +1,21 @@
+# 推 main 或开 PR → 跑测试。零依赖，不用装包；Node 22 是 engines 的下限，24 是当前 LTS。
+# test:ci 把测试文件串行跑：runner 和 mock 都是真子进程，4 核 runner 上并行会把时序挤乱。
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm run test:ci

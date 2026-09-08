@@ -1,0 +1,24 @@
+{
+  "name": "zcode-executor",
+  "version": "0.1.0",
+  "description": "把想清楚的开发任务派给本机 ZCode（GLM）执行，隔离在 worktree 里跑，红线加模型审批把关，用 git diff 和测试验收",
+  "author": {
+    "name": "kyomio"
+  },
+  "repository": "https://github.com/kyomio/zcode-executor",
+  "homepage": "https://github.com/kyomio/zcode-executor",
+  "license": "Apache-2.0",
+  "keywords": [
+    "zcode",
+    "glm",
+    "executor",
+    "worktree",
+    "code-review-gate"
+  ],
+  "skills": "./skills",
+  "interface": {
+    "displayName": "zcode-executor",
+    "shortDescription": "把开发任务派给本机 ZCode 执行，worktree 隔离，红线加模型审批，git diff 验收",
+    "category": "Productivity"
+  }
+}

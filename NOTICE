@@ -1,0 +1,23 @@
+zcode-executor
+Copyright 2026 kyomio
+以 Apache License 2.0 发布（见 LICENSE）。
+
+本产品包含从 zcode-acp-server 移植并改写的代码，原项目：
+
+  zcode-acp (zcode-acp-server)
+  https://github.com/william0wang/zcode-acp
+  版权所有 William Wang，按 Apache License 2.0 授权（许可证副本见
+  docs/reference/zcode-acp-LICENSE）。移植自 npx 缓存中的 0.17.1 版。
+
+移植清单（移植处均已在文件头标注来源与改动）：
+
+  lib/appserver.mjs
+    源自 dist/backend/client.js（子进程拉起、读循环分流、请求配对、应答），
+    dist/backend/listener.js、dist/backend/resolve.js（zcode 位置解析、启动环境），
+    dist/handlers/server-requests.js（反向请求按 requestId 去重；重发换信封 id 时
+    缓存应答、逐个补答）。
+
+  lib/providers.mjs
+    源自 dist/config/provider-registry.js（provider 表构造、apiFormat 映射、
+    FNV-1a revision 哈希）。改动：按 enabled/models 过滤、revision 拼 apiKey
+    短哈希，加 readProviderRegistry。
