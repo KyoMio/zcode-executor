@@ -11,6 +11,19 @@
 | 凭据 | `~/.zcode/v2/config.json`，`builtin:bigmodel-coding-plan` 带 key，模型 `GLM-5.3` / `GLM-5.3-Flash`；`builtin:zai-start-plan` 禁用且 models 为空 |
 | Node | app-server 子进程需要带 `node:sqlite` 的 Node ≥ 22；zcode-acp 的 `backend/resolve.js` 有探测逻辑 |
 
+## 跨平台（2026-09-08，CI 实测）
+
+- GitHub Actions 上 ubuntu-latest 与 windows-latest、Node 22 与 24 四档全跑得起来，不用装依赖。
+- **`node --test` 的 glob 不能加引号。** `node --test 'test/*.test.mjs'` 在 Windows 上一个文件都匹配不到：
+  npm 在那边用 pwsh/cmd 起脚本，单引号不会被剥掉，node 收到的是带引号的字面串。
+  而 `node --test` 匹配不到任何文件时**退出码是 0**（本机实测），于是整档 CI 假绿、`tests 0` 藏在日志里。
+  去掉引号两边都对：POSIX 的 shell 自己展开，Windows 交给 node 的 glob。
+- **别拿目录当参数。** `node --test test/` 会把 `helpers.mjs`、`mock-appserver.mjs` 这些非测试文件也当测试跑，直接失败。
+- ZCode App 装在哪（抄自 zcode-acp `resolve.js` 的 `bundledZcodeCandidates`）：macOS `/Applications/ZCode.app/…`
+  与 `~/Applications/…`；Linux 常见于 `/opt/ZCode/resources/glm/zcode.cjs`、`/usr/share/zcode/resources/glm/zcode.cjs`，
+  但官方说法是「解压出来的应用目录里」，位置不固定；Windows 是 `%LOCALAPPDATA%\Programs\ZCode\resources\glm\zcode.cjs`（未验）。
+  三个平台都能用 `ZCODE_BIN` 兜底。
+
 ## app-server 协议
 
 协议全文见 `reference/zcode-app-server-protocol.md`。下面是本机跑出来、

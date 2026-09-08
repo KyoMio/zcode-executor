@@ -1,6 +1,8 @@
 # 推 main 或开 PR → 跑测试。零依赖，不用装包；Node 22 是 engines 的下限，24 是当前 LTS。
 # Windows 那一档是探路：运行时还没适配（找 App 的位置、收场杀进程组都按 Unix 写的），
 # 先让测试自己说话，红在哪再决定要不要认领这个平台。
+# test:ci 里的 glob 不能加引号：Windows 的 shell 不剥单引号，node 收到带引号的字面串，
+# 一个文件都匹配不到——而 node --test 匹配不到文件时退 0，于是整档假绿（实测 2026-09-08）。
 # test:ci 把测试文件串行跑：runner 和 mock 都是真子进程，4 核 runner 上并行会把时序挤乱。
 name: ci
 

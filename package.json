@@ -31,8 +31,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test 'test/*.test.mjs' && node scripts/sync-doc-version.mjs --check",
-    "test:ci": "node --test --test-concurrency=1 'test/*.test.mjs' && node scripts/sync-doc-version.mjs --check",
+    "test": "node --test test/*.test.mjs && node scripts/sync-doc-version.mjs --check",
+    "test:ci": "node --test --test-concurrency=1 test/*.test.mjs && node scripts/sync-doc-version.mjs --check",
     "version": "node scripts/sync-doc-version.mjs && git add README.md README.zh-CN.md .claude-plugin/plugin.json .codex-plugin/plugin.json .github/plugin/plugin.json .grok-plugin/plugin.json gemini-extension.json plugin.yaml"
   },
   "keywords": [
