@@ -91,16 +91,14 @@ test('buildRegistry：name→label、limit→contextWindow/maxOutputTokens、rea
   assert.deepEqual(flash, { modelId: 'GLM-5.3-Flash' });
 });
 
-test('buildRegistry：apiKey 内联形状、baseURL 与 label、source 缺省 custom', () => {
+test('buildRegistry：apiKey 内联形状、baseURL 与 label', () => {
   const { providers } = buildRegistry(CONFIG);
   const big = providers.find((p) => p.providerId === 'builtin:bigmodel-coding-plan');
   assert.deepEqual(big.apiKey, { source: 'inline', value: 'sk-test-123' });
   assert.equal(big.baseURL, 'https://api.example.test');
   assert.equal(big.label, 'BigModel Coding Plan');
-  assert.equal(big.source, 'custom');
   assert.equal(big.kind, 'anthropic');
   assert.equal(big.apiFormat, 'anthropic-messages');
-  assert.equal(big.apiKeyRequired, false);
 });
 
 test('buildRegistry：kind 决定 apiFormat，缺 kind 时无 apiFormat', () => {
@@ -111,22 +109,9 @@ test('buildRegistry：kind 决定 apiFormat，缺 kind 时无 apiFormat', () => 
   assert.equal('apiFormat' in kindless, false);
 });
 
-test('buildRegistry：revision 是稳定哈希，generatedAt 是数字', () => {
-  const a = buildRegistry(CONFIG);
-  const b = buildRegistry(CONFIG);
-  assert.equal(a.revision, b.revision);
-  assert.match(a.revision, /^[0-9a-f]{8}$/);
-  assert.notEqual(
-    a.revision,
-    buildRegistry({ provider: { 'another-plan': { kind: 'anthropic', options: {}, models: { M: {} } } } }).revision,
-  );
-  assert.equal(typeof a.generatedAt, 'number');
-});
-
 test('buildRegistry：provider 缺失时返回空表', () => {
-  const { providers, revision } = buildRegistry({});
+  const { providers } = buildRegistry({});
   assert.deepEqual(providers, []);
-  assert.match(revision, /^[0-9a-f]{8}$/);
 });
 
 
@@ -148,8 +133,6 @@ test('readProviderRegistry：读临时文件并构造 registry', async () => {
   try {
     const registry = readProviderRegistry(file);
     assert.equal(registry.providers.length, 3);
-    assert.match(registry.revision, /^[0-9a-f]{8}$/);
-    assert.equal(typeof registry.generatedAt, 'number');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -167,17 +150,6 @@ test('readProviderRegistry：坏 JSON 抛 ExecutorError(1)', async () => {
   }
 });
 
-test('hashRevision：只改 apiKey，revision 跟着变', () => {
-  // 评审第 4 条：key 轮换必须让 revision 变，否则后端跳过不应用
-  const withKeyA = buildRegistry(CONFIG);
-  const configB = structuredClone(CONFIG);
-  configB.provider['builtin:bigmodel-coding-plan'].options.apiKey = 'sk-rotated-456';
-  const withKeyB = buildRegistry(configB);
-  assert.notEqual(withKeyA.revision, withKeyB.revision);
-  // 同一个 key 改回来 revision 复原（哈希稳定，不是随机盐）
-  const configC = structuredClone(CONFIG);
-  assert.equal(buildRegistry(configC).revision, withKeyA.revision);
-});
 
 
 test('buildRegistry：models 是数组时按缺配置跳过', () => {
@@ -273,7 +245,7 @@ test('buildModelSelection：modelId 不在 provider.models 里抛 ExecutorError(
   });
 });
 
-// ---------- 个人 provider 文件（T5.2，PLAN-3.12.md 二节第 2 条，decisions D14） ----------
+// ---------- 个人 provider 文件（T5.2，docs/reference/zcode-app-server-protocol.md「3.12.2 变化」，decisions D14） ----------
 
 test('buildPersonalProviderConfig：registry 的 provider → 个人文件 JSON（形状照 CLI 的 legacy 导入函数）', () => {
   const big = byId(buildRegistry(CONFIG), 'builtin:bigmodel-coding-plan');

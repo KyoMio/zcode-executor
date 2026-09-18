@@ -151,9 +151,9 @@ CONTEXT.md 有词条），`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 指向我们自�
 一个 provider，providerId 固定写死 `zcode-executor`（不沿用 config.json 里的 `builtin:bigmodel-coding-plan`，
 理由同 D11：新版 `builtin:` / `account:` 前缀有保留含义）。`session/create` 的模型参数从 `runtimeModel` 改成
 `model:{providerId:'zcode-executor', modelId, options:{reasoningLevel}}`，`workspace/generateText` 的
-`modelRef` 改成同形状的 `selection`。建会话时还会收到一条新的反向请求 `interaction/requestProviderRuntimeHeaders`，
-我们给它一个内置应答：有 key 答 `{headersApplied:true, requestAuth:{apiKey}}`，没有答
-`{headersApplied:false, errorMessage}`。
+`modelRef` 改成同形状的 `selection`。每次模型请求前还会收到一条新的反向请求
+`interaction/requestProviderRuntimeHeaders`，我们给它一个内置应答：有 key 答
+`{headersApplied:true, requestAuth:{apiKey}}`，没有答 `{headersApplied:false, errorMessage}`。
 
 为什么：app-server 改成自己读文件，不再接受宿主推表，`workspace/updateProviderRegistry`（D10）和
 `runtimeModel`（D11）都被删了，我们必须换一套办法把密钥和模型表交给它。试过的不落盘路径都走不通：
@@ -165,6 +165,10 @@ provider，不能靠它临时插入。写用户自己的 `~/.zcode/v2/provider_c
 
 密钥放哪：个人 provider 文件放在 `os.tmpdir()` 下用 `mkdtemp` 建的临时目录里，权限 0600，子进程收场的
 `finally` 里删掉；不进 `runs/<id>/`（那个目录是留着事后查看的，不该有密钥）。
+
+残留边界：只有 runner 被 SIGKILL 或机器崩溃时，这个临时文件才会留在 `os.tmpdir()` 里没删掉——生产路径没有
+对 runner 发 SIGKILL 的代码，`cancel` 走的是文件信号（`answer.json` / `stop.json`），不是杀进程；macOS 的
+`$TMPDIR` 本身权限 0700（只有当前用户能进）且系统会定期清理，双重兜底。
 
 重开条件：zcode 提供一种不落盘就能推 api-key 型 provider 的方法；或者 legacy 的 `~/.zcode/v2/config.json`
 不再存明文 apiKey（那样密钥的落盘问题从根上消失）。

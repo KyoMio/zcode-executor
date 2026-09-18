@@ -105,8 +105,9 @@ skill：
   `turn.started.payload.inputSource` 为 `background_task` 的回合是后台工具自己触发的，整段不认（协议文档「Background Tasks」）。第一版不做无信号兜底。
 - `session/send` 在回合进行中再发一条即是 zcode 原生的插话，不打断。
 - 收场：`session/close` 后 stdin EOF。
-- 模型列表和思考等级从 `session/create` 返回的 `settings.model.available` 拿（3.12 前是另调
-  `workspace/readState`，该方法已被删，见 decisions D14）；等级分配不直接用 config.json 的内容。
+- 模型列表和等级分配从 `~/.zcode/v2/config.json` 本地换算（3.12 前是另调 `workspace/readState`，
+  该方法已被删，见 decisions D14）；`doctor` 握手时把 `session/create` 返回的 `settings.model.available`
+  里 `zcode-executor` 名下的模型和本地清单比对，缺的进警告，其余命令不握手。
 - `workspace/generateText` 参数 `{workspace, selection:{providerId, modelId, options:{reasoningLevel}}, prompt 或 messages, querySource, maxOutputTokens, operationId}`
   （3.12 前参数叫 `modelRef`、思考等级走 `modelRef.variant`，形状见 decisions D14）。`querySource` 填
   `zcode-executor.review`（真机已核，verified.md）。
@@ -137,8 +138,9 @@ skill：
   国际站点是 `builtin:zai-*`，两边哪个启用用哪个，都启用时按 config.json 里的顺序取第一个（3.12 前按
   `workspace/readState` 里的顺序，该方法已删，见 decisions D14）。
   没给 `--tier` 时也按这条选 provider，不直接用 `session/create` 返回的 `settings.model.current`（真机上它落在 API Key 计费的 `builtin:bigmodel`）。
-- 思考等级：默认 `high`。建会话前对着该模型的 `reasoning.levels` 校验：`high` 不在里面就不传；
-  用户显式给的值不在里面则退出码 2。
+- 思考等级：默认 `high`。建会话前对着该模型的 `reasoning.levels` 校验；用户显式给的值不在里面则退出码 2。
+  3.12.2 起建会话一定传 `reasoningLevel`（GLM 5.3 系列 create 必填）：登记簿的值 → 模型 `reasoning.defaultLevel` →
+  `'high'` 依次回落（`lib/tiers.mjs` 的 `reasoningLevelFor`）。模型审批那条不受影响，仍是模型没有那档就不传。
 - 白名单：cwd 解析成绝对路径后必须在某个 `allowedRoots` 之下（前缀比对补分隔符）。不在则退出码 2。
   cwd 不是 worktree（`git rev-parse --git-dir` 与 `--git-common-dir` 相同）只在 stderr 警告。
 - runner 起来先 `session/resume`；登记簿没有 sessionId 或 resume 报 Session not found 就 `session/create`（`model`、thoughtLevel、toolDenylist 从登记簿取；3.12 前这里传的是 `runtimeModel`，见 decisions D14）并写回 sessionId（重建时记事件 `executor.recreated`）。
@@ -223,7 +225,7 @@ skill：
 ### 外壳
 
 - CLI 子命令：`doctor、models、list、new、send、follow、status、cancel、approve、deny、answer`，参数见 PRD 第 4 节。
-- `doctor` 三步零 token：`zcode.cjs` 旁边找得到 `config/provider/zcode-builtin.json`（3.12+ 判据，3.12 前是版本 ≥ 0.14.8，见 decisions D14）；`~/.zcode/v2/config.json` 存在；真握手一次，从 create 返回的 `settings.model.available` 报等级分配，并多报一句选中 provider 在 config.json 里有没有明文 apiKey。
+- `doctor` 三步零 token：`zcode.cjs` 旁边找得到 `config/provider/zcode-builtin.json`（3.12+ 判据，3.12 前是版本 ≥ 0.14.8，见 decisions D14）；`~/.zcode/v2/config.json` 存在；真握手一次——模型清单与等级分配仍是从 config.json 本地算，握手只是把 create 返回的 `settings.model.available` 拿来比对，缺的进警告，并多报一句选中 provider 在 config.json 里有没有明文 apiKey。
 - skill 名 `zcode-executor`，触发词「让 zcode 去做」「派给 zcode」。内容按 PRD 第 9 节。
 - 任务单模板加一行提醒投递时带 `--task`。
 

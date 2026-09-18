@@ -363,7 +363,7 @@ test('投递重投超过 2 次 → 按 failed 丢弃并清队列（评审 T2.3b 
   trackRunnerPids(env.runsDir);
 });
 
-test('runner 阶段方法集合：3.12 起不推 provider 表，create 排在最前（PLAN-3.12.md 一节层 2）', async (t) => {
+test('runner 阶段方法集合：3.12 起不推 provider 表，create 排在最前（verified.md「3.12.2 直连探针实测」表第 2 行）', async (t) => {
   const env = await setupSend(t);
   const run = runBin(env.env, ['send', env.entry.id, '干活', '--wait', '--json']);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
@@ -464,7 +464,7 @@ test('D13：首次 send 建 zcode 会话——create 带登记簿的 model/thoug
   const entry = registry.sessions[env.entry.id];
   assert.match(entry.sessionId, /^sess_/);
   // mock 记录的 create：model / thoughtLevel / toolDenylist 都从登记簿带下来；3.12.2 的形状
-  // （PLAN-3.12.md 一节层 3）：model.providerId 固定 zcode-executor，档位两处都给
+  // （verified.md「3.12.2 直连探针实测」表第 3 行）：model.providerId 固定 zcode-executor，档位两处都给
   const create = readRecord(env.recordPath).filter((m) => m.method === 'session/create');
   assert.equal(create.length, 1);
   const p = create[0].params;

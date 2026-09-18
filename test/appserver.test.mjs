@@ -1,7 +1,7 @@
 // lib/errors.mjs 与 lib/appserver.mjs 的行为测试。
 // 纯函数用例（classify / findZcode / builtinProviderConfigPath / ExecutorError）直接喂输入；
 // 客户端用例一律对 test/mock-appserver.mjs 跑（T0.3），不 spawn 真 zcode，不花额度。
-// mock 复刻的是 3.12.2（PLAN-3.12.md）：provider 表来自 startMock 写的个人文件，create 带 model，
+// mock 复刻的是 3.12.2（verified.md「3.12.2 直连探针实测」）：provider 表来自 startMock 写的个人文件，create 带 model，
 // 每个回合与 generateText 前先来一次 interaction/requestProviderRuntimeHeaders。
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -118,7 +118,7 @@ test('findZcode：ZCODE_BIN 指向不存在的文件时抛 ExecutorError(1)', ()
 });
 
 test('builtinProviderConfigPath：按 App 目录布局从 zcode.cjs 推出 ../config/provider/zcode-builtin.json', async () => {
-  // 复刻 <App>/Contents/Resources/{glm/zcode.cjs, config/provider/zcode-builtin.json}（PLAN-3.12.md 二节第 1 条）
+  // 复刻 <App>/Contents/Resources/{glm/zcode.cjs, config/provider/zcode-builtin.json}（docs/reference/zcode-app-server-protocol.md「3.12.2 变化」）
   const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-executor-test-'));
   mockDirs.push(dir);
   await mkdir(path.join(dir, 'glm'), { recursive: true });
@@ -561,13 +561,10 @@ test('session/send 回合：turn.started 之后先来 requestProviderRuntimeHead
       await client.request('session/send', { sessionId, content: 'hi' }, { timeoutMs: 2000 });
       await waitFor(() => (notifications.some((n) => n.params?.type === 'turn.completed') ? true : undefined));
       assert.equal(seen.length, 1);
-      // PLAN-3.12.md 一节层 5：params 形状
-      assert.match(seen[0].requestId, new RegExp(`^${sessionId}:provider-runtime-headers:`));
-      assert.equal(seen[0].sessionId, sessionId);
-      assert.deepEqual(seen[0].modelSelection, { providerId: 'zcode-executor', modelId: 'GLM-5.3-Flash' });
+      // 只断言客户端真依赖的两个字段（providerId 选 key、requestId 去重）；其余 params 是 mock 复刻，
+      // 真机形状待检查点 5 核（docs/reference「3.12.2 变化」）
       assert.equal(seen[0].providerId, 'zcode-executor');
-      assert.equal(seen[0].reason, 'model-request');
-      assert.deepEqual(seen[0].workspace, WORKSPACE);
+      assert.equal(typeof seen[0].requestId, 'string');
       // 回合照常跑完
       const types = notifications.filter((n) => n.method === 'session/event').map((n) => n.params.type);
       assert.deepEqual(types, ['turn.started', 'model.streaming', 'turn.completed']);
@@ -644,10 +641,8 @@ test('generateText：应答前先来 requestProviderRuntimeHeaders（无 session
       assert.equal(result.text, 'Y');
       assert.deepEqual(result.selection, FLASH);
       assert.equal(seen.length, 1);
-      assert.match(seen[0].requestId, /^workspace:provider-runtime-headers:/);
-      assert.equal('sessionId' in seen[0], false);
-      assert.deepEqual(seen[0].modelSelection, { providerId: 'zcode-executor', modelId: 'GLM-5.3-Flash' });
-      assert.equal(seen[0].reason, 'model-request');
+      assert.equal(seen[0].providerId, 'zcode-executor');
+      assert.equal(typeof seen[0].requestId, 'string');
     },
   );
 });
@@ -699,8 +694,11 @@ test('providerAuth 答出去的 key 自动进 stderr 抹除名单', async () => 
       });
       const created = await create(client, { model: FLASH });
       await client.request('session/send', { sessionId: created.session.sessionId, content: 'hi' }, { timeoutMs: 2000 });
-      await waitFor(() => (notifications.some((n) => n.params?.type === 'turn.completed') ? true : undefined));
-      const forwarded = stderrLines.filter((l) => l.includes('permission answered'));
+      // stderr 和 stdout 是两条管道，completed 到了那行转发可能还在路上（CI 两核机器）：等它
+      const forwarded = await waitFor(() => {
+        const lines = stderrLines.filter((l) => l.includes('permission answered'));
+        return lines.length > 0 ? lines : undefined;
+      });
       assert.equal(forwarded.length, 1);
       assert.ok(forwarded[0].includes('<redacted>'));
       assert.equal(stderrLines.some((l) => l.includes(mock.apiKey)), false);

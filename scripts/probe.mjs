@@ -125,7 +125,7 @@ async function runWithClient(dir, provider, personalFile) {
 
   const workspace = { workspacePath: dir, workspaceKey: dir };
 
-  // 两个 3.12 删掉的方法/字段：确认已删（PLAN-3.12.md 一节层 2、3；decisions D10、D11）
+  // 两个 3.12 删掉的方法/字段：确认已删（verified.md「3.12.2 直连探针实测」表第 2、3 行；decisions D10、D11）
   await expectGone(
     'updateProviderRegistry-gone',
     () =>
@@ -153,7 +153,7 @@ async function runWithClient(dir, provider, personalFile) {
     -32602,
   );
 
-  // 新形状 create：model + 顶层 thoughtLevel + toolDenylist 试探（PLAN-3.12.md 二节第 3 条）
+  // 新形状 create：model + 顶层 thoughtLevel + toolDenylist 试探（docs/reference/zcode-app-server-protocol.md「3.12.2 变化」）
   const modelId = provider.models[0]?.modelId;
   const model = buildModelSelection(provider, modelId, 'high');
   const createParams = {

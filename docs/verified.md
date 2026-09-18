@@ -95,7 +95,35 @@
 - `node zcode.cjs --version` 在 3.12.2 上仍然打印 `0.16.5`，和 3.11.2 一样。**版本号区分不了新旧**，doctor 的门槛得换判据。
 - 密钥来源：`~/.zcode/v2/config.json`（新版把它叫 legacy CLI config）里 `builtin:bigmodel-coding-plan.options.apiKey` 还是明文，而且 App 3.12.2 仍在写这个文件（mtime 2026-09-18 00:23）。`credentials.json` 里的所有值都是 `enc:v1:` 加密，读不了。所以现阶段密钥只能继续从 config.json 拿；哪天 App 不写这个文件了就断粮——这是本次适配之后最大的外部风险，doctor 要能早一步报出来。
 
-探针脚本已并入 `scripts/probe.mjs`（另一位在做，不在本次文档改动范围内）。
+探针脚本已并入 `scripts/probe.mjs`（d2863e2）。
+
+反向请求 `interaction/requestProviderRuntimeHeaders` 的 params 形状（从 zcode.cjs 3.12.2 源码读出，
+待检查点 5 真机核）：`{requestId: "<sessionId>:provider-runtime-headers:<uuid>", sessionId, turnId?,
+workspace, modelSelection: {providerId, modelId}, providerId, accountAccess?, reason: "model-request"}`；
+应答 `{headersApplied: true, requestAuth: {apiKey?, headers?}}` 或 `{headersApplied: false, errorMessage?}`。
+
+### mock 复刻依据（2026-09-18 探针）
+
+mock（`test/mock-appserver.mjs`）里标了「真机」的地方，出处逐条记在这里，供评审核对：
+
+a. create 返回 `settings.model.available` 条目形状：`{ref:{providerId,modelId}, label（=modelId）,
+   providerLabel, contextWindow: 1000000, maxOutputTokens: 128000, reasoning:{levels:[low,high,max],
+   defaultLevel:'max'}, properties:{inputFormat…, outputFormat…}}`；`settings.thoughtLevel` 只有
+   available / current / enabled 三个键（没有 defaultLevel）。
+b. create 只给 `model.options.reasoningLevel`、不给顶层 `thoughtLevel` 时：`model.current` 只回显
+   `{providerId, modelId}`（options 不回显），`thoughtLevel.current` 键缺失；两处都给才都在。create
+   不带 `model` 时 current 用表里第一个模型，reasoningLevel 取顶层 thoughtLevel，没给取 max。
+c. 错误原文：create 带 runtimeModel → -32602 `Invalid params — (root): Unrecognized key: "runtimeModel"`；
+   模型不在表里 → -32603 `Provider Registry 中不存在 Model: <providerId>/<modelId>`（data.name = Error /
+   ModelProtocolError）；缺 reasoningLevel → -32603 `Reasoning level is required for <providerId>/<modelId>`；
+   generateText 带 modelRef → -32602 `Invalid params — selection: Invalid input: expected object, received
+   undefined; (root): Unrecognized key: "modelRef"`；旧方法 → -32601 `Method not found: <method>`。
+d. `persistence: 'deferred'` 建的会话：create 成功、close 回 `{closed:true}`，前后 `session/list` 都不
+   列它。
+e. session 对象键集合：createdAt, mode, traceId, sessionId, sessionKind, status, target, title,
+   updatedAt, workspace（3.12.2 create 返回值里的 session 没有 model 键）。
+f. `-32031` 的 message 是客户端应答里的 `errorMessage ?? "Provider runtime headers were not applied
+   before model request attempt."`（从 zcode.cjs 源码读出）。
 
 ## 第一次真机投递（2026-09-07，CLI 0.16.5，检查点 1）
 

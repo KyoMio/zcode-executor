@@ -216,7 +216,7 @@ The split keeps the expensive model on judgment and the cheap one on typing.
 | Command | What it does |
 | --- | --- |
 | `doctor [--json]` | Zero-token self-check: finds `zcode.cjs` and the bundled `zcode-builtin.json` (ZCode App ≥ 3.12.2), confirms the config exists, does one real handshake, reports the model tiers |
-| `models [--json]` | Lists available models with thought levels, disabled reasons and tier assignment |
+| `models [--json]` | Lists available models with thought levels and tier assignment |
 | `new --cwd <abs> [--title T] [--tier fast\|strong] [--thought L] [--deny "Tool…"] [--provider id] [--json]` | Registers a session (returns a local id `x_…`); the ZCode session is created on first `send` |
 | `send <id> <text\|-> [--task file] [--wait] [--timeout s] [--steer] [--stream] [--json]` | Queues a message; `--wait` follows until done or blocked; `--task` is the task file the review uses as your authorization |
 | `follow <id> [--timeout s] [--stream] [--json]` | Follows a background runner until a result or a pending request |

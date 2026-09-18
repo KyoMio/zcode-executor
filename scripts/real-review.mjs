@@ -37,13 +37,16 @@ const apiKey = provider.apiKey?.value;
 const secrets = [apiKey].filter(Boolean);
 // D14：不再推表，改写一份个人 provider 文件给 app-server 自己读；apiKey 只经这个临时文件和
 // requestProviderRuntimeHeaders 的应答传出去，finally 里 dispose
-const personalFile = writePersonalProviderFile(provider);
 const providerAuth = (providerId) => {
   note(`[反向请求] requestProviderRuntimeHeaders providerId=${providerId ?? '(缺 providerId)'}`);
   return providerId === EXECUTOR_PROVIDER_ID ? apiKey : undefined;
 };
-const client = await AppServerClient.spawn({ cwd, secrets, personalProviderFile: personalFile.path, providerAuth });
+// 写文件和 spawn 都在 try 里：spawn 拉不起来（内置文件找不到等）时 finally 照样删掉带密钥的临时文件
+let personalFile = null;
+let client = null;
 try {
+  personalFile = writePersonalProviderFile(provider);
+  client = await AppServerClient.spawn({ cwd, secrets, personalProviderFile: personalFile.path, providerAuth });
   const raws = [];
   const complete = createComplete({ client, workspace, selection, onRaw: (raw) => raws.push(raw) });
   const review = createReview(complete);
@@ -84,10 +87,10 @@ try {
   );
 } finally {
   try {
-    await client.close();
+    await client?.close();
   } catch (err) {
     note(`收场失败：${err?.message ?? err}`);
   }
   // D14：个人 provider 文件用完即删
-  personalFile.dispose();
+  personalFile?.dispose();
 }

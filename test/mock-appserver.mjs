@@ -2,8 +2,8 @@
 // 由剧本 JSON 驱动，收到的每条消息追加到记录文件（MOCK_APPSERVER_RECORD，一行一条 JSON），
 // apiKey 值写盘前抹成 "[REDACTED]"（T1.3b 第 6 条，RULES §8 永不落盘）。
 // 日志一律 stderr（`mock: ` 前缀）。stdin EOF 后退出码 0。信封无 jsonrpc 字段；未知方法回 -32601。
-// 目标是「真机行为的复刻」：每个默认返回形状旁注明出处（verified.md / PLAN-3.12.md / 探针实测日期）。
-// 复刻的是 ZCode App 3.12.2 的 app-server（PLAN-3.12.md 一、二节，2026-09-18）：provider 表不再由
+// 目标是「真机行为的复刻」：每个默认返回形状旁注明出处（verified.md / verified.md / 探针实测日期）。
+// 复刻的是 ZCode App 3.12.2 的 app-server（verified.md「3.12.2 直连探针实测」与 docs/reference/zcode-app-server-protocol.md「3.12.2 变化」，2026-09-18）：provider 表不再由
 // 客户端推，而是启动时从两个环境变量指的文件读；session/create 用 model、generateText 用 selection；
 // 每次模型请求前先向客户端要一次 provider 运行时头（interaction/requestProviderRuntimeHeaders）。
 // 不负责：模拟客户端（那边是 lib/appserver.mjs）、性能或时序的真实复刻（sleep 都是假等待）、
@@ -12,8 +12,8 @@
 // 环境变量：
 //   ZCODE_BUILTIN_PROVIDER_CONFIG_FILE   内置 provider 配置路径。缺失或文件不存在 → stderr 打真机
 //                                        原文「无法定位 CLI ZCode Built-in Provider Config：…」并 exit(1)
-//                                        （PLAN-3.12.md 一节层 1）。内容不读
-//   ZCODE_PERSONAL_PROVIDER_CONFIG_FILE  个人 provider 文件路径（形状见 PLAN-3.12.md 二节第 2 条）。
+//                                        （verified.md「3.12.2 直连探针实测」表第 1 行）。内容不读
+//   ZCODE_PERSONAL_PROVIDER_CONFIG_FILE  个人 provider 文件路径（形状见 docs/reference/zcode-app-server-protocol.md「3.12.2 变化」）。
 //                                        模型表从这里来：providerRules[*].providerId ×
 //                                        config.personalModelIds；config.access.apiKey 计入抹密值。
 //                                        缺失或读不出 → 表为空（不退出；真机默认读
@@ -67,7 +67,7 @@ if (process.argv.includes('--version')) {
   process.exit(0);
 }
 
-// PLAN-3.12.md 一节层 1（2026-09-18）：新 CLI 启动时自己找内置 provider 配置，只看 zcode.cjs 同目录的
+// verified.md「3.12.2 直连探针实测」表第 1 行（2026-09-18）：新 CLI 启动时自己找内置 provider 配置，只看 zcode.cjs 同目录的
 // provider/ 和往上五级的 config/provider/（打包后算成根目录 /config/…），找不到打这句就退。
 // 环境变量给了就原样采用。stderr 原文照抄（客户端转发时再加 zcode: 前缀）
 const builtinFile = process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE;
@@ -87,7 +87,7 @@ function collectSecrets(msg) {
   if (v) secretValues.add(v);
 }
 
-// PLAN-3.12.md 二节第 2 条：模型表 = 个人文件里每条 providerRules 的 providerId × personalModelIds。
+// docs/reference/zcode-app-server-protocol.md「3.12.2 变化」：模型表 = 个人文件里每条 providerRules 的 providerId × personalModelIds。
 // 读不出按空表（真机默认个人文件 ~/.zcode/v2/provider_config.json 就是 providerRules: []）
 const personalProviders = [];
 try {
@@ -254,7 +254,7 @@ function modelLevels(models) {
 //   没给就没有这个键。
 // - 不带 model：用表里第一个模型，档位取顶层 thoughtLevel，没给取 defaultLevel（max），两处都有值。
 // - thoughtLevel 只有 available / current / enabled 三个键（3.11 的 defaultLevel 没了）。
-// - 表为空又没给 model：current 缺失（PLAN-3.12.md 二节第 6 条「current 为空」）
+// - 表为空又没给 model：current 缺失（verified.md「3.12.2 直连探针实测」「mock 复刻依据」「current 为空」）
 function buildSettings(requestedThoughtLevel, requestedModel) {
   const available = availableModels();
   const levels = modelLevels(available);
@@ -282,12 +282,13 @@ function buildSettings(requestedThoughtLevel, requestedModel) {
   return settings;
 }
 
-// PLAN-3.12.md 一节层 5（2026-09-18，宿主模式 headers port 无条件 shouldRefreshBeforeModelRequest）：
+// verified.md「3.12.2 直连探针实测」表第 5 行（2026-09-18，宿主模式 headers port 无条件 shouldRefreshBeforeModelRequest）：
 // 每次模型请求前向客户端要一次 provider 运行时头，等 {headersApplied, requestAuth?, errorMessage?}
 // （zcode.cjs 里的应答 schema：headersApplied:true 必带 requestAuth:{apiKey?, headers?}，false 可带 errorMessage）。
 // 未答按 RESEND_MS 重发（和其它反向请求一样走 askServer），真机是 180 秒超时，这里不复刻超时。
-// params 形状按 PLAN 里从 zcode.cjs 读出的写法（真机 schema 里 sessionId 必填，generateText 那条路
-// 用的是什么 sessionId 要等真机 real-review 才知道，这里先不带）。
+// params 形状照 docs/reference/zcode-app-server-protocol.md「3.12.2 变化」（从 zcode.cjs 3.12.2 源码读出，
+// 待检查点 5 真机核；真机 schema 里 sessionId 必填，generateText 那条路用的是什么 sessionId 要等
+// real-review 才知道，这里先不带）。客户端只依赖 providerId 与 requestId（去重键），其余字段是复刻不是契约。
 // 返回 null 表示头应用上了；否则返回失败原因——zcode.cjs 用 errorMessage ?? 那句固定原文
 async function requestRuntimeHeaders({ sessionId, modelSelection }) {
   const params = {
@@ -422,7 +423,7 @@ function handleRequest(msg) {
 
   switch (method) {
     case 'session/create': {
-      // PLAN-3.12.md 一节层 3（2026-09-18）：strict schema，runtimeModel 没了；原文照抄
+      // verified.md「3.12.2 直连探针实测」表第 3 行（2026-09-18）：strict schema，runtimeModel 没了；原文照抄
       if ('runtimeModel' in params) {
         respondError(id, -32602, 'Invalid params — (root): Unrecognized key: "runtimeModel"', { name: 'ZodError' });
         break;
@@ -469,7 +470,7 @@ function handleRequest(msg) {
       break;
     }
     case 'workspace/generateText': {
-      // PLAN-3.12.md 一节层 4（2026-09-18）：modelRef 改名 selection，strict schema；原文照抄
+      // verified.md「3.12.2 直连探针实测」表第 4 行（2026-09-18）：modelRef 改名 selection，strict schema；原文照抄
       if ('modelRef' in params) {
         respondError(id, -32602, 'Invalid params — selection: Invalid input: expected object, received undefined; (root): Unrecognized key: "modelRef"', { name: 'ZodError' });
         break;
@@ -495,7 +496,7 @@ function handleRequest(msg) {
         const selection = params.selection;
         const headersError = await requestRuntimeHeaders({ modelSelection: { providerId: selection.providerId, modelId: selection.modelId } });
         if (headersError !== null) {
-          // PLAN-3.12.md 一节层 5：头没应用上，模型请求以 -32031 失败，message 是客户端的 errorMessage，
+          // verified.md「3.12.2 直连探针实测」表第 5 行：头没应用上，模型请求以 -32031 失败，message 是客户端的 errorMessage，
           // 没给才是那句固定原文（code、原文与取舍都出自 zcode.cjs）
           respondError(id, -32031, headersError);
           return;

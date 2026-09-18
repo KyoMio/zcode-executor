@@ -160,7 +160,7 @@ test('快筛 pass：自动应答 allow、不落 pending、事件 review-fast，s
   assert.equal(gateEvent.decision, 'allow');
   const calls = generateTexts(env.recordPath);
   assert.equal(calls.length, 1, '快筛过了就只该有一次 generateText');
-  // 3.12.2 的 generateText 形状（PLAN-3.12.md 一节层 4）：modelRef 改名 selection，providerId 固定
+  // 3.12.2 的 generateText 形状（verified.md「3.12.2 直连探针实测」表第 4 行）：modelRef 改名 selection，providerId 固定
   // zcode-executor（个人 provider 文件里的那条），思考等级走 options.reasoningLevel
   assert.equal('modelRef' in calls[0].params, false);
   assert.deepEqual(calls[0].params.selection, {

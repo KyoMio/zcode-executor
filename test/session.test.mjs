@@ -1,6 +1,6 @@
 // lib/session.mjs 的行为测试：attachSession / Session / settleTurn。
 // 全部对 test/mock-appserver.mjs 跑（T0.3 的 helpers），不发真机 session/send，不花额度。
-// 3.12 起每个回合前 mock 会要一次 provider 运行时头（PLAN-3.12.md 一节层 5），spawn 都带
+// 3.12 起每个回合前 mock 会要一次 provider 运行时头（verified.md「3.12.2 直连探针实测」表第 5 行），spawn 都带
 // providerAuth 答 startMock 的 key，回合才跑得起来。
 import test from 'node:test';
 import assert from 'node:assert/strict';

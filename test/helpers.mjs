@@ -2,7 +2,7 @@
 // 只服务测试；不负责协议行为（那是 mock-appserver.mjs 的事）。
 // T0.3c 第 5 条：startMock 不再写 process.env，env 由调用方经 AppServerClient.spawn 的
 // env 选项传给子进程——这是并发用例（队列、锁）的前提。
-// 3.12（PLAN-3.12.md 二节第 1 条）：mock 和真机一样要两个环境变量才肯启动，startMock 在临时目录里
+// 3.12（docs/reference/zcode-app-server-protocol.md「3.12.2 变化」）：mock 和真机一样要两个环境变量才肯启动，startMock 在临时目录里
 // 准备好假的内置文件和一份默认个人 provider 文件，放进返回的 env。
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';

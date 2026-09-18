@@ -111,7 +111,7 @@ test('createComplete：请求形状（selection、messages、querySource、maxOu
   const call = client.calls[0];
   assert.equal(call.method, 'workspace/generateText');
   assert.deepEqual(call.params.workspace, { workspacePath: '/w', workspaceKey: '/w' });
-  // 3.12.2：字段名 selection，思考等级走 options.reasoningLevel（PLAN-3.12.md 一节层 4）
+  // 3.12.2：字段名 selection，思考等级走 options.reasoningLevel（verified.md「3.12.2 直连探针实测」表第 4 行）
   assert.equal('modelRef' in call.params, false);
   assert.deepEqual(call.params.selection, { providerId: 'p1', modelId: 'm1', options: { reasoningLevel: 'high' } });
   assert.deepEqual(call.params.messages, [

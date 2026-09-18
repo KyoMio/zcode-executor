@@ -3,7 +3,7 @@
 Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给本机 ZCode（GLM），
 在 worktree 里隔离执行，用 git diff 和测试客观验收。
 
-**状态（2026-09-08）**：第一版完成，阶段 0 到 4 全部合并 main，`npm test` 298 个用例，真机全流程走通。
+**状态（2026-09-08）**：第一版完成并已适配 ZCode App 3.12.2（2026-09-18，decisions D14），`npm test` 334 个用例，真机全流程走通。
 术语在 [docs/CONTEXT.md](docs/CONTEXT.md)。本地开发记录（`docs/handoff/`、`docs/tasks/`、`docs/PLAN.md`、`docs/archive/`）不进 GitHub，只在开发机上有；
 有它们就从 `docs/handoff/handoff-20260908.md` 接手，没有就从 README 与 docs/PRD.md 开始。
 

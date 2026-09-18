@@ -55,7 +55,7 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 | 命令 | 作用 |
 | --- | --- |
 | `doctor [--json]` | 零 token 自检三步：`zcode.cjs` 旁边找得到 `config/provider/zcode-builtin.json`（3.12+ 判据，找不到提示升级 ZCode App）→ `~/.zcode/v2/config.json` 存在 → 真握手一次；顺带报模型等级每档选了谁、有没有档空着，以及选中 provider 在 config.json 里有没有明文 apiKey |
-| `models [--json]` | 从 `session/create` 返回的 `settings.model.available` 拿可用模型（3.12 起 `workspace/readState` 已删），显示每个模型的思考等级、被禁用原因、自动分到哪个等级 |
+| `models [--json]` | 从 `~/.zcode/v2/config.json` 本地换算可用模型（3.12 起 `workspace/readState` 已删，不握手），显示每个模型的思考等级、自动分到哪个等级 |
 | `list [--project 关键字] [--json]` | 列登记簿里的会话：id、标题、cwd、等级、上次结果、是否挂起 |
 | `new --cwd <绝对路径> [--title T] [--tier fast\|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]` | 建会话。cwd 必须在白名单内；不是 worktree 只警告不拒 |
 | `send <id> <正文\|-> [--task 文件] [--wait] [--steer] [--timeout 秒] [--stream] [--json]` | 投递。默认排队；`--steer` 用 zcode 原生方式插进当前回合，不打断 |
@@ -88,10 +88,10 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 ## 5. 模型等级与思考等级
 
 - **两个等级**：`fast`（Flash、lite、mini、air 这类）和 `strong`（旗舰）。
-- **对上具体模型**：从 `session/create` 返回的 `settings.model.available` 拿列表（3.12 起 `workspace/readState` 已删），按模型名关键词自动分，同档多个取版本最新的，
-  跳过有 `disabledReason` 的。`config.json` 的 `tiers` 可覆盖。不按模型名写死，模型换代不用改代码。
+- **对上具体模型**：从 `~/.zcode/v2/config.json` 本地换算列表（3.12 起 `workspace/readState` 已删），按模型名关键词自动分，同档多个取版本最新的。
+  `doctor` 握手时把返回的 `settings.model.available` 里 `zcode-executor` 名下的模型和本地清单比对，缺的进警告。`config.json` 的 `tiers` 可覆盖。不按模型名写死，模型换代不用改代码。
 - **provider 优先 coding plan**（配置 `preferredProvider` 可改），国内 `bigmodel` 与国际 `zai` 站点哪个启用用哪个。
-- **不给 `--tier`** 就用优先 provider 下 zcode 当前选中的模型；那个模型不在这个 provider 下或不可用时退到 `fast`，再没有才退到 `strong`。
+- **不给 `--tier`** 用 `fast` 档，没有 `fast` 才用 `strong`。
 - **派活的思考等级默认 `high`**，模型没有 `high` 档就不传，跟模型默认。`--thought` 可覆盖。**模型审批默认 `low`**（审批只需判是不是日常工作，high 让快筛多花几秒和几百 token；用户 2026-09-08 定），配置 `review.thought` 可改。
 - **档位只有 `build`**。不开 `--mode`。
 - **`--deny`** 默认不拿掉任何工具。

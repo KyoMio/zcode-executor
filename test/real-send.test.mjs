@@ -85,7 +85,7 @@ test('real-send：--on-permission allow 走到 done，退出码 0，pending 已�
   const permAnswer = answers.find((m) => m.result && m.result.decision !== undefined);
   assert.deepEqual(permAnswer.result, { decision: 'allow' });
   await assert.rejects(readFile(pendingPath), (err) => err.code === 'ENOENT'); // 应答后 pending 已删
-  // PLAN-3.12.md 一节层 5：回合真的会先收到这个反向请求，real-send 要打一行 stderr 能被看见
+  // verified.md「3.12.2 直连探针实测」表第 5 行：回合真的会先收到这个反向请求，real-send 要打一行 stderr 能被看见
   // （检查点 5 的核对项之一：真机上它到底来不来）
   assert.match(run.stderr, /\[反向请求\] requestProviderRuntimeHeaders providerId=zcode-executor/);
 });
@@ -129,7 +129,7 @@ test('real-send：create 带 model（含 reasoningLevel）与顶层 thoughtLevel
   assert.equal(params.model.providerId, 'zcode-executor'); // EXECUTOR_PROVIDER_ID：D14 固定值，不沿用 config.json 的 provider id
   assert.ok(['GLM-5.3', 'GLM-5.3-Flash'].includes(params.model.modelId));
   assert.equal(params.model.options?.reasoningLevel, 'high'); // GLM-5.3 系列 create 缺它会被拒
-  assert.equal(params.thoughtLevel, 'high'); // 顶层也要带（PLAN-3.12.md 二节第 3 条）
+  assert.equal(params.thoughtLevel, 'high'); // 顶层也要带（docs/reference/zcode-app-server-protocol.md「3.12.2 变化」）
   // mock 回显：settings.model.current 是 model 指定的 ref，stdout 的 create 行带出来
   const lines = parseLines(run.stdout);
   const createLine = lines.find((l) => l.step === 'create');

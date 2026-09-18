@@ -48,22 +48,31 @@ provider 表（哪些 provider、哪些模型、密钥怎么鉴权）改由 app-
 | `thoughtLevel` | 顶层仍要带（实测只传 `options.reasoningLevel` 时 `settings.thoughtLevel.current` 是空的，两处都给最稳） |
 
 GLM-5.3 系列模型 `options.reasoningLevel` 必填，不带报 `Reasoning level is required`。返回值里
-`settings.model.available` 就是当前可用的模型表——原来要另外调 `workspace/readState` 才能拿到，现在
-create 一次返回，等级分配直接从这里取。
+`settings.model.available` 就是 app-server 当前认的模型表——原来要另外调 `workspace/readState` 才能拿到。
+本插件的等级分配从 config.json 本地算，`doctor` 握手时只拿这张表比对个人 provider 文件里的模型有没有全被认出。
 
 **`workspace/generateText`**：参数 `modelRef` 改名 `selection`，形状与上面的 `model` 一样
 （`{providerId, modelId, options?:{reasoningLevel}}`），不带 `selection` 就报
 `Unrecognized key: "modelRef"`。
 
-**新反向请求 `interaction/requestProviderRuntimeHeaders`**（推断，待真机 send 证实）：宿主模式下（本项目
-`app-server --stdio` 走的就是宿主模式）app-server 每次模型请求前都会向客户端发这个反向请求，等客户端答复
-后才继续。
+**新反向请求 `interaction/requestProviderRuntimeHeaders`**（宿主模式下，本项目 `app-server --stdio` 走的
+就是宿主模式，app-server 每次模型请求前都会向客户端发这个反向请求，等客户端答复后才继续；params 形状
+从 zcode.cjs 3.12.2 源码读出，待检查点 5 真机核）：
 
 ```json
 {
   "id": 200,
   "method": "interaction/requestProviderRuntimeHeaders",
-  "params": { "providerId": "zcode-executor" }
+  "params": {
+    "requestId": "<sessionId>:provider-runtime-headers:<uuid>",
+    "sessionId": "sess_...",
+    "turnId": "...",
+    "workspace": { "workspacePath": "...", "workspaceKey": "..." },
+    "modelSelection": { "providerId": "zcode-executor", "modelId": "GLM-5.3" },
+    "providerId": "zcode-executor",
+    "accountAccess": null,
+    "reason": "model-request"
+  }
 }
 ```
 

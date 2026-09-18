@@ -122,7 +122,7 @@ test('resolveModels：handshake:true 零 token——只有 deferred 的 create �
   const methods = [...new Set(record.map((m) => m.method).filter(Boolean))].sort();
   assert.deepEqual(methods, ['session/close', 'session/create']);
   const create = record.find((m) => m.method === 'session/create').params;
-  assert.equal(create.persistence, 'deferred'); // 探针会话不进 App 的任务列表（PLAN-3.12.md 二节第 6 条）
+  assert.equal(create.persistence, 'deferred'); // 探针会话不进 App 的任务列表（verified.md「3.12.2 直连探针实测」「mock 复刻依据」）
   assert.deepEqual(create.model, { providerId: 'zcode-executor', modelId: 'GLM-5.3-Flash', options: { reasoningLevel: 'high' } });
   assert.equal(create.thoughtLevel, 'high'); // 顶层也带（真机只给 options 时 thoughtLevel.current 是空的）
   assert.deepEqual(resolved.warnings, []); // 个人文件里的两个模型 app-server 都认了
