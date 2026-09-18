@@ -114,8 +114,8 @@ test('attach 后 send：事件依次落盘，outcome done，lastText 与 usage �
   });
 });
 
-test('spawn 没给 providerAuth → 回合在模型请求前失败，reason 说明缺哪个 provider 的 key（层 5）', async () => {
-  const script = { turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: '不该到' } }] }] };
+test('剧本开 runtimeHeaders 且 spawn 没给 providerAuth → 回合在模型请求前失败，reason 说明缺哪个 provider 的 key', async () => {
+  const script = { runtimeHeaders: true, turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: '不该到' } }] }] };
   const mock = await startMock({ script });
   mockDirs.push(mock.dir);
   const client = await AppServerClient.spawn({ zcodePath: mock.zcodePath, cwd: mock.dir, env: mock.env, onStderr: () => {} });

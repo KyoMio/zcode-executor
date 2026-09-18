@@ -145,7 +145,7 @@ async function main() {
     personalFile = writePersonalProviderFile(provider);
     const apiKey = provider.apiKey?.value;
     const providerAuth = (providerId) => {
-      // 检查点 5 要核的事实之一：这个反向请求到底来不来（verified.md「3.12.2 直连探针实测」表第 5 行）
+      // 检查点 5（2026-09-18）：api-key provider 没来过这个反向请求；留一行 stderr，哪天来了能被看见
       console.error(`real-send: [反向请求] requestProviderRuntimeHeaders providerId=${providerId ?? '(缺 providerId)'}`);
       return providerId === EXECUTOR_PROVIDER_ID ? apiKey : undefined;
     };

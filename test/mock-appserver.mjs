@@ -5,7 +5,9 @@
 // 目标是「真机行为的复刻」：每个默认返回形状旁注明出处（verified.md / verified.md / 探针实测日期）。
 // 复刻的是 ZCode App 3.12.2 的 app-server（verified.md「3.12.2 直连探针实测」与 docs/reference/zcode-app-server-protocol.md「3.12.2 变化」，2026-09-18）：provider 表不再由
 // 客户端推，而是启动时从两个环境变量指的文件读；session/create 用 model、generateText 用 selection；
-// 每次模型请求前先向客户端要一次 provider 运行时头（interaction/requestProviderRuntimeHeaders）。
+// 检查点 5 真机（2026-09-18，verified.md「3.12.2 直连探针实测」表第 5 行）：api-key 型 provider 的模型请求
+// **不会**先向客户端要 provider 运行时头（interaction/requestProviderRuntimeHeaders），回合与 generateText
+// 都直接用个人文件里的 key。这个反向请求只在剧本 runtimeHeaders:true 时发（测客户端的内置应答用）。
 // 不负责：模拟客户端（那边是 lib/appserver.mjs）、性能或时序的真实复刻（sleep 都是假等待）、
 // 参数的全量 schema 校验（只校验测试用得到的字段）。
 //
@@ -50,8 +52,10 @@
 //     fail:       {code, message}                         推 turn.failed（payload.error）
 //     都没有                                              最后推 turn.completed
 //   generateText:      { replies: [文本…] }                workspace/generateText 按调用顺序回这些
-//                                                         文本（T3.2），用完就循环最后一条；
-//                                                         应答前先发 requestProviderRuntimeHeaders
+//                                                         文本（T3.2），用完就循环最后一条
+//   runtimeHeaders:    true                                每回合 turn.started 之后、每次 generateText 应答前
+//                                                         先发 interaction/requestProviderRuntimeHeaders 并等应答
+//                                                         （真机 api-key provider 不发；账号型未验，留着测客户端）
 //   generateTextErrors: { "<第 n 次调用>": {code, message} }  那一次调用直接回错误（1 起）
 //   generateTextDelayMs: 0                                  每次 generateText 延后多少毫秒再应答
 //                                                         （配 review.timeoutMs 测超时取消）
@@ -282,15 +286,15 @@ function buildSettings(requestedThoughtLevel, requestedModel) {
   return settings;
 }
 
-// verified.md「3.12.2 直连探针实测」表第 5 行（2026-09-18，宿主模式 headers port 无条件 shouldRefreshBeforeModelRequest）：
-// 每次模型请求前向客户端要一次 provider 运行时头，等 {headersApplied, requestAuth?, errorMessage?}
+// 只在剧本 runtimeHeaders:true 时发（检查点 5 真机：api-key provider 的回合与 generateText 都没来这个请求，
+// verified.md「3.12.2 直连探针实测」表第 5 行）。发时向客户端要一次 provider 运行时头，等 {headersApplied, requestAuth?, errorMessage?}
 // （zcode.cjs 里的应答 schema：headersApplied:true 必带 requestAuth:{apiKey?, headers?}，false 可带 errorMessage）。
 // 未答按 RESEND_MS 重发（和其它反向请求一样走 askServer），真机是 180 秒超时，这里不复刻超时。
 // params 形状照 docs/reference/zcode-app-server-protocol.md「3.12.2 变化」（从 zcode.cjs 3.12.2 源码读出，
-// 待检查点 5 真机核；真机 schema 里 sessionId 必填，generateText 那条路用的是什么 sessionId 要等
-// real-review 才知道，这里先不带）。客户端只依赖 providerId 与 requestId（去重键），其余字段是复刻不是契约。
+// 真机没抓到过实例）。客户端只依赖 providerId 与 requestId（去重键），其余字段是复刻不是契约。
 // 返回 null 表示头应用上了；否则返回失败原因——zcode.cjs 用 errorMessage ?? 那句固定原文
 async function requestRuntimeHeaders({ sessionId, modelSelection }) {
+  if (script.runtimeHeaders !== true) return null;
   const params = {
     requestId: `${sessionId ?? 'workspace'}:provider-runtime-headers:${randomUUID()}`,
     workspace: state.workspace,
@@ -321,7 +325,7 @@ async function runTurn(sessionId) {
     ?? { providerId: 'zcode-unconfigured', modelId: 'missing-model' };
   const headersError = await requestRuntimeHeaders({ sessionId, modelSelection: model });
   if (headersError !== null) {
-    // 层 5 的失败面：客户端没给可用的头，模型请求发不出去。payload.error.message 照 generateText 那条路
+    // 客户端没给可用的头，模型请求发不出去。payload.error.message 照 generateText 那条路
     // （errorMessage ?? 固定原文）；回合这条路真机没抓过（要花额度），code 也没有，先只带 message
     ev('turn.failed', { error: { message: headersError } });
     return;

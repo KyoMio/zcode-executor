@@ -85,9 +85,8 @@ test('real-send：--on-permission allow 走到 done，退出码 0，pending 已�
   const permAnswer = answers.find((m) => m.result && m.result.decision !== undefined);
   assert.deepEqual(permAnswer.result, { decision: 'allow' });
   await assert.rejects(readFile(pendingPath), (err) => err.code === 'ENOENT'); // 应答后 pending 已删
-  // verified.md「3.12.2 直连探针实测」表第 5 行：回合真的会先收到这个反向请求，real-send 要打一行 stderr 能被看见
-  // （检查点 5 的核对项之一：真机上它到底来不来）
-  assert.match(run.stderr, /\[反向请求\] requestProviderRuntimeHeaders providerId=zcode-executor/);
+  // 检查点 5 真机（2026-09-18）：api-key provider 的回合不来 requestProviderRuntimeHeaders，默认剧本也不发
+  assert.doesNotMatch(run.stderr, /\[反向请求\] requestProviderRuntimeHeaders/);
 });
 
 test('real-send：非终端且没给 --on-permission → blocked，退出码 5，pending 保留', async () => {
@@ -150,8 +149,9 @@ test('real-send：--model 不存在 → 退出码 2，mock 没被 spawn（记录
   assert.deepEqual(readRecord(recordPath), []); // 校验在 mkdtemp / 写个人文件 / spawn 之前，什么都没起
 });
 
-test('real-send：requestProviderRuntimeHeaders 应答里的 apiKey 已抹掉（RULES §8 永不落盘）', async () => {
-  const { run, recordPath } = await runRealSend({}, []);
+test('real-send：剧本开 runtimeHeaders 时应答里的 apiKey 已抹掉，且 stderr 打了反向请求行（RULES §8 永不落盘）', async () => {
+  const { run, recordPath } = await runRealSend({ runtimeHeaders: true }, []);
+  assert.match(run.stderr, /\[反向请求\] requestProviderRuntimeHeaders providerId=zcode-executor/);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
   // D14 起 apiKey 不再经 create 的 params 传（selection 里根本没有这个字段），
   // 唯一会出现在线路上的地方是这条反向请求的应答（result.requestAuth.apiKey）

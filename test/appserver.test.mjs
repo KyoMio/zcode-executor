@@ -544,10 +544,10 @@ test('deferred 建的会话 session/list 不列（真机 2026-09-18）', async (
   });
 });
 
-test('session/send 回合：turn.started 之后先来 requestProviderRuntimeHeaders，内置应答带 key，记录里抹成 [REDACTED]', async () => {
+test('剧本开 runtimeHeaders：回合 turn.started 之后来 requestProviderRuntimeHeaders，内置应答带 key，记录里抹成 [REDACTED]', async () => {
   const seen = [];
   await withMock(
-    { turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: 'x' } }] }] },
+    { runtimeHeaders: true, turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: 'x' } }] }] },
     {
       onServerRequest: (req) => {
         if (req.method === HEADERS_METHOD) seen.push(req.params);
@@ -577,9 +577,9 @@ test('session/send 回合：turn.started 之后先来 requestProviderRuntimeHead
   );
 });
 
-test('providerAuth 没给 key → 应答 headersApplied:false 并打一行 stderr，回合 turn.failed 的 message 是应答里的 errorMessage', async () => {
+test('剧本开 runtimeHeaders：providerAuth 没给 key → 应答 headersApplied:false 并打一行 stderr，回合 turn.failed 的 message 是应答里的 errorMessage', async () => {
   await withMock(
-    { turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: '不该到' } }] }] },
+    { runtimeHeaders: true, turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: '不该到' } }] }] },
     { providerAuth: null },
     async ({ client, notifications, recordPath, stderrLines }) => {
       const created = await create(client, { model: FLASH });
@@ -622,10 +622,10 @@ test('generateText：带老字段 modelRef / 缺 selection / 模型不在表里�
   });
 });
 
-test('generateText：应答前先来 requestProviderRuntimeHeaders（无 sessionId，requestId 以 workspace: 开头），结果回显 selection', async () => {
+test('剧本开 runtimeHeaders：generateText 应答前来 requestProviderRuntimeHeaders，结果回显 selection', async () => {
   const seen = [];
   await withMock(
-    { generateText: { replies: ['Y'] } },
+    { runtimeHeaders: true, generateText: { replies: ['Y'] } },
     {
       onServerRequest: (req) => {
         if (req.method === HEADERS_METHOD) seen.push(req.params);
@@ -647,8 +647,8 @@ test('generateText：应答前先来 requestProviderRuntimeHeaders（无 session
   );
 });
 
-test('generateText：头没应用上 → -32031，message 取应答的 errorMessage，没给才是固定原文', async () => {
-  await withMock({}, { providerAuth: null }, async ({ client }) => {
+test('剧本开 runtimeHeaders：generateText 头没应用上 → -32031，message 取应答的 errorMessage', async () => {
+  await withMock({ runtimeHeaders: true }, { providerAuth: null }, async ({ client }) => {
     await assert.rejects(
       client.request(
         'workspace/generateText',
@@ -663,7 +663,7 @@ test('generateText：头没应用上 → -32031，message 取应答的 errorMess
     );
   });
   // 处理器自己答 headersApplied:false 不带 errorMessage → 固定原文
-  await withMock({}, { onServerRequest: (req) => (req.method === HEADERS_METHOD ? { headersApplied: false } : undefined) }, async ({ client }) => {
+  await withMock({ runtimeHeaders: true }, { onServerRequest: (req) => (req.method === HEADERS_METHOD ? { headersApplied: false } : undefined) }, async ({ client }) => {
     await assert.rejects(
       client.request(
         'workspace/generateText',
@@ -679,9 +679,9 @@ test('generateText：头没应用上 → -32031，message 取应答的 errorMess
   });
 });
 
-test('providerAuth 答出去的 key 自动进 stderr 抹除名单', async () => {
+test('剧本开 runtimeHeaders：providerAuth 答出去的 key 自动进 stderr 抹除名单', async () => {
   await withMock(
-    { turns: [{ permission: { toolName: 'Bash', input: { command: 'ls' }, reason: 'test' } }] },
+    { runtimeHeaders: true, turns: [{ permission: { toolName: 'Bash', input: { command: 'ls' }, reason: 'test' } }] },
     {
       // 审批应答的 reason 里故意塞 key：mock 会把整个应答打到 stderr（permission answered: …），
       // 走一遍子进程 stderr → 客户端转发这条路，验的是转发前按 secrets 抹掉

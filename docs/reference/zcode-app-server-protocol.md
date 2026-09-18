@@ -55,9 +55,10 @@ GLM-5.3 系列模型 `options.reasoningLevel` 必填，不带报 `Reasoning leve
 （`{providerId, modelId, options?:{reasoningLevel}}`），不带 `selection` 就报
 `Unrecognized key: "modelRef"`。
 
-**新反向请求 `interaction/requestProviderRuntimeHeaders`**（宿主模式下，本项目 `app-server --stdio` 走的
-就是宿主模式，app-server 每次模型请求前都会向客户端发这个反向请求，等客户端答复后才继续；params 形状
-从 zcode.cjs 3.12.2 源码读出，待检查点 5 真机核）：
+**新反向请求 `interaction/requestProviderRuntimeHeaders`**（zcode.cjs 3.12.2 源码里宿主模式的 headers port
+会在模型请求前向客户端要一次运行时头；**检查点 5 真机（2026-09-18）证实 api-key 型 provider 不来这个请求**，
+回合与 generateText 都直接用个人文件里的 key；账号型 provider 未验。客户端仍保留内置应答以防万一。params
+形状从源码读出，真机没抓到过实例）：
 
 ```json
 {

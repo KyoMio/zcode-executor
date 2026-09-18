@@ -151,8 +151,9 @@ CONTEXT.md 有词条），`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 指向我们自�
 一个 provider，providerId 固定写死 `zcode-executor`（不沿用 config.json 里的 `builtin:bigmodel-coding-plan`，
 理由同 D11：新版 `builtin:` / `account:` 前缀有保留含义）。`session/create` 的模型参数从 `runtimeModel` 改成
 `model:{providerId:'zcode-executor', modelId, options:{reasoningLevel}}`，`workspace/generateText` 的
-`modelRef` 改成同形状的 `selection`。每次模型请求前还会收到一条新的反向请求
-`interaction/requestProviderRuntimeHeaders`，我们给它一个内置应答：有 key 答
+`modelRef` 改成同形状的 `selection`。zcode.cjs 里还有一条新的反向请求
+`interaction/requestProviderRuntimeHeaders`（模型请求前向宿主要运行时头），检查点 5 真机证实 api-key 型
+provider 不会发它（verified.md 2026-09-18 表第 5 行）；客户端仍保留内置应答以防账号型 provider 用到：有 key 答
 `{headersApplied:true, requestAuth:{apiKey}}`，没有答 `{headersApplied:false, errorMessage}`。
 
 为什么：app-server 改成自己读文件，不再接受宿主推表，`workspace/updateProviderRegistry`（D10）和

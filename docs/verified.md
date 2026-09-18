@@ -86,7 +86,7 @@
 | 2 | `workspace/updateProviderRegistry` → -32601 Method not found；`workspace/readState` 同样没了 | 方法被删。provider 表改由 app-server 进程内的 `startProcessProviderRegistryRuntime` 从「内置配置文件 + 个人配置文件」拼出来。个人文件默认 `~/.zcode/v2/provider_config.json`，本机这份是空的（`providerRules: []`），因为用户走的是 OAuth 账号型 coding plan，App 侧没有 API-key 型 provider | 握手、doctor ③、models 全挂 |
 | 3 | （修完 1、2 才会见）`session/create` → -32602 `Unrecognized key: "runtimeModel"` | create 的参数改成 strict schema，`runtimeModel` 没了，换成 `model: {providerId, modelId, options?: {reasoningLevel}}`；而且 GLM 5.3 系列 `reasoningLevel` 必填，不带报 `Reasoning level is required` | runner 建不了会话 |
 | 4 | （同上）`workspace/generateText` → -32602 `Unrecognized key: "modelRef"` | 参数 `modelRef` 改名 `selection`，形状同上面的 `model`；老的 `variant` 改成 `options.reasoningLevel` | 模型审批全部转人工（闸门本身设计成故障安全，不会放行） |
-| 5 | （推断，要一次真机 send 才能证实）回合起不来或 180 秒后 -32031 `Provider runtime headers were not applied before model request attempt` | 宿主模式下（`app-server --stdio` 就是宿主模式）app-server **每次模型请求前**都向客户端发反向请求 `interaction/requestProviderRuntimeHeaders`，等客户端答 `{headersApplied: true, requestAuth: {apiKey?, headers?}}`，超时 180 秒。老版本没有这一步，我们的客户端收到不认识的反向请求只会不答 | 每个回合的第一次模型调用 |
+| 5 | **检查点 5 已证伪（2026-09-18 真机 send + generateText）**：api-key 型 provider 的模型请求**不会**先来反向请求 `interaction/requestProviderRuntimeHeaders`，回合与 generateText 都直接用个人文件里的 key 打到 open.bigmodel.cn。原推断（宿主模式 headers port 无条件 `shouldRefreshBeforeModelRequest`）读漏了按 provider 类型的门控 | 客户端保留内置应答（有 key 答 `{headersApplied:true, requestAuth:{apiKey}}`，没有答 `{headersApplied:false, errorMessage}`），账号型 provider 若真来了也能接；mock 只在剧本 `runtimeHeaders:true` 时发 | 无（真机一个回合 done，模型审批快筛 1 次 generateText 回 Y） |
 
 不变的部分（都在新版上核过参数 schema）：`session/send`、`resume`、`subscribe`、`stop`、`close`、`list`、`requestRuntimePreferences`、`interaction/requestPermission`、`interaction/requestUserInput`、`session/event` 的事件种类。也就是说会话生命周期、回合结束判定、闸门那三层不用动。
 
@@ -97,8 +97,16 @@
 
 探针脚本已并入 `scripts/probe.mjs`（d2863e2）。
 
-反向请求 `interaction/requestProviderRuntimeHeaders` 的 params 形状（从 zcode.cjs 3.12.2 源码读出，
-待检查点 5 真机核）：`{requestId: "<sessionId>:provider-runtime-headers:<uuid>", sessionId, turnId?,
+检查点 5（2026-09-18，App 3.12.2，花额度）：`scripts/real-send.mjs --yes --on-permission allow` 一个回合
+（GLM-5.3-Flash，`model` + 顶层 `thoughtLevel`）→ 审批请求 Write → allow → `turn.completed`，outcome done，
+hello.txt 建成；`scripts/real-review.mjs --yes` 快筛一次 `workspace/generateText`（`selection` 带
+`options.reasoningLevel:'low'`，inputTokens 4979）回 Y。两条路都没收到 `requestProviderRuntimeHeaders`。
+跑完 `~/.zcode/cli/log/zcode-2026-09-18.jsonl` 里 grep 不到 apiKey 原文，`$TMPDIR` 无个人 provider 文件残留。
+3.12 的事件流多了 `v4/telemetry/event`、`process/mcpTelemetry`、`computer-use/operation-event` 三种通知，
+按「未知事件原样落盘」处理，回合结束判定不受影响。
+
+反向请求 `interaction/requestProviderRuntimeHeaders` 的 params 形状（从 zcode.cjs 3.12.2 源码读出；
+检查点 5 真机 api-key provider 没来过，账号型未验，真机没抓到过实例）：`{requestId: "<sessionId>:provider-runtime-headers:<uuid>", sessionId, turnId?,
 workspace, modelSelection: {providerId, modelId}, providerId, accountAccess?, reason: "model-request"}`；
 应答 `{headersApplied: true, requestAuth: {apiKey?, headers?}}` 或 `{headersApplied: false, errorMessage?}`。
 
