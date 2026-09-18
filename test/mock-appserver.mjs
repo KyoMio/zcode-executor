@@ -2,15 +2,26 @@
 // 由剧本 JSON 驱动，收到的每条消息追加到记录文件（MOCK_APPSERVER_RECORD，一行一条 JSON），
 // apiKey 值写盘前抹成 "[REDACTED]"（T1.3b 第 6 条，RULES §8 永不落盘）。
 // 日志一律 stderr（`mock: ` 前缀）。stdin EOF 后退出码 0。信封无 jsonrpc 字段；未知方法回 -32601。
-// 目标是「真机行为的复刻」：每个默认返回形状旁注明出处（verified.md / 探针实测日期）。
+// 目标是「真机行为的复刻」：每个默认返回形状旁注明出处（verified.md / PLAN-3.12.md / 探针实测日期）。
+// 复刻的是 ZCode App 3.12.2 的 app-server（PLAN-3.12.md 一、二节，2026-09-18）：provider 表不再由
+// 客户端推，而是启动时从两个环境变量指的文件读；session/create 用 model、generateText 用 selection；
+// 每次模型请求前先向客户端要一次 provider 运行时头（interaction/requestProviderRuntimeHeaders）。
 // 不负责：模拟客户端（那边是 lib/appserver.mjs）、性能或时序的真实复刻（sleep 都是假等待）、
 // 参数的全量 schema 校验（只校验测试用得到的字段）。
 //
 // 环境变量：
+//   ZCODE_BUILTIN_PROVIDER_CONFIG_FILE   内置 provider 配置路径。缺失或文件不存在 → stderr 打真机
+//                                        原文「无法定位 CLI ZCode Built-in Provider Config：…」并 exit(1)
+//                                        （PLAN-3.12.md 一节层 1）。内容不读
+//   ZCODE_PERSONAL_PROVIDER_CONFIG_FILE  个人 provider 文件路径（形状见 PLAN-3.12.md 二节第 2 条）。
+//                                        模型表从这里来：providerRules[*].providerId ×
+//                                        config.personalModelIds；config.access.apiKey 计入抹密值。
+//                                        缺失或读不出 → 表为空（不退出；真机默认读
+//                                        ~/.zcode/v2/provider_config.json，本机那份就是空表）
 //   MOCK_APPSERVER_SCRIPT  剧本 JSON 路径（字段全可选，见下）；
 //                          给了但读不出/JSON 坏 → stderr 一行 + exit(1)
 //   MOCK_APPSERVER_RECORD  记录文件路径，每条收到的消息一行 JSON
-//   MOCK_APPSERVER_VERSION --version 打印的版本，默认 0.16.5
+//   MOCK_APPSERVER_VERSION --version 打印的版本，默认 0.16.5（3.12.2 真机仍打 0.16.5，版本号区分不了新旧）
 //
 // 剧本字段（全可选）：
 //   errors:            { 方法名: {code, message, data?} }  某方法直接回错误
@@ -18,10 +29,11 @@
 //   junkStdoutLine:    "…"                                 应答第一个请求前往 stdout 打一行非 JSON
 //   hangMethods:       [方法名]                            这些方法收到后不应答（测请求超时）
 //   ignoreEof:         true                                stdin EOF 不退出（测 close 的 SIGKILL 路径）
-//   registryRequired:  false                               关掉「没推 provider 表就拒 create」
 //   resendIntervalMs:  1000                                反向请求未答时的重发间隔
-//   models:            [...]                               覆盖 readState/create settings 的模型列表
-//                                                          （形状同 registry 的 models 元素）
+//   models:            [...]                               整体覆盖 create settings.model.available
+//                                                          （形状同真机条目：{ref:{providerId,modelId},
+//                                                          label?, reasoning?:{levels,defaultLevel}}）；
+//                                                          create/generateText 的模型存在性也按它查
 //   serverRequests:    [{method, params}]                  启动后主动发这些反向请求
 //   serverRequestsDelayMs: 0                               这些请求延后多少毫秒再发（留时间给 attach）
 //   strayEvents:       [{sessionId, type?, params?, method?}]  回合结束后发的事件通知；
@@ -38,13 +50,15 @@
 //     fail:       {code, message}                         推 turn.failed（payload.error）
 //     都没有                                              最后推 turn.completed
 //   generateText:      { replies: [文本…] }                workspace/generateText 按调用顺序回这些
-//                                                         文本（T3.2），用完就循环最后一条
+//                                                         文本（T3.2），用完就循环最后一条；
+//                                                         应答前先发 requestProviderRuntimeHeaders
 //   generateTextErrors: { "<第 n 次调用>": {code, message} }  那一次调用直接回错误（1 起）
 //   generateTextDelayMs: 0                                  每次 generateText 延后多少毫秒再应答
 //                                                         （配 review.timeoutMs 测超时取消）
 import { createInterface } from 'node:readline';
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 
 const version = process.env.MOCK_APPSERVER_VERSION ?? '0.16.5';
 
@@ -53,21 +67,37 @@ if (process.argv.includes('--version')) {
   process.exit(0);
 }
 
+// PLAN-3.12.md 一节层 1（2026-09-18）：新 CLI 启动时自己找内置 provider 配置，只看 zcode.cjs 同目录的
+// provider/ 和往上五级的 config/provider/（打包后算成根目录 /config/…），找不到打这句就退。
+// 环境变量给了就原样采用。stderr 原文照抄（客户端转发时再加 zcode: 前缀）
+const builtinFile = process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE;
+if (!builtinFile || !existsSync(builtinFile)) {
+  const beside = path.join(path.dirname(process.argv[1]), 'provider', 'zcode-builtin.json');
+  process.stderr.write(`无法定位 CLI ZCode Built-in Provider Config：${beside}, /config/provider/zcode-builtin.json\n`);
+  process.exit(1);
+}
+
 const log = (msg) => process.stderr.write(`mock: ${msg}\n`);
 // T1.3b 第 6 条：写记录前把见过的 apiKey 值抹成 "[REDACTED]"（默认开启，RULES §8 永不落盘）。
-// 值只从收到的 updateProviderRegistry / session/create 参数里收集，替换按整个带引号的 JSON
-// 字符串做，记录行保持可 JSON.parse。
+// 值来自个人文件的 access.apiKey（启动时读）和客户端答 requestProviderRuntimeHeaders 时给的
+// requestAuth.apiKey；替换按整个带引号的 JSON 字符串做，记录行保持可 JSON.parse。
 const secretValues = new Set();
 function collectSecrets(msg) {
-  if (msg?.method === 'workspace/updateProviderRegistry') {
-    for (const p of msg.params?.registry?.providers ?? []) {
-      if (p?.apiKey?.value) secretValues.add(p.apiKey.value);
-    }
+  const v = msg?.result?.requestAuth?.apiKey;
+  if (v) secretValues.add(v);
+}
+
+// PLAN-3.12.md 二节第 2 条：模型表 = 个人文件里每条 providerRules 的 providerId × personalModelIds。
+// 读不出按空表（真机默认个人文件 ~/.zcode/v2/provider_config.json 就是 providerRules: []）
+const personalProviders = [];
+try {
+  const personal = JSON.parse(readFileSync(process.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE, 'utf8'));
+  for (const rule of personal?.config?.providerConfigRules?.providerRules ?? []) {
+    personalProviders.push({ providerId: rule.providerId, modelIds: rule.config?.personalModelIds ?? [] });
+    if (rule.config?.access?.apiKey) secretValues.add(rule.config.access.apiKey);
   }
-  if (msg?.method === 'session/create') {
-    const v = msg.params?.runtimeModel?.provider?.apiKey?.value;
-    if (v) secretValues.add(v);
-  }
+} catch {
+  // 缺失或读不出 = 空表，走到 create 时按「Provider Registry 中不存在 Model」拒
 }
 function redactSecretValues(text) {
   let out = text;
@@ -109,9 +139,9 @@ const respondError = (id, code, message, data) => {
 let nextId = 1;
 let junkSent = false;
 const state = {
-  registry: null, // 最近一次推的 provider 表
   workspace: undefined, // 最近一次见到的 workspace
   sessions: [],
+  deferredIds: new Set(), // persistence:'deferred' 建的会话：真机 session/list 不列（探针 2026-09-18）
   seq: 0, // session/event 单调序号
   sendCount: 0, // 第 n 个跑回合的 session/send 用第 n 个 turn（steer 不占）
   activeTurn: false, // 回合进行中：再收到的 session/send 按 steer 排队，不跑新回合
@@ -166,28 +196,47 @@ function validateAnswer(method, result) {
     const accept = result?.action === 'accept' && result?.content != null && 'answers' in result.content;
     const decline = result?.action === 'decline' && typeof result.reason === 'string';
     ok = accept || decline;
+  } else if (method === RUNTIME_HEADERS_METHOD) {
+    ok = typeof result?.headersApplied === 'boolean';
   }
   if (!ok) log(`应答形状不对 ${method}: ${json}`);
 }
 
 // ---------- 默认形状 ----------
-// verified.md「直连探针实测」2026-09-07：推表前 readState 的 modelCatalog/settings 形状
-function unconfiguredReadState() {
-  return {
-    modelCatalog: { available: [], providers: [], revision: 0 },
-    settings: {
-      mode: { current: 'build' },
-      model: {
-        available: [],
-        current: { modelId: 'missing-model', providerId: 'zcode-unconfigured' },
-        lastUsed: { modelId: 'missing-model', providerId: 'zcode-unconfigured' },
-      },
-      permission: { mode: 'build' },
-      thoughtLevel: { available: [], enabled: false },
-    },
-    workspace: state.workspace,
-  };
+const RUNTIME_HEADERS_METHOD = 'interaction/requestProviderRuntimeHeaders';
+const HEADERS_NOT_APPLIED = 'Provider runtime headers were not applied before model request attempt.';
+
+// 真机 3.12.2 探针 2026-09-18：个人文件里的模型在 settings.model.available 里每条长这样——
+// label 就是 modelId，providerLabel 就是 providerId，contextWindow 1000000、maxOutputTokens 128000，
+// reasoning.levels 固定 low/high/max、defaultLevel max（GLM 5.3 系列），另有 properties（输入输出能力，
+// 这里省略，没人用）。剧本 models 给了就整体覆盖
+function availableModels() {
+  if (script.models) return script.models;
+  const out = [];
+  for (const p of personalProviders) {
+    for (const modelId of p.modelIds) {
+      out.push({
+        ref: { providerId: p.providerId, modelId },
+        label: modelId,
+        providerLabel: p.providerId,
+        contextWindow: 1_000_000,
+        maxOutputTokens: 128_000,
+        reasoning: {
+          levels: [
+            { value: 'low', label: 'low' },
+            { value: 'high', label: 'high' },
+            { value: 'max', label: 'max' },
+          ],
+          defaultLevel: 'max',
+        },
+      });
+    }
+  }
+  return out;
 }
+
+const findModel = (ref) =>
+  availableModels().find((m) => m.ref.providerId === ref?.providerId && m.ref.modelId === ref?.modelId);
 
 function modelLevels(models) {
   const levels = [];
@@ -199,77 +248,61 @@ function modelLevels(models) {
   return levels;
 }
 
-// 思考等级的可选值与默认值来源：script.models 优先，否则 registry 第一个 provider 的 models。
-// T0.3c 第 9 条：models 覆盖时思考等级从各条目的 reasoning.levels 取，不再清空
-function thoughtLevelSource() {
-  if (script.models) return script.models;
-  return state.registry?.providers?.[0]?.models ?? [];
-}
-
-// verified.md「直连探针实测」T0.2b 行 + 响应形状（T0.3 抓取）行：推表后每 provider 每 model 一条
-function availableModels() {
-  if (script.models) return script.models;
-  const out = [];
-  for (const p of state.registry?.providers ?? []) {
-    for (const m of p.models ?? []) {
-      out.push({
-        contextWindow: m.contextWindow ?? 1_000_000,
-        label: m.label ?? m.modelId,
-        maxOutputTokens: m.maxOutputTokens ?? 128_000,
-        providerLabel: p.label ?? p.providerId,
-        reasoning: m.reasoning ?? { enabled: false, levels: [] },
-        ref: { modelId: m.modelId, providerId: p.providerId },
-      });
-    }
-  }
-  return out;
-}
-
-// T0.2b 探针（2026-09-07）：create/readState 的 settings 形状；thoughtLevel 非法值静默忽略。
-// requestedModel 是 create 的 runtimeModel 指定的 model ref：带了就把 model.current 回显成它（任务单 T1.3）
+// 真机 3.12.2 探针 2026-09-18：create 的 settings 形状。
+// - 带 model：model.current 回显 {providerId, modelId}，只有顶层 thoughtLevel 也给了才附
+//   options.reasoningLevel（model.options 里的档位不回显）；thoughtLevel.current 同样只认顶层参数，
+//   没给就没有这个键。
+// - 不带 model：用表里第一个模型，档位取顶层 thoughtLevel，没给取 defaultLevel（max），两处都有值。
+// - thoughtLevel 只有 available / current / enabled 三个键（3.11 的 defaultLevel 没了）。
+// - 表为空又没给 model：current 缺失（PLAN-3.12.md 二节第 6 条「current 为空」）
 function buildSettings(requestedThoughtLevel, requestedModel) {
   const available = availableModels();
-  const first = available[0];
-  const source = thoughtLevelSource();
-  const levels = modelLevels(source);
-  // 默认思考等级取 defaultLevel（真机回显 max，探针 2026-09-07），没有才退第一档
-  const defaultLevel = source.find((m) => m.reasoning?.defaultLevel)?.reasoning?.defaultLevel ?? levels[0]?.value ?? 'max';
-  const wanted = requestedThoughtLevel;
-  const thoughtCurrent = wanted !== undefined && levels.some((l) => l.value === wanted) ? wanted : defaultLevel;
-  const unconfigured = { modelId: 'missing-model', providerId: 'zcode-unconfigured' };
-  return {
-    appliedProviderRevision: state.registry?.revision,
+  const levels = modelLevels(available);
+  const defaultLevel = available[0]?.reasoning?.defaultLevel ?? levels[0]?.value;
+  const chosen = requestedModel ? { providerId: requestedModel.providerId, modelId: requestedModel.modelId } : available[0]?.ref;
+  const level = requestedThoughtLevel ?? (requestedModel ? undefined : defaultLevel);
+  const current = chosen ? { ...chosen, ...(level ? { options: { reasoningLevel: level } } : {}) } : undefined;
+  const settings = {
     mode: { current: 'build' },
     model: {
       available,
-      current: requestedModel ? { ...requestedModel } : first ? { ...first.ref } : { ...unconfigured },
-      lastUsed: first ? { ...first.ref } : { ...unconfigured },
+      current,
+      lastUsed: chosen ? { ...chosen } : undefined,
     },
     permission: { mode: 'build' },
     thoughtLevel: {
       available: levels,
-      current: thoughtCurrent,
-      defaultLevel,
+      current: level,
       enabled: levels.length > 0,
     },
   };
+  if (current === undefined) delete settings.model.current;
+  if (settings.model.lastUsed === undefined) delete settings.model.lastUsed;
+  if (level === undefined) delete settings.thoughtLevel.current;
+  return settings;
 }
 
-function buildReadState() {
-  if (!state.registry) return unconfiguredReadState();
-  const settings = buildSettings();
-  const providers = (state.registry.providers ?? []).map((p) => ({ ...p, updatedAt: Date.now() }));
-  return {
-    // T0.2b 探针：modelCatalog 带 available/providers/revision/providerRevision
-    modelCatalog: {
-      available: script.models ?? settings.model.available,
-      providers,
-      revision: 1,
-      providerRevision: state.registry.revision,
-    },
-    settings,
+// PLAN-3.12.md 一节层 5（2026-09-18，宿主模式 headers port 无条件 shouldRefreshBeforeModelRequest）：
+// 每次模型请求前向客户端要一次 provider 运行时头，等 {headersApplied, requestAuth?, errorMessage?}
+// （zcode.cjs 里的应答 schema：headersApplied:true 必带 requestAuth:{apiKey?, headers?}，false 可带 errorMessage）。
+// 未答按 RESEND_MS 重发（和其它反向请求一样走 askServer），真机是 180 秒超时，这里不复刻超时。
+// params 形状按 PLAN 里从 zcode.cjs 读出的写法（真机 schema 里 sessionId 必填，generateText 那条路
+// 用的是什么 sessionId 要等真机 real-review 才知道，这里先不带）。
+// 返回 null 表示头应用上了；否则返回失败原因——zcode.cjs 用 errorMessage ?? 那句固定原文
+async function requestRuntimeHeaders({ sessionId, modelSelection }) {
+  const params = {
+    requestId: `${sessionId ?? 'workspace'}:provider-runtime-headers:${randomUUID()}`,
     workspace: state.workspace,
+    modelSelection,
+    providerId: modelSelection.providerId,
+    reason: 'model-request',
   };
+  if (sessionId !== undefined) params.sessionId = sessionId;
+  const answer = await askServer(RUNTIME_HEADERS_METHOD, params);
+  // 只记 headersApplied，不把整个应答打到 stderr：requestAuth.apiKey 不该出现在任何日志里
+  log(`runtimeHeaders answered: headersApplied=${answer?.headersApplied}`);
+  if (answer?.headersApplied === true) return null;
+  return typeof answer?.errorMessage === 'string' ? answer.errorMessage : HEADERS_NOT_APPLIED;
 }
 
 // ---------- 回合（剧本 turns） ----------
@@ -282,6 +315,16 @@ async function runTurn(sessionId) {
     send({ method: 'session/event', params: { sessionId, seq: state.seq, type, payload: payload ?? {} } });
   };
   ev('turn.started', {});
+  // 会话的模型：create 时记下的；resume 进来的会话 mock 没建过，退到表里第一个（权宜：resume 不校验会话存在）
+  const model = state.sessions.find((s) => s.sessionId === sessionId)?.model ?? availableModels()[0]?.ref
+    ?? { providerId: 'zcode-unconfigured', modelId: 'missing-model' };
+  const headersError = await requestRuntimeHeaders({ sessionId, modelSelection: model });
+  if (headersError !== null) {
+    // 层 5 的失败面：客户端没给可用的头，模型请求发不出去。payload.error.message 照 generateText 那条路
+    // （errorMessage ?? 固定原文）；回合这条路真机没抓过（要花额度），code 也没有，先只带 message
+    ev('turn.failed', { error: { message: headersError } });
+    return;
+  }
   for (const e of turn.events ?? []) {
     if (e.delayMs) await sleep(e.delayMs);
     ev(e.type, e.payload);
@@ -378,45 +421,36 @@ function handleRequest(msg) {
   }
 
   switch (method) {
-    case 'workspace/updateProviderRegistry': {
-      // T0.3c 第 11 条，出处 verified.md「provider 表」行「schema 要求 ≥1」。错误文案自造（未抓真机原文）
-      const bad = Object.entries(params.registry?.providers ?? []).find(([, p]) => (p?.models ?? []).length === 0);
-      if (bad) {
-        respondError(id, -32602, `Invalid params — registry provider ${bad[1]?.providerId ?? bad[0]} has no models`);
-        break;
-      }
-      state.registry = params.registry ?? null;
-      // verified.md「直连探针实测」响应形状（T0.3 抓取）行
-      respond(id, {
-        appliedProviderRevision: state.registry?.revision,
-        providerCount: state.registry?.providers?.length ?? 0,
-        status: 'applied',
-        workspace: params.workspace,
-        workspaceState: buildReadState(),
-      });
-      break;
-    }
     case 'session/create': {
-      if (!state.registry && script.registryRequired !== false) {
-        // verified.md「直连探针实测」T0.2 行：没推表 create 被拒，消息原文与 data.code 照抄
-        respondError(
-          id,
-          -32603,
-          'Model config is missing. Create ~/.zcode/cli/config.json with an explicit model provider before running ZCode.',
-          { name: 'ModelProtocolError', code: 'model_config_missing' },
-        );
+      // PLAN-3.12.md 一节层 3（2026-09-18）：strict schema，runtimeModel 没了；原文照抄
+      if ('runtimeModel' in params) {
+        respondError(id, -32602, 'Invalid params — (root): Unrecognized key: "runtimeModel"', { name: 'ZodError' });
         break;
       }
+      const wanted = params.model;
+      if (wanted) {
+        const found = findModel(wanted);
+        if (!found) {
+          respondError(id, -32603, `Provider Registry 中不存在 Model: ${wanted.providerId}/${wanted.modelId}`, { name: 'ModelProtocolError' });
+          break;
+        }
+        if (!wanted.options?.reasoningLevel) {
+          respondError(id, -32603, `Reasoning level is required for ${wanted.providerId}/${wanted.modelId}`, { name: 'ModelProtocolError' });
+          break;
+        }
+      }
+      const settings = buildSettings(params.thoughtLevel, wanted);
       const sessionId = `sess_${randomUUID()}`;
       const now = Date.now();
-      const first = availableModels()[0];
       const session = {
-        // verified.md「响应形状（T0.3 抓取）」行只记了键名清单；createdAt/traceId/sessionKind/
-        // status/target 等键的取值细节未归档，先按自造对待，真机抓到原文再回来核
+        // 真机 3.12.2 探针 2026-09-18：session 对象的键就这些；model 是 {providerId, modelId}（不带 options）。
+        // 响应里另有 messages/projection/protocol/runtime/slashCommands/todos/todoGroups，没人用，不复刻
         createdAt: now,
         mode: params.mode ?? 'build',
-        model: first ? { ...first.ref } : { modelId: 'missing-model', providerId: 'zcode-unconfigured' },
-        traceId: `trace_${randomUUID()}`,
+        model: settings.model.current
+          ? { providerId: settings.model.current.providerId, modelId: settings.model.current.modelId }
+          : { modelId: 'missing-model', providerId: 'zcode-unconfigured' },
+        traceId: randomUUID(),
         sessionId,
         sessionKind: 'interactive',
         status: 'idle',
@@ -426,23 +460,30 @@ function handleRequest(msg) {
         workspace: params.workspace,
       };
       state.sessions.push(session);
-      // verified.md「requestRuntimePreferences 时序」行：应答之后才发，params 带 sessionId 和 scope。
-      // runtimeModel（D11）带上时把 settings.model.current 回显成它指定的 model ref
-      const settings = buildSettings(params.thoughtLevel, params.runtimeModel?.model);
+      if (params.persistence === 'deferred') state.deferredIds.add(sessionId);
+      // verified.md「requestRuntimePreferences 时序」行：应答之后才发，params 带 sessionId 和 scope
       respond(id, { session, settings });
       void askServer('session/requestRuntimePreferences', { sessionId, scope: 'runtime-materialization' }).then((answer) => {
         log(`runtimePreferences answered: ${JSON.stringify(answer)}`);
       });
       break;
     }
-    case 'workspace/readState': {
-      respond(id, buildReadState());
-      break;
-    }
     case 'workspace/generateText': {
-      // T3.2：按调用次序回剧本的 replies（用完循环最后一条）；参数形状照 verified.md
-      // 「workspace/generateText」行（result 带 text，usage 自造）。收到的请求本身已进记录文件
-      // （messages / modelRef / querySource 都在），测试从记录断言。
+      // PLAN-3.12.md 一节层 4（2026-09-18）：modelRef 改名 selection，strict schema；原文照抄
+      if ('modelRef' in params) {
+        respondError(id, -32602, 'Invalid params — selection: Invalid input: expected object, received undefined; (root): Unrecognized key: "modelRef"', { name: 'ZodError' });
+        break;
+      }
+      if (!params.selection || typeof params.selection !== 'object') {
+        respondError(id, -32602, 'Invalid params — selection: Invalid input: expected object, received undefined', { name: 'ZodError' });
+        break;
+      }
+      if (!findModel(params.selection)) {
+        respondError(id, -32603, `Provider Registry 中不存在 Model: ${params.selection.providerId}/${params.selection.modelId}`, { name: 'ModelProtocolError' });
+        break;
+      }
+      // T3.2：按调用次序回剧本的 replies（用完循环最后一条）；result 带 text 与回显的 selection，
+      // finishReason/usage 自造。收到的请求本身已进记录文件（messages / selection / querySource 都在）
       state.generateTextCount += 1;
       const callNo = state.generateTextCount;
       const scriptedError = script.generateTextErrors?.[String(callNo)];
@@ -451,12 +492,20 @@ function handleRequest(msg) {
         break;
       }
       void (async () => {
+        const selection = params.selection;
+        const headersError = await requestRuntimeHeaders({ modelSelection: { providerId: selection.providerId, modelId: selection.modelId } });
+        if (headersError !== null) {
+          // PLAN-3.12.md 一节层 5：头没应用上，模型请求以 -32031 失败，message 是客户端的 errorMessage，
+          // 没给才是那句固定原文（code、原文与取舍都出自 zcode.cjs）
+          respondError(id, -32031, headersError);
+          return;
+        }
         if (script.generateTextDelayMs) await sleep(script.generateTextDelayMs);
         const replies = script.generateText?.replies ?? [];
         const text = replies.length === 0 ? 'Y' : replies[Math.min(callNo - 1, replies.length - 1)];
         respond(id, {
           text,
-          modelRef: params.modelRef ?? null,
+          selection,
           finishReason: 'stop',
           usage: { inputTokens: 10, outputTokens: 1, totalTokens: 11 },
         });
@@ -481,12 +530,14 @@ function handleRequest(msg) {
       break;
     }
     case 'session/list': {
-      // verified.md「响应形状（T0.3 抓取）」行：{sessions: [session 对象]}，不是裸数组
-      respond(id, { sessions: state.sessions });
+      // verified.md「响应形状（T0.3 抓取）」行：{sessions: [session 对象]}，不是裸数组。
+      // deferred 建的会话不在列（真机探针 2026-09-18：create(deferred) 后 list 为空）
+      respond(id, { sessions: state.sessions.filter((s) => !state.deferredIds.has(s.sessionId)) });
       break;
     }
     case 'session/close': {
       state.sessions = state.sessions.filter((s) => s.sessionId !== params.sessionId);
+      state.deferredIds.delete(params.sessionId);
       // verified.md「直连探针实测」推表之后（T0.2b）行：close 回 {closed:true}
       respond(id, { closed: true });
       break;
@@ -521,6 +572,8 @@ function handleRequest(msg) {
       break;
     }
     default: {
+      // 3.12.2 真机原文（2026-09-18）：被删的 workspace/updateProviderRegistry、workspace/readState
+      // 也走这句，和未知方法一样
       respondError(id, -32601, `Method not found: ${method}`);
     }
   }

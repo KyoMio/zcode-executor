@@ -1,14 +1,19 @@
 // lib/errors.mjs 与 lib/appserver.mjs 的行为测试。
-// 纯函数用例（classify / findZcode / ExecutorError）直接喂输入；
+// 纯函数用例（classify / findZcode / builtinProviderConfigPath / ExecutorError）直接喂输入；
 // 客户端用例一律对 test/mock-appserver.mjs 跑（T0.3），不 spawn 真 zcode，不花额度。
+// mock 复刻的是 3.12.2（PLAN-3.12.md）：provider 表来自 startMock 写的个人文件，create 带 model，
+// 每个回合与 generateText 前先来一次 interaction/requestProviderRuntimeHeaders。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import process from 'node:process';
 import path from 'node:path';
 import { ExecutorError } from '../lib/errors.mjs';
-import { findZcode, classify, AppServerClient } from '../lib/appserver.mjs';
-import { buildRegistry } from '../lib/providers.mjs';
+import { findZcode, classify, builtinProviderConfigPath, probeHandshake, AppServerClient } from '../lib/appserver.mjs';
+import { buildPersonalProviderConfig } from '../lib/providers.mjs';
 import { startMock, waitFor, readRecord, killAll } from './helpers.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -21,27 +26,8 @@ test.after(async () => {
   for (const dir of mockDirs) await rm(dir, { recursive: true, force: true });
 });
 
-// 合成 provider 表：一个 provider 两个模型，走 buildRegistry 真实构造路径
-const CONFIG = {
-  provider: {
-    'builtin:test-plan': {
-      kind: 'anthropic',
-      name: 'Test Plan',
-      options: { baseURL: 'https://api.test.example', apiKey: 'sk-mock-local' },
-      models: {
-        'GLM-5.3': {
-          name: 'GLM 5.3',
-          limit: { context: 200000, output: 32000 },
-          reasoning: { enabled: true, variants: ['low', 'high', 'max'], defaultVariant: 'max' },
-        },
-        'GLM-5.3-Flash': { reasoning: { enabled: true, variants: ['low', 'high'], defaultVariant: 'high' } },
-      },
-    },
-  },
-};
-const REGISTRY = buildRegistry(CONFIG);
-
 // 起 mock + 客户端的公共壳：collect 通知与 stderr，登记 pid，finally 收场。
+// providerAuth 缺省答 startMock 的 apiKey（opts.providerAuth 显式传 null 表示不给 key）。
 // spawn 失败也要清临时目录、收掉起了一半的客户端（T2.7 第 3 条）
 async function withMock(script, opts, fn) {
   const mock = await startMock({ script });
@@ -55,24 +41,27 @@ async function withMock(script, opts, fn) {
       cwd: mock.dir,
       env: mock.env,
       secrets: opts.secrets ?? [],
+      providerAuth: opts.providerAuth === undefined ? () => mock.apiKey : opts.providerAuth ?? undefined,
       onServerRequest: opts.onServerRequest,
       onNotification: (n) => notifications.push(n),
       onStderr: (line) => stderrLines.push(line),
     });
     pids.push(client.pid);
-    return await fn({ client, notifications, stderrLines, recordPath: mock.recordPath });
+    return await fn({ client, notifications, stderrLines, recordPath: mock.recordPath, mock });
   } finally {
     if (client) await client.close({ timeoutMs: 2000 }).catch(() => {});
     await mock.cleanup();
   }
 }
 
-const pushRegistry = (client, workspace) =>
-  client.request('workspace/updateProviderRegistry', { workspace, registry: REGISTRY }, { timeoutMs: 2000 });
-
 const WORKSPACE = { workspacePath: '/tmp/probe-ws', workspaceKey: '/tmp/probe-ws' };
+// startMock 默认个人文件里的模型（providerId 固定 zcode-executor）
+const FLASH = { providerId: 'zcode-executor', modelId: 'GLM-5.3-Flash', options: { reasoningLevel: 'high' } };
+const createParams = (extra = {}) => ({ workspace: WORKSPACE, mode: 'build', titleGenerationEnabled: false, ...extra });
+const create = (client, extra) => client.request('session/create', createParams(extra), { timeoutMs: 2000 });
 
 const isResponse = (m) => m.id !== undefined && m.method === undefined;
+const HEADERS_METHOD = 'interaction/requestProviderRuntimeHeaders';
 
 test('ExecutorError：带 exitCode 与 details', () => {
   const err = new ExecutorError('白名单外的 cwd，改用 worktree 目录', 2, { cwd: '/tmp/x' });
@@ -128,7 +117,107 @@ test('findZcode：ZCODE_BIN 指向不存在的文件时抛 ExecutorError(1)', ()
   assert.throws(() => findZcode({ zcodeBin: '/nonexistent/zcode-bin.cjs' }), (err) => err instanceof ExecutorError && err.exitCode === 1);
 });
 
-test('推表 → create → runtimePreferences：处理器只跑一次，每个信封都拿到同一默认应答', async () => {
+test('builtinProviderConfigPath：按 App 目录布局从 zcode.cjs 推出 ../config/provider/zcode-builtin.json', async () => {
+  // 复刻 <App>/Contents/Resources/{glm/zcode.cjs, config/provider/zcode-builtin.json}（PLAN-3.12.md 二节第 1 条）
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-executor-test-'));
+  mockDirs.push(dir);
+  await mkdir(path.join(dir, 'glm'), { recursive: true });
+  await mkdir(path.join(dir, 'config', 'provider'), { recursive: true });
+  const zcode = path.join(dir, 'glm', 'zcode.cjs');
+  await writeFile(zcode, '// fake\n');
+  const builtin = path.join(dir, 'config', 'provider', 'zcode-builtin.json');
+  // 文件还没有：3.12 之前的 App 就是这样，抛错且信息说明版本门槛与环境变量出路
+  assert.throws(() => builtinProviderConfigPath(zcode), (err) => {
+    assert.ok(err instanceof ExecutorError);
+    assert.match(err.message, /3\.12/);
+    assert.match(err.message, /ZCODE_BUILTIN_PROVIDER_CONFIG_FILE/);
+    assert.equal(err.details.file, builtin);
+    return true;
+  });
+  await writeFile(builtin, '{}');
+  assert.equal(builtinProviderConfigPath(zcode), builtin);
+});
+
+test('spawn：没有个人 provider 文件（参数与环境都没有）→ 抛 ExecutorError，不拉进程', async () => {
+  const mock = await startMock({});
+  mockDirs.push(mock.dir);
+  const env = { ...mock.env };
+  delete env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE;
+  assert.equal(process.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE, undefined); // 本测试进程里没有它
+  try {
+    await assert.rejects(AppServerClient.spawn({ zcodePath: mock.zcodePath, cwd: mock.dir, env }), (err) => {
+      assert.ok(err instanceof ExecutorError);
+      assert.match(err.message, /个人 provider 文件/);
+      assert.match(err.message, /ZCODE_PERSONAL_PROVIDER_CONFIG_FILE/);
+      return true;
+    });
+  } finally {
+    await mock.cleanup();
+  }
+});
+
+test('spawn：内置 provider 文件的环境变量指向不存在的文件 → 拉起前就抛 ExecutorError（不起子进程）', async () => {
+  const mock = await startMock({});
+  mockDirs.push(mock.dir);
+  const env = { ...mock.env, ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: '/nonexistent/zcode-builtin.json' };
+  try {
+    await assert.rejects(
+      AppServerClient.spawn({ zcodePath: mock.zcodePath, cwd: mock.dir, env }),
+      (err) => err instanceof ExecutorError && /ZCODE_BUILTIN_PROVIDER_CONFIG_FILE 指向的文件不存在/.test(err.message),
+    );
+    assert.deepEqual(readRecord(mock.recordPath), []); // 没起 mock，记录为空
+  } finally {
+    await mock.cleanup();
+  }
+});
+
+test('mock：缺内置 provider 文件的环境变量时打「无法定位」原文并退出码 1（层 1 的复刻，直接拉 mock）', async () => {
+  const mock = await startMock({});
+  mockDirs.push(mock.dir);
+  const { ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: _dropped, ...env } = mock.env;
+  const proc = spawn(process.execPath, [mock.zcodePath, 'app-server', '--stdio'], { env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
+  pids.push(proc.pid);
+  let stderr = '';
+  proc.stderr.on('data', (chunk) => { stderr += chunk; });
+  try {
+    const [code, signal] = await once(proc, 'exit');
+    assert.deepEqual({ code, signal }, { code: 1, signal: null });
+    assert.match(stderr, /无法定位 CLI ZCode Built-in Provider Config/);
+  } finally {
+    proc.stdin.end();
+    await mock.cleanup();
+  }
+});
+
+test('spawn：显式 personalProviderFile 压过 env 里的（模型表按显式那份）', async () => {
+  const mock = await startMock({});
+  mockDirs.push(mock.dir);
+  const other = path.join(mock.dir, 'other-provider.json');
+  await writeFile(
+    other,
+    JSON.stringify(
+      buildPersonalProviderConfig({
+        providerId: 'x',
+        apiFormat: 'anthropic-messages',
+        baseURL: 'https://x.invalid',
+        apiKey: { source: 'inline', value: 'mock-api-key-other' },
+        models: [{ modelId: 'GLM-OTHER' }],
+      }),
+    ),
+  );
+  const client = await AppServerClient.spawn({ zcodePath: mock.zcodePath, cwd: mock.dir, env: mock.env, personalProviderFile: other });
+  pids.push(client.pid);
+  try {
+    const created = await create(client, { model: { providerId: 'zcode-executor', modelId: 'GLM-OTHER', options: { reasoningLevel: 'high' } } });
+    assert.deepEqual(created.settings.model.available.map((m) => m.ref.modelId), ['GLM-OTHER']);
+    await assert.rejects(create(client, { model: FLASH }), (err) => err.details.code === -32603); // env 那份的模型不在表里
+  } finally {
+    await client.close({ timeoutMs: 2000 });
+    await mock.cleanup();
+  }
+});
+
+test('create → runtimePreferences：处理器只跑一次，每个信封都拿到同一默认应答', async () => {
   let handlerCalls = 0;
   await withMock(
     { resendIntervalMs: 40 },
@@ -143,19 +232,12 @@ test('推表 → create → runtimePreferences：处理器只跑一次，每个�
       },
     },
     async ({ client, recordPath, stderrLines }) => {
-      const pushed = await pushRegistry(client, WORKSPACE);
-      assert.equal(pushed.status, 'applied');
-      assert.equal(pushed.appliedProviderRevision, REGISTRY.revision);
-      assert.equal(pushed.providerCount, 1);
-      const created = await client.request(
-        'session/create',
-        { workspace: WORKSPACE, mode: 'build', persistence: 'immediate',
-          titleGenerationEnabled: false, thoughtLevel: 'high' },
-        { timeoutMs: 2000 },
-      );
+      const created = await create(client, { persistence: 'immediate', thoughtLevel: 'high', model: FLASH });
       assert.match(created.session.sessionId, /^sess_/);
-      assert.equal(created.settings.thoughtLevel.current, 'high'); // 合法值回显
-      assert.equal(created.settings.appliedProviderRevision, REGISTRY.revision);
+      assert.equal(created.settings.thoughtLevel.current, 'high'); // 顶层 thoughtLevel 回显
+      // 真机 3.12.2（2026-09-18）：model.current 回显 ref，options.reasoningLevel 跟顶层 thoughtLevel
+      assert.deepEqual(created.settings.model.current, { providerId: 'zcode-executor', modelId: 'GLM-5.3-Flash', options: { reasoningLevel: 'high' } });
+      assert.deepEqual(created.session.model, { providerId: 'zcode-executor', modelId: 'GLM-5.3-Flash' });
       // mock 发出的反向请求不进记录文件（记录只收收到的），从 stderr 日志数发送次数；
       // 先等「已应答」（重发循环停了）再计数，不然快照期间还会冒新的重发
       await waitFor(() => (stderrLines.some((l) => l.includes('runtimePreferences answered')) ? true : undefined), { timeoutMs: 3000 });
@@ -182,28 +264,100 @@ test('推表 → create → runtimePreferences：处理器只跑一次，每个�
   );
 });
 
-test('没推表 create 被拒，details 带 model_config_missing', async () => {
+test('create 带老字段 runtimeModel → -32602 Unrecognized key（层 3 原文）', async () => {
   await withMock({}, {}, async ({ client }) => {
-    await assert.rejects(
-      client.request('session/create', { workspace: WORKSPACE, mode: 'build' }, { timeoutMs: 2000 }),
-      (err) => {
-        assert.ok(err instanceof ExecutorError);
-        assert.match(err.message, /Model config is missing/);
-        assert.equal(err.details.data.code, 'model_config_missing');
-        assert.equal(err.details.data.name, 'ModelProtocolError');
+    await assert.rejects(create(client, { runtimeModel: { model: FLASH } }), (err) => {
+      assert.ok(err instanceof ExecutorError);
+      assert.equal(err.details.code, -32602);
+      assert.match(err.message, /Invalid params — \(root\): Unrecognized key: "runtimeModel"/);
+      return true;
+    });
+  });
+});
+
+test('create 的 model 不在表里 → -32603 Provider Registry 中不存在 Model', async () => {
+  await withMock({}, {}, async ({ client }) => {
+    await assert.rejects(create(client, { model: { providerId: 'zcode-executor', modelId: 'GLM-9', options: { reasoningLevel: 'high' } } }), (err) => {
+      assert.equal(err.details.code, -32603);
+      assert.match(err.message, /Provider Registry 中不存在 Model: zcode-executor\/GLM-9/);
+      assert.equal(err.details.data.name, 'ModelProtocolError');
+      return true;
+    });
+    // providerId 不对同样是这句（真机 2026-09-18）
+    await assert.rejects(create(client, { model: { providerId: 'nope', modelId: 'GLM-5.3', options: { reasoningLevel: 'high' } } }), (err) => {
+      assert.match(err.message, /Provider Registry 中不存在 Model: nope\/GLM-5\.3/);
+      return true;
+    });
+  });
+});
+
+test('create 的 model 缺 options.reasoningLevel → -32603 Reasoning level is required', async () => {
+  await withMock({}, {}, async ({ client }) => {
+    await assert.rejects(create(client, { model: { providerId: 'zcode-executor', modelId: 'GLM-5.3-Flash' } }), (err) => {
+      assert.equal(err.details.code, -32603);
+      assert.match(err.message, /Reasoning level is required for zcode-executor\/GLM-5\.3-Flash/);
+      return true;
+    });
+  });
+});
+
+test('create 不带 model → 用表里第一个模型，档位取顶层 thoughtLevel 或默认 max（真机 2026-09-18）', async () => {
+  await withMock({}, {}, async ({ client }) => {
+    const withLevel = await create(client, { thoughtLevel: 'low' });
+    assert.deepEqual(withLevel.settings.model.current, { providerId: 'zcode-executor', modelId: 'GLM-5.3-Flash', options: { reasoningLevel: 'low' } });
+    assert.equal(withLevel.settings.thoughtLevel.current, 'low');
+    const bare = await create(client);
+    assert.deepEqual(bare.settings.model.current, { providerId: 'zcode-executor', modelId: 'GLM-5.3-Flash', options: { reasoningLevel: 'max' } });
+    assert.equal(bare.settings.thoughtLevel.current, 'max');
+  });
+});
+
+test('create 只在 model.options 里给档位、不给顶层 thoughtLevel → current 不带 options，thoughtLevel.current 缺失（真机 2026-09-18）', async () => {
+  await withMock({}, {}, async ({ client }) => {
+    const created = await create(client, { model: { providerId: 'zcode-executor', modelId: 'GLM-5.3', options: { reasoningLevel: 'max' } } });
+    assert.deepEqual(created.settings.model.current, { providerId: 'zcode-executor', modelId: 'GLM-5.3' });
+    assert.equal('current' in created.settings.thoughtLevel, false);
+    assert.equal(created.settings.thoughtLevel.enabled, true);
+  });
+});
+
+test('个人文件缺失 → 模型表为空，create 带 model 被拒，不带 model 建出来的 current 缺失', async () => {
+  const mock = await startMock({});
+  mockDirs.push(mock.dir);
+  const env = { ...mock.env, ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: '/nonexistent/provider.json' };
+  const client = await AppServerClient.spawn({ zcodePath: mock.zcodePath, cwd: mock.dir, env });
+  pids.push(client.pid);
+  try {
+    await assert.rejects(create(client, { model: FLASH }), (err) => err.details.code === -32603);
+    const bare = await create(client);
+    assert.deepEqual(bare.settings.model.available, []);
+    assert.equal('current' in bare.settings.model, false);
+    assert.equal(bare.settings.thoughtLevel.enabled, false);
+  } finally {
+    await client.close({ timeoutMs: 2000 });
+    await mock.cleanup();
+  }
+});
+
+test('被删的 workspace/updateProviderRegistry 与 workspace/readState → -32601 Method not found（层 2 原文）', async () => {
+  await withMock({}, {}, async ({ client }) => {
+    for (const method of ['workspace/updateProviderRegistry', 'workspace/readState']) {
+      await assert.rejects(client.request(method, { workspace: WORKSPACE }, { timeoutMs: 2000 }), (err) => {
+        assert.equal(err.details.code, -32601);
+        assert.match(err.message, new RegExp(`Method not found: ${method.replace('/', '\\/')}`));
         return true;
-      },
-    );
+      });
+    }
   });
 });
 
 test('剧本让方法挂住 → 请求超时，信息里有方法名', async () => {
-  await withMock({ hangMethods: ['workspace/readState'] }, {}, async ({ client }) => {
+  await withMock({ hangMethods: ['session/list'] }, {}, async ({ client }) => {
     const startedAt = Date.now();
-    await assert.rejects(client.request('workspace/readState', {}, { timeoutMs: 200 }), (err) => {
+    await assert.rejects(client.request('session/list', {}, { timeoutMs: 200 }), (err) => {
       assert.ok(err instanceof ExecutorError);
       assert.match(err.message, /超时/);
-      assert.match(err.message, /workspace\/readState/);
+      assert.match(err.message, /session\/list/);
       return true;
     });
     assert.ok(Date.now() - startedAt < 2000); // 按超时算，不等默认 30s
@@ -213,12 +367,12 @@ test('剧本让方法挂住 → 请求超时，信息里有方法名', async () 
 test('exitAfter 让子进程崩：挂着的请求全部 reject，exited code 3', async () => {
   await withMock({ exitAfter: 'session/subscribe' }, {}, async ({ client }) => {
     const answered = client.request('session/subscribe', { sessionId: 'sess_x', deliveryKind: 'desktop-continuous' }, { timeoutMs: 3000 });
-    const pending = client.request('workspace/readState', {}, { timeoutMs: 3000 });
+    const pending = client.request('session/list', {}, { timeoutMs: 3000 });
     assert.deepEqual(await answered, { eventSeq: 0, snapshot: {} }); // exitAfter 的方法本身有应答
     await assert.rejects(pending, (err) => {
       assert.ok(err instanceof ExecutorError);
       assert.match(err.message, /退出/);
-      assert.equal(err.details.method, 'workspace/readState');
+      assert.equal(err.details.method, 'session/list');
       return true;
     });
     const exitInfo = await client.exited;
@@ -293,8 +447,7 @@ test('session/send 后按顺序收到 turn.started、tool.updated、turn.complet
     },
     {},
     async ({ client, notifications }) => {
-      await pushRegistry(client, WORKSPACE);
-      const created = await client.request('session/create', { workspace: WORKSPACE, mode: 'build' }, { timeoutMs: 2000 });
+      const created = await create(client, { model: FLASH });
       const sessionId = created.session.sessionId;
       await client.request('session/subscribe', { sessionId, deliveryKind: 'desktop-continuous' }, { timeoutMs: 2000 });
       const sent = await client.request('session/send', { sessionId }, { timeoutMs: 2000 });
@@ -316,8 +469,7 @@ test('session/send 后按顺序收到 turn.started、tool.updated、turn.complet
 
 test('session/list 与 session/close：建了在列，close 后移除', async () => {
   await withMock({}, {}, async ({ client }) => {
-    await pushRegistry(client, WORKSPACE);
-    const created = await client.request('session/create', { workspace: WORKSPACE, mode: 'build' }, { timeoutMs: 2000 });
+    const created = await create(client, { model: FLASH });
     const sessionId = created.session.sessionId;
     const list = await client.request('session/list', { workspace: WORKSPACE }, { timeoutMs: 2000 });
     assert.equal(list.sessions.length, 1);
@@ -330,35 +482,235 @@ test('session/list 与 session/close：建了在列，close 后移除', async ()
   });
 });
 
-test('推表前 readState 是未配置形状', async () => {
+test('create 的 settings.model.available 按个人文件生成：每模型一条，档位 low/high/max、默认 max（真机 2026-09-18）', async () => {
   await withMock({}, {}, async ({ client }) => {
-    const state = await client.request('workspace/readState', { workspace: WORKSPACE }, { timeoutMs: 2000 });
-    assert.deepEqual(state.modelCatalog, { available: [], providers: [], revision: 0 });
-    assert.deepEqual(state.settings.model.current, { modelId: 'missing-model', providerId: 'zcode-unconfigured' });
-    assert.equal(state.settings.thoughtLevel.enabled, false);
+    const { settings } = await create(client, { model: FLASH, thoughtLevel: 'high' });
+    assert.deepEqual(
+      settings.model.available.map((m) => m.ref),
+      [
+        { providerId: 'zcode-executor', modelId: 'GLM-5.3-Flash' },
+        { providerId: 'zcode-executor', modelId: 'GLM-5.3' },
+      ],
+    );
+    const first = settings.model.available[0];
+    assert.equal(first.label, 'GLM-5.3-Flash');
+    assert.equal(first.providerLabel, 'zcode-executor');
+    assert.deepEqual(first.reasoning.levels.map((l) => l.value), ['low', 'high', 'max']);
+    assert.equal(first.reasoning.defaultLevel, 'max');
+    // 3.12.2 的 thoughtLevel 只有这三个键（没有 3.11 的 defaultLevel）
+    assert.deepEqual(settings.thoughtLevel, {
+      available: [
+        { value: 'low', label: 'low' },
+        { value: 'high', label: 'high' },
+        { value: 'max', label: 'max' },
+      ],
+      current: 'high',
+      enabled: true,
+    });
   });
 });
 
-test('推表后 readState 按 registry 生成模型列表与思考等级', async () => {
+test('probeHandshake：create(deferred) + close，返回 settings；list 里不留会话，记录里无 send', async () => {
+  const mock = await startMock({});
+  mockDirs.push(mock.dir);
+  try {
+    const settings = await probeHandshake({
+      zcodePath: mock.zcodePath,
+      env: mock.env,
+      cwd: mock.dir,
+      personalProviderFile: mock.personalProviderFile,
+      providerAuth: () => mock.apiKey,
+      model: FLASH,
+      thoughtLevel: 'high',
+    });
+    assert.deepEqual(settings.model.current, { providerId: 'zcode-executor', modelId: 'GLM-5.3-Flash', options: { reasoningLevel: 'high' } });
+    assert.equal(settings.model.available.length, 2);
+    const record = readRecord(mock.recordPath);
+    const methods = record.filter((m) => m.method !== undefined).map((m) => m.method);
+    assert.deepEqual(methods, ['session/create', 'session/close']);
+    assert.equal(record.find((m) => m.method === 'session/create').params.persistence, 'deferred');
+  } finally {
+    await mock.cleanup();
+  }
+});
+
+test('deferred 建的会话 session/list 不列（真机 2026-09-18）', async () => {
   await withMock({}, {}, async ({ client }) => {
-    await pushRegistry(client, WORKSPACE);
-    const state = await client.request('workspace/readState', { workspace: WORKSPACE }, { timeoutMs: 2000 });
-    assert.equal(state.settings.model.available.length, 2); // 每 model 一条
-    assert.deepEqual(state.settings.model.available[0].ref, { modelId: 'GLM-5.3', providerId: 'builtin:test-plan' });
-    assert.deepEqual(
-      state.settings.model.available[0].reasoning.levels.map((l) => l.value),
-      ['low', 'high', 'max'],
-    );
-    assert.equal(state.settings.thoughtLevel.current, 'max'); // 默认档
-    assert.equal(state.settings.thoughtLevel.enabled, true);
-    assert.equal(state.settings.appliedProviderRevision, REGISTRY.revision);
+    const deferred = await create(client, { model: FLASH, persistence: 'deferred' });
+    const listed = await create(client, { model: FLASH, persistence: 'immediate' });
+    const list = await client.request('session/list', { workspace: WORKSPACE }, { timeoutMs: 2000 });
+    assert.deepEqual(list.sessions.map((s) => s.sessionId), [listed.session.sessionId]);
+    assert.deepEqual(await client.request('session/close', { sessionId: deferred.session.sessionId }, { timeoutMs: 2000 }), { closed: true });
   });
+});
+
+test('session/send 回合：turn.started 之后先来 requestProviderRuntimeHeaders，内置应答带 key，记录里抹成 [REDACTED]', async () => {
+  const seen = [];
+  await withMock(
+    { turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: 'x' } }] }] },
+    {
+      onServerRequest: (req) => {
+        if (req.method === HEADERS_METHOD) seen.push(req.params);
+        return undefined; // 交给客户端内置应答
+      },
+    },
+    async ({ client, notifications, recordPath, mock }) => {
+      const created = await create(client, { model: FLASH });
+      const sessionId = created.session.sessionId;
+      await client.request('session/subscribe', { sessionId, deliveryKind: 'desktop-continuous' }, { timeoutMs: 2000 });
+      await client.request('session/send', { sessionId, content: 'hi' }, { timeoutMs: 2000 });
+      await waitFor(() => (notifications.some((n) => n.params?.type === 'turn.completed') ? true : undefined));
+      assert.equal(seen.length, 1);
+      // PLAN-3.12.md 一节层 5：params 形状
+      assert.match(seen[0].requestId, new RegExp(`^${sessionId}:provider-runtime-headers:`));
+      assert.equal(seen[0].sessionId, sessionId);
+      assert.deepEqual(seen[0].modelSelection, { providerId: 'zcode-executor', modelId: 'GLM-5.3-Flash' });
+      assert.equal(seen[0].providerId, 'zcode-executor');
+      assert.equal(seen[0].reason, 'model-request');
+      assert.deepEqual(seen[0].workspace, WORKSPACE);
+      // 回合照常跑完
+      const types = notifications.filter((n) => n.method === 'session/event').map((n) => n.params.type);
+      assert.deepEqual(types, ['turn.started', 'model.streaming', 'turn.completed']);
+      // 记录里的应答：headersApplied true，apiKey 已抹
+      const answers = readRecord(recordPath).filter((m) => isResponse(m) && m.result?.headersApplied !== undefined);
+      assert.equal(answers.length, 1);
+      assert.deepEqual(answers[0].result, { headersApplied: true, requestAuth: { apiKey: '[REDACTED]' } });
+      assert.equal(JSON.stringify(readRecord(recordPath)).includes(mock.apiKey), false);
+    },
+  );
+});
+
+test('providerAuth 没给 key → 应答 headersApplied:false 并打一行 stderr，回合 turn.failed 的 message 是应答里的 errorMessage', async () => {
+  await withMock(
+    { turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: '不该到' } }] }] },
+    { providerAuth: null },
+    async ({ client, notifications, recordPath, stderrLines }) => {
+      const created = await create(client, { model: FLASH });
+      const sessionId = created.session.sessionId;
+      await client.request('session/send', { sessionId, content: 'hi' }, { timeoutMs: 2000 });
+      await waitFor(() => (notifications.some((n) => n.params?.type === 'turn.failed') ? true : undefined));
+      const types = notifications.filter((n) => n.method === 'session/event').map((n) => n.params.type);
+      assert.deepEqual(types, ['turn.started', 'turn.failed']);
+      const failed = notifications.find((n) => n.params?.type === 'turn.failed');
+      const answer = readRecord(recordPath).find((m) => isResponse(m) && m.result?.headersApplied !== undefined);
+      assert.deepEqual(answer.result, { headersApplied: false, errorMessage: 'zcode-executor 没有 provider zcode-executor 的 API key，模型请求发不出去' });
+      // zcode.cjs：失败信息取应答里的 errorMessage，没给才是那句固定原文
+      assert.equal(failed.params.payload.error.message, answer.result.errorMessage);
+      assert.ok(stderrLines.some((l) => l.includes('appserver: 没有 provider zcode-executor 的 API key')));
+    },
+  );
+});
+
+test('generateText：带老字段 modelRef / 缺 selection / 模型不在表里，各按真机原文拒（层 4）', async () => {
+  await withMock({}, {}, async ({ client }) => {
+    const base = { workspace: WORKSPACE, messages: [{ role: 'user', content: 'x' }], querySource: 'zcode-executor.review', maxOutputTokens: 1, operationId: 'review_x' };
+    await assert.rejects(client.request('workspace/generateText', { ...base, modelRef: FLASH }, { timeoutMs: 2000 }), (err) => {
+      assert.equal(err.details.code, -32602);
+      assert.match(err.message, /selection: Invalid input: expected object, received undefined; \(root\): Unrecognized key: "modelRef"/);
+      return true;
+    });
+    await assert.rejects(client.request('workspace/generateText', base, { timeoutMs: 2000 }), (err) => {
+      assert.equal(err.details.code, -32602);
+      assert.match(err.message, /selection: Invalid input: expected object, received undefined$/);
+      return true;
+    });
+    await assert.rejects(
+      client.request('workspace/generateText', { ...base, selection: { providerId: 'zcode-executor', modelId: 'NOPE', options: { reasoningLevel: 'high' } } }, { timeoutMs: 2000 }),
+      (err) => {
+        assert.equal(err.details.code, -32603);
+        assert.match(err.message, /Provider Registry 中不存在 Model: zcode-executor\/NOPE/);
+        return true;
+      },
+    );
+  });
+});
+
+test('generateText：应答前先来 requestProviderRuntimeHeaders（无 sessionId，requestId 以 workspace: 开头），结果回显 selection', async () => {
+  const seen = [];
+  await withMock(
+    { generateText: { replies: ['Y'] } },
+    {
+      onServerRequest: (req) => {
+        if (req.method === HEADERS_METHOD) seen.push(req.params);
+        return undefined;
+      },
+    },
+    async ({ client }) => {
+      const result = await client.request(
+        'workspace/generateText',
+        { workspace: WORKSPACE, selection: FLASH, messages: [{ role: 'user', content: 'x' }], querySource: 'zcode-executor.review', maxOutputTokens: 1, operationId: 'review_x' },
+        { timeoutMs: 2000 },
+      );
+      assert.equal(result.text, 'Y');
+      assert.deepEqual(result.selection, FLASH);
+      assert.equal(seen.length, 1);
+      assert.match(seen[0].requestId, /^workspace:provider-runtime-headers:/);
+      assert.equal('sessionId' in seen[0], false);
+      assert.deepEqual(seen[0].modelSelection, { providerId: 'zcode-executor', modelId: 'GLM-5.3-Flash' });
+      assert.equal(seen[0].reason, 'model-request');
+    },
+  );
+});
+
+test('generateText：头没应用上 → -32031，message 取应答的 errorMessage，没给才是固定原文', async () => {
+  await withMock({}, { providerAuth: null }, async ({ client }) => {
+    await assert.rejects(
+      client.request(
+        'workspace/generateText',
+        { workspace: WORKSPACE, selection: FLASH, messages: [{ role: 'user', content: 'x' }], querySource: 'zcode-executor.review', maxOutputTokens: 1, operationId: 'review_x' },
+        { timeoutMs: 2000 },
+      ),
+      (err) => {
+        assert.equal(err.details.code, -32031);
+        assert.match(err.message, /没有 provider zcode-executor 的 API key/);
+        return true;
+      },
+    );
+  });
+  // 处理器自己答 headersApplied:false 不带 errorMessage → 固定原文
+  await withMock({}, { onServerRequest: (req) => (req.method === HEADERS_METHOD ? { headersApplied: false } : undefined) }, async ({ client }) => {
+    await assert.rejects(
+      client.request(
+        'workspace/generateText',
+        { workspace: WORKSPACE, selection: FLASH, messages: [{ role: 'user', content: 'x' }], querySource: 'zcode-executor.review', maxOutputTokens: 1, operationId: 'review_x' },
+        { timeoutMs: 2000 },
+      ),
+      (err) => {
+        assert.equal(err.details.code, -32031);
+        assert.match(err.message, /Provider runtime headers were not applied before model request attempt\./);
+        return true;
+      },
+    );
+  });
+});
+
+test('providerAuth 答出去的 key 自动进 stderr 抹除名单', async () => {
+  await withMock(
+    { turns: [{ permission: { toolName: 'Bash', input: { command: 'ls' }, reason: 'test' } }] },
+    {
+      // 审批应答的 reason 里故意塞 key：mock 会把整个应答打到 stderr（permission answered: …），
+      // 走一遍子进程 stderr → 客户端转发这条路，验的是转发前按 secrets 抹掉
+      onServerRequest: () => undefined,
+    },
+    async ({ client, notifications, stderrLines, mock }) => {
+      client.setHandlers({
+        onServerRequest: (req) => (req.method === 'interaction/requestPermission' ? { decision: 'allow', reason: mock.apiKey } : undefined),
+        onNotification: (n) => notifications.push(n),
+      });
+      const created = await create(client, { model: FLASH });
+      await client.request('session/send', { sessionId: created.session.sessionId, content: 'hi' }, { timeoutMs: 2000 });
+      await waitFor(() => (notifications.some((n) => n.params?.type === 'turn.completed') ? true : undefined));
+      const forwarded = stderrLines.filter((l) => l.includes('permission answered'));
+      assert.equal(forwarded.length, 1);
+      assert.ok(forwarded[0].includes('<redacted>'));
+      assert.equal(stderrLines.some((l) => l.includes(mock.apiKey)), false);
+    },
+  );
 });
 
 test('反向请求应答后停止重发，记录里应答条数不再增长', async () => {
   await withMock({ resendIntervalMs: 50 }, {}, async ({ client, recordPath, stderrLines }) => {
-    await pushRegistry(client, WORKSPACE);
-    await client.request('session/create', { workspace: WORKSPACE, mode: 'build' }, { timeoutMs: 2000 });
+    await create(client, { model: FLASH });
     // 等首轮应答落地（mock 记到 answered 说明重发循环已停）
     await waitFor(() => (stderrLines.some((l) => l.includes('runtimePreferences answered')) ? true : undefined));
     const countAt = () => readRecord(recordPath).filter(isResponse).length;
@@ -397,23 +749,20 @@ test('剧本读不出来时 mock 退出码 1', async () => {
 });
 
 test('同时起两个 mock，各自剧本互不影响', async () => {
-  const modelA = [{ modelId: 'GLM-A', reasoning: { enabled: true, levels: [{ value: 'high', label: 'high' }], defaultLevel: 'high' } }];
-  const modelB = [{ modelId: 'GLM-B', reasoning: { enabled: true, levels: [{ value: 'low', label: 'low' }], defaultLevel: 'low' } }];
-  const mockA = await startMock({ script: { models: modelA, registryRequired: false } });
-  const mockB = await startMock({ script: { models: modelB, registryRequired: false } });
+  const modelA = [{ ref: { providerId: 'zcode-executor', modelId: 'GLM-A' }, reasoning: { levels: [{ value: 'high', label: 'high' }], defaultLevel: 'high' } }];
+  const modelB = [{ ref: { providerId: 'zcode-executor', modelId: 'GLM-B' }, reasoning: { levels: [{ value: 'low', label: 'low' }], defaultLevel: 'low' } }];
+  const mockA = await startMock({ script: { models: modelA } });
+  const mockB = await startMock({ script: { models: modelB } });
   mockDirs.push(mockA.dir, mockB.dir);
   assert.equal(process.env.MOCK_APPSERVER_SCRIPT, undefined); // startMock 不碰全局 env
   const clientA = await AppServerClient.spawn({ zcodePath: mockA.zcodePath, cwd: mockA.dir, env: mockA.env });
   const clientB = await AppServerClient.spawn({ zcodePath: mockB.zcodePath, cwd: mockB.dir, env: mockB.env });
   pids.push(clientA.pid, clientB.pid);
   try {
-    // script.models 覆盖的是「推表后生成」的列表，未推表就是真机未配置形状，所以两边都先推表
-    await pushRegistry(clientA, WORKSPACE);
-    await pushRegistry(clientB, WORKSPACE);
-    const stateA = await clientA.request('workspace/readState', {}, { timeoutMs: 2000 });
-    const stateB = await clientB.request('workspace/readState', {}, { timeoutMs: 2000 });
-    assert.equal(stateA.settings.model.available[0].modelId, 'GLM-A');
-    assert.equal(stateB.settings.model.available[0].modelId, 'GLM-B');
+    const stateA = await create(clientA);
+    const stateB = await create(clientB);
+    assert.equal(stateA.settings.model.available[0].ref.modelId, 'GLM-A');
+    assert.equal(stateB.settings.model.available[0].ref.modelId, 'GLM-B');
   } finally {
     await clientA.close({ timeoutMs: 2000 });
     await clientB.close({ timeoutMs: 2000 });
@@ -422,22 +771,21 @@ test('同时起两个 mock，各自剧本互不影响', async () => {
   }
 });
 
-test('models 覆盖时思考等级从各条目的 reasoning.levels 取', async () => {
+test('models 覆盖时思考等级从各条目的 reasoning.levels 取，create 的模型存在性也按它查', async () => {
   const models = [
-    { modelId: 'GLM-9', label: 'GLM 9', reasoning: { enabled: true, levels: [{ value: 'high', label: 'high' }, { value: 'max', label: 'max' }], defaultLevel: 'high' } },
+    { ref: { providerId: 'zcode-executor', modelId: 'GLM-9' }, label: 'GLM 9', reasoning: { levels: [{ value: 'high', label: 'high' }, { value: 'max', label: 'max' }], defaultLevel: 'high' } },
   ];
-  await withMock({ models, registryRequired: false }, {}, async ({ client }) => {
-    await pushRegistry(client, WORKSPACE); // models 覆盖的前提是推过表
-    const state = await client.request('workspace/readState', {}, { timeoutMs: 2000 });
+  await withMock({ models }, {}, async ({ client }) => {
+    const state = await create(client);
     assert.deepEqual(state.settings.thoughtLevel, {
       available: [
         { value: 'high', label: 'high' },
         { value: 'max', label: 'max' },
       ],
       current: 'high',
-      defaultLevel: 'high',
       enabled: true,
     });
+    await assert.rejects(create(client, { model: FLASH }), (err) => err.details.code === -32603); // 个人文件那份被覆盖掉了
   });
 });
 
@@ -461,8 +809,7 @@ test('runtimePreferences 在 create 应答之后才到，带 sessionId 与 scope
       },
     },
     async ({ client }) => {
-      await pushRegistry(client, WORKSPACE);
-      const created = await client.request('session/create', { workspace: WORKSPACE, mode: 'build' }, { timeoutMs: 2000 });
+      const created = await create(client, { model: FLASH });
       // verified.md「requestRuntimePreferences 时序」行：它在 create 应答之后才发。
       // 不断言「resolve 那一刻还没见过它」：两行若在同一个 stdout 数据块里到达，客户端会在
       // await 续跑之前同步处理完第二行，CI 慢机器上就是这样，那不是时序错
@@ -474,29 +821,10 @@ test('runtimePreferences 在 create 应答之后才到，带 sessionId 与 scope
   );
 });
 
-test('registry 有空 models 的 provider 被拒 -32602', async () => {
-  const bad = {
-    providers: [{ providerId: 'p1', kind: 'anthropic', models: [] }],
-    generatedAt: Date.now(),
-    revision: 'deadbeef',
-  };
-  await withMock({ registryStrict: true }, {}, async ({ client }) => {
-    await assert.rejects(
-      client.request('workspace/updateProviderRegistry', { workspace: WORKSPACE, registry: bad }, { timeoutMs: 2000 }),
-      (err) => {
-        assert.equal(err.details.code, -32602);
-        assert.match(err.message, /p1/);
-        return true;
-      },
-    );
-  });
-});
-
 test('question 透传 schema 和 toolCallId，能造 ExitPlanMode 形状', async () => {
   const seen = [];
   await withMock(
     {
-      registryRequired: false,
       turns: [
         {
           question: {
@@ -509,13 +837,14 @@ test('question 透传 schema 和 toolCallId，能造 ExitPlanMode 形状', async
     },
     {
       onServerRequest: (req) => {
-        if (req.method === 'interaction/requestUserInput') seen.push(req.params);
+        if (req.method !== 'interaction/requestUserInput') return undefined; // 头请求等走内置应答
+        seen.push(req.params);
         // requestUserInput 的合法应答形状（verified.md「审批」行）
         return { action: 'accept', content: { answers: {} } };
       },
     },
     async ({ client }) => {
-      await client.request('session/create', { workspace: WORKSPACE, mode: 'build' }, { timeoutMs: 2000 });
+      await create(client, { model: FLASH });
       await client.request('session/send', { sessionId: 'whatever' }, { timeoutMs: 2000 });
       await waitFor(() => (seen.length >= 1 ? true : undefined), { timeoutMs: 3000 });
       assert.equal(seen[0].schema.interaction, 'plan_approval');
@@ -528,7 +857,6 @@ test('question 透传 schema 和 toolCallId，能造 ExitPlanMode 形状', async
 test('应答形状不对时 mock 在 stderr 警告一行', async () => {
   await withMock(
     {
-      registryRequired: false,
       turns: [{ permission: { toolName: 'Bash', input: { command: 'ls' }, reason: 'test' } }],
     },
     {
@@ -536,7 +864,7 @@ test('应答形状不对时 mock 在 stderr 警告一行', async () => {
       onServerRequest: (req) => (req.method === 'interaction/requestPermission' ? { action: 'allow' } : undefined),
     },
     async ({ client, stderrLines }) => {
-      await client.request('session/create', { workspace: WORKSPACE, mode: 'build' }, { timeoutMs: 2000 });
+      await create(client, { model: FLASH });
       await client.request('session/send', { sessionId: 'whatever' }, { timeoutMs: 2000 });
       await waitFor(() => (stderrLines.some((l) => l.includes('应答形状不对')) ? true : undefined));
       assert.ok(stderrLines.some((l) => l.includes('interaction/requestPermission')));
@@ -561,12 +889,7 @@ test('挂起期间信封 id 只保留最近 5 个，应答只回 5 条', async (
       onNotification: (n) => notifications.push(n),
     },
     async ({ client, recordPath }) => {
-      await pushRegistry(client, WORKSPACE);
-      await client.request(
-        'session/create',
-        { workspace: WORKSPACE, mode: 'build', persistence: 'immediate', titleGenerationEnabled: false },
-        { timeoutMs: 5000 },
-      );
+      await client.request('session/create', createParams({ persistence: 'immediate', model: FLASH }), { timeoutMs: 5000 });
       const answers = await waitFor(() => {
         const list = readRecord(recordPath).filter(isResponse);
         return list.length >= 5 ? list : undefined;

@@ -99,19 +99,21 @@ function makeGate({ texts, throwAt, complete, cwd = makeCwd(), config, evidenceP
 
 // ---------- createComplete ----------
 
-test('createComplete：请求形状（messages、querySource、maxOutputTokens、operationId）', async () => {
+test('createComplete：请求形状（selection、messages、querySource、maxOutputTokens、operationId）', async () => {
   const client = fakeClient();
   const complete = createComplete({
     client,
     workspace: { workspacePath: '/w', workspaceKey: '/w' },
-    modelRef: { providerId: 'p1', modelId: 'm1', variant: 'high' },
+    selection: { providerId: 'p1', modelId: 'm1', options: { reasoningLevel: 'high' } },
   });
   const text = await complete({ system: '系统提示', user: '用户提示' });
   assert.equal(text, 'Y');
   const call = client.calls[0];
   assert.equal(call.method, 'workspace/generateText');
   assert.deepEqual(call.params.workspace, { workspacePath: '/w', workspaceKey: '/w' });
-  assert.deepEqual(call.params.modelRef, { providerId: 'p1', modelId: 'm1', variant: 'high' });
+  // 3.12.2：字段名 selection，思考等级走 options.reasoningLevel（PLAN-3.12.md 一节层 4）
+  assert.equal('modelRef' in call.params, false);
+  assert.deepEqual(call.params.selection, { providerId: 'p1', modelId: 'm1', options: { reasoningLevel: 'high' } });
   assert.deepEqual(call.params.messages, [
     { role: 'system', content: '系统提示' },
     { role: 'user', content: '用户提示' },
@@ -123,13 +125,13 @@ test('createComplete：请求形状（messages、querySource、maxOutputTokens�
 
 test('createComplete：结果缺 text 抛 ExecutorError', async () => {
   const client = fakeClient({ result: { nope: true } });
-  const complete = createComplete({ client, workspace: {}, modelRef: {} });
+  const complete = createComplete({ client, workspace: {}, selection: {} });
   await assert.rejects(() => complete({ system: 's', user: 'u' }), ExecutorError);
 });
 
 test('createComplete：模型调用报错抛 ExecutorError，details 带方法名（不另定退出码）', async () => {
   const client = fakeClient({ result: new Error('后端炸了') });
-  const complete = createComplete({ client, workspace: {}, modelRef: {} });
+  const complete = createComplete({ client, workspace: {}, selection: {} });
   await assert.rejects(
     () => complete({ system: 's', user: 'u' }),
     (err) => {
@@ -143,7 +145,7 @@ test('createComplete：模型调用报错抛 ExecutorError，details 带方法�
 
 test('createComplete：到点先发 cancelGenerateText（operationId 一致）再抛超时', async () => {
   const client = fakeClient({ result: { text: '晚了' }, delayMs: 300 }); // T3.2b：延迟从 5s 收到 300ms，用例提速
-  const complete = createComplete({ client, workspace: {}, modelRef: {}, timeoutMs: 50 });
+  const complete = createComplete({ client, workspace: {}, selection: {}, timeoutMs: 50 });
   await assert.rejects(
     () => complete({ system: 's', user: 'u' }),
     (err) => {
@@ -161,7 +163,7 @@ test('createComplete：到点先发 cancelGenerateText（operationId 一致）�
 
 test('createComplete：complete 收到的 maxTokens 变成 maxOutputTokens（两段预算不同）', async () => {
   const client = fakeClient();
-  const complete = createComplete({ client, workspace: {}, modelRef: {} });
+  const complete = createComplete({ client, workspace: {}, selection: {} });
   await complete({ system: 's', user: 'u', maxTokens: 50 });
   await complete({ system: 's', user: 'u', maxTokens: 600 });
   await complete({ system: 's', user: 'u' }); // 不传 maxTokens 用缺省 800
@@ -171,7 +173,7 @@ test('createComplete：complete 收到的 maxTokens 变成 maxOutputTokens（两
 
 test('createComplete：operationId 是整串 UUID（T3.2b）', async () => {
   const client = fakeClient();
-  const complete = createComplete({ client, workspace: {}, modelRef: {} });
+  const complete = createComplete({ client, workspace: {}, selection: {} });
   await complete({ system: 's', user: 'u' });
   const operationId = client.calls[0].params.operationId;
   assert.match(operationId, /^review_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);

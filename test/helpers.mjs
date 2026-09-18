@@ -2,31 +2,58 @@
 // 只服务测试；不负责协议行为（那是 mock-appserver.mjs 的事）。
 // T0.3c 第 5 条：startMock 不再写 process.env，env 由调用方经 AppServerClient.spawn 的
 // env 选项传给子进程——这是并发用例（队列、锁）的前提。
+// 3.12（PLAN-3.12.md 二节第 1 条）：mock 和真机一样要两个环境变量才肯启动，startMock 在临时目录里
+// 准备好假的内置文件和一份默认个人 provider 文件，放进返回的 env。
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildPersonalProviderConfig } from '../lib/providers.mjs';
 
 const MOCK_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mock-appserver.mjs');
 
 /**
  * 写剧本到临时目录，返回可直接交给 AppServerClient.spawn 的 zcodePath 和 env。
+ * 个人文件走 lib/providers.mjs 的 buildPersonalProviderConfig（真实构造路径，形状顺带被 mock 读到），
+ * providerId 固定 zcode-executor，模型 GLM-5.3-Flash 与 GLM-5.3，apiKey 每次随机；
+ * 直接 spawn 的用例把 `providerAuth: () => apiKey` 传进去，回合的模型请求才放得行。
  *
  * @param {object} opts
  * @param {object} [opts.script] 剧本对象（字段见 mock-appserver.mjs 文件头）
  * @param {string} [opts.record] 记录文件路径；缺省放临时目录里
  * @param {string} [opts.version] MOCK_APPSERVER_VERSION
- * @returns {Promise<{zcodePath: string, env: object, recordPath: string, dir: string, cleanup: () => Promise<void>}>}
+ * @returns {Promise<{zcodePath: string, env: object, recordPath: string, dir: string,
+ *   personalProviderFile: string, apiKey: string, cleanup: () => Promise<void>}>}
  */
 export async function startMock({ script, record, version } = {}) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-mock-'));
   const scriptPath = path.join(dir, 'script.json');
   await writeFile(scriptPath, JSON.stringify(script ?? {}));
   const recordPath = record ?? path.join(dir, 'record.jsonl');
+  const builtinFile = path.join(dir, 'zcode-builtin.json');
+  await writeFile(builtinFile, '{}'); // 内容随意：mock 只查它存不存在（复刻层 1 的启动检查）
+  const apiKey = `mock-api-key-${randomUUID().slice(0, 8)}`;
+  const personalProviderFile = path.join(dir, 'provider.json');
+  await writeFile(
+    personalProviderFile,
+    JSON.stringify(
+      buildPersonalProviderConfig({
+        providerId: 'builtin:mock-coding-plan',
+        apiFormat: 'anthropic-messages',
+        baseURL: 'https://mock.invalid/api/anthropic',
+        apiKey: { source: 'inline', value: apiKey },
+        models: [{ modelId: 'GLM-5.3-Flash' }, { modelId: 'GLM-5.3' }],
+      }),
+    ),
+    { mode: 0o600 },
+  );
   const env = {
     MOCK_APPSERVER_SCRIPT: scriptPath,
     MOCK_APPSERVER_RECORD: recordPath,
+    ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinFile,
+    ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalProviderFile,
     ...(version ? { MOCK_APPSERVER_VERSION: version } : {}),
   };
   let cleaned = false;
@@ -35,7 +62,7 @@ export async function startMock({ script, record, version } = {}) {
     cleaned = true;
     await rm(dir, { recursive: true, force: true });
   };
-  return { zcodePath: MOCK_PATH, env, recordPath, dir, cleanup };
+  return { zcodePath: MOCK_PATH, env, recordPath, dir, personalProviderFile, apiKey, cleanup };
 }
 
 /** 轮询直到 fn 返回真值；返回那个值，超时抛错（带上最后一次的值方便排障）。 */

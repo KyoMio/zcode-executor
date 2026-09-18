@@ -3,10 +3,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ExecutorError } from '../lib/errors.mjs';
-import { buildRegistry, readProviderRegistry, pickProvider, buildRuntimeModel } from '../lib/providers.mjs';
+import {
+  EXECUTOR_PROVIDER_ID,
+  buildRegistry,
+  readProviderRegistry,
+  pickProvider,
+  buildPersonalProviderConfig,
+  writePersonalProviderFile,
+  buildModelSelection,
+} from '../lib/providers.mjs';
 
 // after() 兜底：就算某个用例在 try 之前就炸了，临时目录也在这里清掉（T2.9 第 10 条）
 const dirs = [];
@@ -182,7 +191,7 @@ test('buildRegistry：models 是数组时按缺配置跳过', () => {
   assert.deepEqual(providers.map((p) => p.providerId), ['good-plan']);
 });
 
-// ---------- pickProvider / buildRuntimeModel（T1.3，decisions D6/D11） ----------
+// ---------- pickProvider / buildModelSelection（T1.3 → T5.2，decisions D6/D14） ----------
 
 // 模拟本机 registry 的形状：同名模型在多个 provider 下并存，coding-plan / start-plan / 其它混着
 const PRIORITY = buildRegistry({
@@ -241,19 +250,22 @@ test('pickProvider：空表抛 ExecutorError(1)', () => {
   assert.throws(() => pickProvider({}), (err) => err instanceof ExecutorError);
 });
 
-test('buildRuntimeModel：形状——model ref、provider 原样含内联 apiKey、revision、generatedAt', () => {
+test('buildModelSelection：providerId 固定 zcode-executor，档位进 options.reasoningLevel', () => {
   const provider = byId(PRIORITY, 'builtin:bigmodel-coding-plan');
-  const rm = buildRuntimeModel(provider, 'GLM-5.3-Flash');
-  assert.deepEqual(rm.model, { providerId: 'builtin:bigmodel-coding-plan', modelId: 'GLM-5.3-Flash' });
-  assert.deepEqual(rm.provider, provider); // 原样透传
-  assert.deepEqual(rm.provider.apiKey, { source: 'inline', value: 'sk-coding' });
-  assert.match(rm.revision, /^[0-9a-f]{8}$/);
-  assert.equal(typeof rm.generatedAt, 'number');
+  assert.equal(EXECUTOR_PROVIDER_ID, 'zcode-executor');
+  assert.deepEqual(buildModelSelection(provider, 'GLM-5.3-Flash', 'high'), {
+    providerId: 'zcode-executor',
+    modelId: 'GLM-5.3-Flash',
+    options: { reasoningLevel: 'high' },
+  });
+  // 档位为空不带 options（调用方自己保证 GLM 5.3 系列给档位，否则 create 被拒）
+  assert.deepEqual(buildModelSelection(provider, 'GLM-5.3'), { providerId: 'zcode-executor', modelId: 'GLM-5.3' });
+  assert.deepEqual(buildModelSelection(provider, 'GLM-5.3', null), { providerId: 'zcode-executor', modelId: 'GLM-5.3' });
 });
 
-test('buildRuntimeModel：modelId 不在 provider.models 里抛 ExecutorError(2)，报出可选项', () => {
+test('buildModelSelection：modelId 不在 provider.models 里抛 ExecutorError(2)，报出可选项', () => {
   const provider = byId(PRIORITY, 'builtin:bigmodel-coding-plan');
-  assert.throws(() => buildRuntimeModel(provider, 'GLM-9'), (err) => {
+  assert.throws(() => buildModelSelection(provider, 'GLM-9', 'high'), (err) => {
     assert.ok(err instanceof ExecutorError);
     assert.equal(err.exitCode, 2);
     assert.match(err.message, /GLM-5\.3/);
@@ -261,15 +273,57 @@ test('buildRuntimeModel：modelId 不在 provider.models 里抛 ExecutorError(2)
   });
 });
 
-test('buildRuntimeModel：revision 稳定，随 modelId 与 apiKey 变化', () => {
-  const provider = byId(PRIORITY, 'builtin:bigmodel-coding-plan');
-  assert.equal(buildRuntimeModel(provider, 'GLM-5.3').revision, buildRuntimeModel(provider, 'GLM-5.3').revision);
-  assert.notEqual(
-    buildRuntimeModel(provider, 'GLM-5.3').revision,
-    buildRuntimeModel(provider, 'GLM-5.3-Flash').revision,
-  );
-  // key 轮换要换 revision，理由同 buildRegistry（评审第 4 条）
-  const rotated = structuredClone(provider);
-  rotated.apiKey = { source: 'inline', value: 'sk-rotated' };
-  assert.notEqual(buildRuntimeModel(provider, 'GLM-5.3').revision, buildRuntimeModel(rotated, 'GLM-5.3').revision);
+// ---------- 个人 provider 文件（T5.2，PLAN-3.12.md 二节第 2 条，decisions D14） ----------
+
+test('buildPersonalProviderConfig：registry 的 provider → 个人文件 JSON（形状照 CLI 的 legacy 导入函数）', () => {
+  const big = byId(buildRegistry(CONFIG), 'builtin:bigmodel-coding-plan');
+  assert.deepEqual(buildPersonalProviderConfig(big), {
+    schemaVersion: 1,
+    config: {
+      providerConfigRules: {
+        providerRules: [
+          {
+            providerId: 'zcode-executor',
+            providerName: 'zcode-executor',
+            config: {
+              group: 'standard-personal',
+              access: { type: 'api-key', apiKey: 'sk-test-123' },
+              api: { type: 'anthropic-messages', baseUrl: 'https://api.example.test' },
+              personalModelIds: ['GLM-5.3', 'GLM-5.3-Flash'],
+              modelOrder: ['GLM-5.3', 'GLM-5.3-Flash'],
+            },
+          },
+        ],
+      },
+      modelConfigRules: { providerModelRules: [], manualProviderModelRules: [] },
+    },
+  });
+});
+
+test('buildPersonalProviderConfig：provider 没有明文 apiKey 抛 ExecutorError(1)', () => {
+  const plain = byId(PRIORITY, 'plain-plan'); // options 里没 apiKey
+  assert.throws(() => buildPersonalProviderConfig(plain), (err) => {
+    assert.ok(err instanceof ExecutorError);
+    assert.equal(err.exitCode, 1);
+    assert.match(err.message, /plain-plan/);
+    assert.match(err.message, /apiKey/);
+    return true;
+  });
+});
+
+test('writePersonalProviderFile：临时目录里 provider.json 权限 0600，内容是个人文件 JSON，dispose 后目录不在且可重复调', { skip: process.platform === 'win32' && '验的是 POSIX 权限位' }, () => {
+  const big = byId(buildRegistry(CONFIG), 'builtin:bigmodel-coding-plan');
+  const { path: file, dispose } = writePersonalProviderFile(big);
+  try {
+    assert.ok(path.isAbsolute(file));
+    assert.equal(path.basename(file), 'provider.json');
+    assert.ok(path.basename(path.dirname(file)).startsWith('zcode-executor-provider-'));
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+    assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), buildPersonalProviderConfig(big));
+  } finally {
+    dispose();
+  }
+  assert.equal(existsSync(file), false);
+  assert.equal(existsSync(path.dirname(file)), false);
+  assert.doesNotThrow(dispose); // 收场路径可能从多处进来
 });

@@ -34,11 +34,14 @@ const ZCODE_CONFIG = {
   },
 };
 
+// TMPDIR 指到家目录下：runner 的个人 provider 文件（含 apiKey，D14）落在 os.tmpdir()，这组用例会
+// SIGKILL 还在跑的 runner（RULES §9），来不及 dispose 的文件跟着家目录一起被 after() 删掉
 const envFor = (home, mock, zcodeConfigPath) => ({
   ...process.env,
   ZCODE_BIN: mock.zcodePath,
   ZCODE_EXECUTOR_HOME: home,
   ZCODE_CONFIG_PATH: zcodeConfigPath,
+  TMPDIR: home,
   ZCODE_EXECUTOR_CANCEL_GRACE_MS: '600', // 压短 cancel 宽限（T2.6b 第 10 条）
   ...mock.env,
 });

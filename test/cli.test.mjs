@@ -1,6 +1,6 @@
 // bin/zcode-executor 的行为测试：doctor、models、new 三条子命令，全部对 test/mock-appserver.mjs 跑
 // （ZCODE_BIN 指向 mock，ZCODE_EXECUTOR_HOME 指向临时目录，ZCODE_CONFIG_PATH 注入 zcode 配置），
-// 不发 session/send，不花额度（new 只 create + close）。
+// 不发 session/send，不花额度（3.12 起只有 doctor 握手：create deferred + close；models、new 纯本地）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, symlink, writeFile, readFile, rm } from 'node:fs/promises';
@@ -45,31 +45,34 @@ const ZCODE_CONFIG = {
 };
 
 // 写一份模拟本机的 zcode 配置，返回路径
-async function writeZcodeConfig() {
+async function writeZcodeConfig(config = ZCODE_CONFIG) {
   const configDir = await mkdtemp(path.join(os.tmpdir(), 'zcode-cli-zconfig-'));
   dirs.push(configDir);
   const configPath = path.join(configDir, 'config.json');
-  await writeFile(configPath, JSON.stringify(ZCODE_CONFIG));
+  await writeFile(configPath, JSON.stringify(config));
   return configPath;
 }
 
 // 起 mock、准备家目录与 zcode 配置，spawnSync 跑 CLI；version 经 startMock 注入（T2.1b 第 11 条），
-// mock 环境变量整包用 ...mock.env
-async function runCli(args, { version, configPath } = {}) {
+// mock 环境变量整包用 ...mock.env；noBuiltin 拿掉内置 provider 文件的环境变量——mock 旁边没有
+// ../config/provider/zcode-builtin.json，这就是「App 低于 3.12」在 doctor 眼里的样子
+async function runCli(args, { version, configPath, zcodeConfig, noBuiltin = false } = {}) {
   const mock = await startMock({ version });
   dirs.push(mock.dir);
   const home = await mkdtemp(path.join(os.tmpdir(), 'zcode-cli-home-'));
   dirs.push(home);
-  const zcodeConfigPath = configPath ?? (await writeZcodeConfig());
+  const zcodeConfigPath = configPath ?? (await writeZcodeConfig(zcodeConfig));
   const env = {
     ...process.env,
     ZCODE_BIN: mock.zcodePath,
     ZCODE_EXECUTOR_HOME: home,
     ZCODE_CONFIG_PATH: zcodeConfigPath,
+    TMPDIR: home, // doctor 握手写的个人 provider 文件落在 os.tmpdir()，跟家目录一起被 after() 删掉
     ...mock.env,
   };
+  if (noBuiltin) delete env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE;
   const run = spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env, timeout: 60_000 });
-  return { run, zcodeConfigPath, recordPath: mock.env.MOCK_APPSERVER_RECORD };
+  return { run, mock, zcodeConfigPath, recordPath: mock.env.MOCK_APPSERVER_RECORD };
 }
 
 // ---------- new（T2.2）----------
@@ -77,7 +80,7 @@ async function runCli(args, { version, configPath } = {}) {
 // 准备 new 的环境：家目录（config.json 里 allowedRoots 含 workParent）+ 白名单内的 git 仓库 +
 // 注入的 zcode 配置（不碰真机 ~/.zcode）。worktree:true 时用 git worktree add 造一个真 worktree；
 // script 透传给 mock 剧本
-async function setupNew({ worktree = false, script } = {}) {
+async function setupNew({ worktree = false, script, zcodeConfig } = {}) {
   const mock = await startMock({ script });
   dirs.push(mock.dir);
   const home = await mkdtemp(path.join(os.tmpdir(), 'zcode-new-home-'));
@@ -95,7 +98,7 @@ async function setupNew({ worktree = false, script } = {}) {
     execFileSync('git', ['-C', repo, 'worktree', 'add', '--quiet', cwd]);
   }
   await writeFile(path.join(home, 'config.json'), JSON.stringify({ allowedRoots: [workParent] }));
-  const zcodeConfigPath = await writeZcodeConfig();
+  const zcodeConfigPath = await writeZcodeConfig(zcodeConfig);
   return { mock, home, workParent, cwd, zcodeConfigPath, recordPath: mock.env.MOCK_APPSERVER_RECORD };
 }
 
@@ -139,7 +142,7 @@ test('new：白名单内通过，本地 id、sessionId 为 null、--json 与登�
   assert.equal(entry.cwd, realpathSync(env.cwd)); // 登记簿存 realpath 后的路径（T2.2b 第 1 条）
   assert.equal(entry.title, 't');
   assert.equal(entry.provider, 'builtin:bigmodel-coding-plan'); // D6：无 preferred 时选 coding-plan
-  // mock 的 model.current 是第一个 provider 的 GLM-5.3，不属于选中的 provider → 按规则落到 fast
+  // 不给 --tier 时按规则落到 fast（3.12 没有 readState 的 current 可参考了）
   assert.equal(entry.modelId, 'GLM-5.3-Flash');
   assert.equal(entry.tier, 'fast');
   assert.equal(entry.thoughtLevel, 'high'); // Flash 照真机带 low/high/max，登记给 runner 用（T2.2b 第 8 条）
@@ -176,25 +179,6 @@ test('new：--tier fast 选 flash，--tier strong 选非 flash', async () => {
   assert.equal(JSON.parse(strong.stdout).modelId, 'GLM-5.3');
 });
 
-test('new：不给 tier 且 current 属于该 provider → 用 current（剧本 models 覆盖）', async () => {
-  const env = await setupNew({
-    script: {
-      models: [
-        {
-          ref: { providerId: 'builtin:bigmodel-coding-plan', modelId: 'GLM-5.3' },
-          label: 'GLM 5.3',
-          reasoning: { enabled: true, levels: [{ value: 'low' }, { value: 'high' }, { value: 'max' }], defaultLevel: 'max' },
-        },
-      ],
-    },
-  });
-  const run = runNew(env, ['--cwd', env.cwd, '--json']);
-  assert.equal(run.status, 0, `stderr: ${run.stderr}`);
-  const entry = JSON.parse(run.stdout);
-  assert.equal(entry.modelId, 'GLM-5.3'); // current 属于该 provider，直接用它
-  assert.equal(entry.tier, 'strong');
-});
-
 test('new：--thought 显式不合法 → 退 2 并列出档位；合法则登记给 runner（D13）', async () => {
   const env = await setupNew();
   const ok = runNew(env, ['--cwd', env.cwd, '--tier', 'strong', '--thought', 'max', '--json']);
@@ -207,16 +191,16 @@ test('new：--thought 显式不合法 → 退 2 并列出档位；合法则登�
   assert.match(bad.stderr, /low、high、max/); // 列出合法档位
 });
 
-test('new：模型没有 high 时登记 thoughtLevel 为 null，runner 不传该键（剧本 models 覆盖）', async () => {
+test('new：模型没有 high 时登记 thoughtLevel 为 null，runner 建会话时再按模型默认档回落（见 run.test）', async () => {
   const env = await setupNew({
-    script: {
-      models: [
-        {
-          ref: { providerId: 'builtin:bigmodel-coding-plan', modelId: 'GLM-5.3' },
-          label: 'GLM 5.3',
-          reasoning: { enabled: true, levels: [{ value: 'low' }] },
+    zcodeConfig: {
+      provider: {
+        'builtin:bigmodel-coding-plan': {
+          kind: 'anthropic',
+          options: { apiKey: 'sk-test-plan' },
+          models: { 'GLM-5.3': { name: 'GLM 5.3', reasoning: { enabled: true, variants: ['low'] } } },
         },
-      ],
+      },
     },
   });
   const run = runNew(env, ['--cwd', env.cwd, '--tier', 'strong', '--json']);
@@ -231,7 +215,7 @@ test('new：--deny 空格分隔成数组登记（create 由 runner 带下去，�
   assert.deepEqual(JSON.parse(run.stdout).toolDenylist, ['WebSearch', 'Bash']);
 });
 
-test('new：不建 zcode 会话（D13）——只有 resolveModels 的推表与 readState，无 create/send', async (t) => {
+test('new：不建 zcode 会话（D13），3.12 起模型清单本地算——根本不起子进程', async (t) => {
   const env = await setupNew();
   t.after(() => {
     killAll(runnerPids);
@@ -239,10 +223,7 @@ test('new：不建 zcode 会话（D13）——只有 resolveModels 的推表与 
   });
   const run = runNew(env, ['--cwd', env.cwd, '--tier', 'fast', '--json']);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
-  const methods = readRecord(env.recordPath).map((m) => m.method).filter(Boolean);
-  assert.deepEqual([...new Set(methods)].sort(), ['workspace/readState', 'workspace/updateProviderRegistry']);
-  assert.equal(methods.includes('session/create'), false); // D13：new 不建会话
-  assert.equal(methods.includes('session/send'), false); // 零 token：绝不 send
+  assert.deepEqual(readRecord(env.recordPath), []); // 没有 create、没有 send，mock 没被起过
 });
 
 test('new：两次 new 登记簿两条', async () => {
@@ -273,23 +254,32 @@ test('new：人读输出一行本地 id 开头（D13）', async () => {
   assert.match(run.stdout.trim(), /^new: x_[0-9a-f]{8} \S+\/\S+ 思考 \S+ \S/);
 });
 
-test('doctor：mock 版本低于门槛 → 退出码 1，stderr 说明', async () => {
-  const { run } = await runCli(['doctor'], { version: '0.9.9' });
+test('doctor：找不到内置 provider 文件（App 低于 3.12）→ 退出码 1，--json zcode.ok=false，③ 跳过', async () => {
+  const { run } = await runCli(['doctor', '--json'], { noBuiltin: true });
   assert.equal(run.status, 1, `stderr: ${run.stderr}`);
-  assert.match(run.stderr, /0\.9\.9/);
-  assert.match(run.stderr, /0\.14\.8/);
+  const out = JSON.parse(run.stdout);
+  assert.equal(out.ok, false);
+  assert.equal(out.zcode.ok, false);
+  assert.equal(out.zcode.version, '0.16.5'); // 版本照样拿到——它区分不了 3.11 和 3.12
+  assert.equal(out.zcode.builtinConfigPath, null);
+  assert.equal(out.handshake.skipped, true);
+  assert.match(run.stderr, /3\.12/);
+  assert.match(run.stderr, /ZCODE_BUILTIN_PROVIDER_CONFIG_FILE/);
 });
 
-test('doctor：正常 → 退出码 0，--json 里有 provider 与 tiers', async () => {
-  const { run, zcodeConfigPath } = await runCli(['doctor', '--json']);
+test('doctor：正常 → 退出码 0，--json 里有内置文件、apiKey 在场、provider 与 tiers', async () => {
+  const { run, mock, zcodeConfigPath } = await runCli(['doctor', '--json']);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
   const out = JSON.parse(run.stdout);
   assert.equal(out.ok, true);
   assert.equal(out.zcode.ok, true);
   assert.equal(out.zcode.version, '0.16.5');
+  assert.equal(out.zcode.builtinConfigPath, mock.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE);
+  assert.equal(out.zcode.minVersion, 'App ≥ 3.12.2'); // 字段保留（--json 只加不删），值改成说明性的
   assert.equal(out.config.ok, true);
   assert.equal(out.config.providerCount, 2); // 禁用的 provider 被过滤
   assert.equal(out.config.path, zcodeConfigPath);
+  assert.equal(out.config.apiKeyPresent, true);
   assert.equal(out.handshake.ok, true);
   assert.equal(out.handshake.providerId, 'builtin:bigmodel-coding-plan'); // D6 优先级选中 coding-plan
   assert.deepEqual(out.handshake.tiers.fast, {
@@ -302,14 +292,33 @@ test('doctor：正常 → 退出码 0，--json 里有 provider 与 tiers', async
 });
 
 test('doctor：人读输出三步各一行', async () => {
-  const { run } = await runCli(['doctor']);
+  const { run, mock } = await runCli(['doctor']);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
   const lines = run.stdout.split('\n').filter((l) => l.trim());
   assert.deepEqual(
     lines.map((l) => l.slice(0, 9)),
     ['doctor ① ', 'doctor ② ', 'doctor ③ '],
   );
+  assert.match(lines[0], /版本 0\.16\.5，内置 provider 文件 /);
+  assert.ok(lines[0].includes(mock.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE), lines[0]);
+  assert.match(lines[1], /2 个可用 provider，选中 builtin:bigmodel-coding-plan，apiKey 在/);
   assert.match(lines[2], /builtin:bigmodel-coding-plan/);
+});
+
+test('doctor：选中的 provider 没有明文 apiKey → ② 先报「apiKey 不在」，③ 失败，退出码 1（断粮预警）', async () => {
+  const { run } = await runCli(['doctor', '--json'], {
+    zcodeConfig: {
+      provider: {
+        'builtin:bigmodel-coding-plan': { kind: 'anthropic', options: {}, models: { 'GLM-5.3': {} } },
+      },
+    },
+  });
+  assert.equal(run.status, 1, `stderr: ${run.stderr}`);
+  const out = JSON.parse(run.stdout);
+  assert.equal(out.config.ok, true); // 文件本身读得到
+  assert.equal(out.config.apiKeyPresent, false);
+  assert.equal(out.handshake.ok, false);
+  assert.match(run.stderr, /没有明文 apiKey/);
 });
 
 test('doctor：zcode config 读不到 → 退出码 1，stderr 报路径，第三步跳过', async () => {
@@ -351,18 +360,16 @@ test('models：人读输出分组列出，选中的 provider 带 ✓，模型带
   assert.match(run.stdout, /★strong\s+GLM-5\.3\s+GLM 5\.3\s+思考等级: low\/high\/max/);
 });
 
-test('doctor 与 models 零 token：mock 只收到推表与 readState（评审 T2.1b 第 5 条）', async () => {
+test('doctor 与 models 零 token：doctor 只有 deferred create + close，models 不起子进程（评审 T2.1b 第 5 条）', async () => {
   const a = await runCli(['doctor', '--json']);
   assert.equal(a.run.status, 0, `stderr: ${a.run.stderr}`);
+  const doctorRecord = readRecord(a.recordPath);
+  assert.deepEqual([...new Set(doctorRecord.map((m) => m.method).filter(Boolean))].sort(), ['session/close', 'session/create']);
+  assert.equal(doctorRecord.find((m) => m.method === 'session/create').params.persistence, 'deferred');
+  assert.equal(doctorRecord.some((m) => m.method === 'session/send'), false);
   const b = await runCli(['models', '--json']);
   assert.equal(b.run.status, 0, `stderr: ${b.run.stderr}`);
-  for (const { recordPath } of [a, b]) {
-    const methods = [...new Set(readRecord(recordPath).map((m) => m.method).filter(Boolean))].sort();
-    assert.deepEqual(methods, ['workspace/readState', 'workspace/updateProviderRegistry']);
-    const all = readRecord(recordPath).map((m) => m.method);
-    assert.equal(all.includes('session/create'), false);
-    assert.equal(all.includes('session/send'), false);
-  }
+  assert.deepEqual(readRecord(b.recordPath), []); // models 纯本地：连 mock 都没起
 });
 
 test('未知子命令：退出码 1 并列出可用命令', () => {

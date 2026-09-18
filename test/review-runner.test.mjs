@@ -23,7 +23,7 @@ test.after(async () => {
   for (const dir of dirs) await rm(dir, { recursive: true, force: true });
 });
 
-// Flash 也给思考档位：让 review 的 modelRef 能解析出 variant:'high'（真机 GLM-5.3 族有 low/high/max）
+// Flash 也给思考档位：让 review 的 selection 能带上 options.reasoningLevel（真机 GLM-5.3 族有 low/high/max）
 const ZCODE_CONFIG = {
   provider: {
     'builtin:bigmodel-coding-plan': {
@@ -61,6 +61,7 @@ async function setupReview(t, { script, reviewConfig } = {}) {
     ZCODE_BIN: mock.zcodePath,
     ZCODE_EXECUTOR_HOME: home,
     ZCODE_CONFIG_PATH: zcodeConfigPath,
+    TMPDIR: home, // 来不及 dispose 的个人 provider 文件跟家目录一起被 after() 删掉（同 ops.test）
     ...mock.env,
   };
   const created = spawnSync(process.execPath, [BIN, 'new', '--cwd', repo, '--tier', 'strong', '--json'], { encoding: 'utf8', env, timeout: 60_000 });
@@ -143,7 +144,7 @@ test('红线命中：Write 到 cwd 外 → 不调 generateText，pending 带 sta
   assert.equal(hard.ruleId, 'outside-worktree');
 });
 
-test('快筛 pass：自动应答 allow、不落 pending、事件 review-fast，modelRef 是 fast 档 + variant low（默认）', async (t) => {
+test('快筛 pass：自动应答 allow、不落 pending、事件 review-fast，selection 是 fast 档 + reasoningLevel low（默认）', async (t) => {
   const env = await setupReview(t, {
     script: {
       generateText: { replies: ['Y'] },
@@ -159,10 +160,13 @@ test('快筛 pass：自动应答 allow、不落 pending、事件 review-fast，m
   assert.equal(gateEvent.decision, 'allow');
   const calls = generateTexts(env.recordPath);
   assert.equal(calls.length, 1, '快筛过了就只该有一次 generateText');
-  assert.deepEqual(calls[0].params.modelRef, {
-    providerId: 'builtin:bigmodel-coding-plan',
+  // 3.12.2 的 generateText 形状（PLAN-3.12.md 一节层 4）：modelRef 改名 selection，providerId 固定
+  // zcode-executor（个人 provider 文件里的那条），思考等级走 options.reasoningLevel
+  assert.equal('modelRef' in calls[0].params, false);
+  assert.deepEqual(calls[0].params.selection, {
+    providerId: 'zcode-executor',
     modelId: 'GLM-5.3-Flash',
-    variant: 'low',
+    options: { reasoningLevel: 'low' },
   });
   assert.equal(calls[0].params.querySource, 'zcode-executor.review');
   assert.equal(calls[0].params.messages[0].role, 'system');

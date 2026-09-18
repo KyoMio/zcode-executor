@@ -1,17 +1,28 @@
-// 本文件负责：零 token 探针——拉起真机 app-server 依次走 spawn → 推 provider 表 →
-// session/create（含 toolDenylist 试探）→ workspace/readState → session/list → session/close →
-// 收场，每步打一行 JSON 到 stdout，给 docs/verified.md 攒真机事实。
+// 本文件负责：零 token 探针（AGENTS.md 硬约束：先走零 token 路径）——按 3.12.2 协议（decisions D14）
+// 走一遍 读表 → pickProvider → writePersonalProviderFile → spawn（personalProviderFile、providerAuth、
+// secrets）→ 确认两个被删方法/字段仍报错（workspace/updateProviderRegistry → -32601，
+// create 带 runtimeModel → -32602）→ 新形状 create（model + 顶层 thoughtLevel + toolDenylist 试探）→
+// session/subscribe → session/list → session/resume → session/close → 收场，每步打一行 JSON 到 stdout，
+// 给 docs/verified.md 攒真机事实。
 // 不负责：发 session/send（绝不发，探针零 token）、会话编排（那是上层的事）。
 // 用法：node scripts/probe.mjs。单步失败不中断，能继续的步骤继续；全局兜底见 main() 的 catch。
-// 所有 stdout 输出先过 redactSecrets 再过 scrubValues（按值抹 apiKey）；provider 表只进请求 params。
+// 所有 stdout 输出先过 redactSecrets 再过 scrubValues（按值抹 apiKey）；个人 provider 文件用完
+// 在 finally 里 dispose（RULES §6：密钥只落这一个临时文件，收场即删）。
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { AppServerClient } from '../lib/appserver.mjs';
 import { ExecutorError } from '../lib/errors.mjs';
-import { readProviderRegistry } from '../lib/providers.mjs';
+import {
+  EXECUTOR_PROVIDER_ID,
+  buildModelSelection,
+  pickProvider,
+  readProviderRegistry,
+  writePersonalProviderFile,
+} from '../lib/providers.mjs';
 import { redactSecrets, scrubValues } from '../lib/scrub.mjs';
 
 // registry 里的 apiKey 值，读表后填上；每行输出序列化后先按值抹一遍、再按键名抹一遍
@@ -25,7 +36,21 @@ function errorOf(err) {
   return { message: String(err?.message ?? err) };
 }
 
-/** 会话列表的形状协议文档没写，防御式提取所有 sessionId（探针核完由 Claude 回填 verified.md）。 */
+/**
+ * 期望这个请求被拒——3.12 删掉的方法/字段必须报 expectedCode。报别的错误码或者意外成功
+ * 都算 ok:false（协议可能又变了，值得留意）；报对了打 ok:true，意思是「确认已删」。
+ */
+async function expectGone(step, request, expectedCode) {
+  try {
+    const result = await request();
+    emit({ step, ok: false, note: '预期报错却成功了，协议可能又变了', result });
+  } catch (err) {
+    const code = err instanceof ExecutorError ? err.details?.code : undefined;
+    emit({ step, ok: code === expectedCode, expectedCode, actualCode: code, message: err.message });
+  }
+}
+
+/** 会话列表的形状协议文档没写死，防御式提取所有 sessionId。 */
 function extractSessionIds(result) {
   const list = Array.isArray(result) ? result : result?.sessions ?? result?.items;
   if (!Array.isArray(list)) return [];
@@ -41,7 +66,6 @@ async function main() {
     } catch (err) {
       console.error(`probe: git init 失败（${err.message}），继续用普通目录`);
     }
-
     await runProbe(dir);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -49,36 +73,48 @@ async function main() {
 }
 
 async function runProbe(dir) {
-  // 表在 spawn 之前读好：apiKey 值要作为 secrets 传给客户端，从子进程 stderr 转发里抹掉；
-  // 读表的失败先记下，等 spawn 打完自己的行再报
-  let registry = null;
-  let registryError = null;
+  // 读表 → pickProvider：失败就没法往下走个人文件与 spawn，直接报错收场
+  let provider;
   try {
-    registry = readProviderRegistry();
+    const registry = readProviderRegistry();
     outSecrets = registry.providers.map((p) => p.apiKey?.value).filter(Boolean);
+    provider = pickProvider(registry);
+    okStep('pickProvider', { providerId: provider.providerId, models: provider.models.map((m) => m.modelId) });
   } catch (err) {
-    registryError = err;
+    failStep('pickProvider', err);
+    process.exitCode = err.exitCode ?? 1;
+    return;
   }
 
-  let runtimePrefs = { params: null, beforeCreate: null };
-  let createSent = false;
+  // 个人 provider 文件（D14）：里面的 apiKey 和 registry 里的同一个值，重复加一次也无妨（outSecrets 去重）
+  let personalFile;
+  try {
+    personalFile = writePersonalProviderFile(provider);
+    outSecrets = [...new Set([...outSecrets, provider.apiKey?.value].filter(Boolean))];
+    okStep('writePersonalProviderFile', { path: personalFile.path });
+  } catch (err) {
+    failStep('writePersonalProviderFile', err);
+    process.exitCode = err.exitCode ?? 1;
+    return;
+  }
+
+  try {
+    await runWithClient(dir, provider, personalFile);
+  } finally {
+    personalFile.dispose();
+    const existsAfter = existsSync(personalFile.path); // 应为 false：确认密钥文件真的删了
+    emit({ step: 'dispose', ok: !existsAfter, existsAfter });
+  }
+}
+
+async function runWithClient(dir, provider, personalFile) {
   let client;
   try {
     client = await AppServerClient.spawn({
       cwd: dir,
       secrets: outSecrets,
-      onServerRequest: (req) => {
-        if (req.method === 'session/requestRuntimePreferences') {
-          // 返回 undefined 让客户端回内置默认值；这里只记录有没有到过、相对 create 的时序
-          if (runtimePrefs.params === null) {
-            runtimePrefs.params = req.params ?? {};
-            runtimePrefs.beforeCreate = !createSent;
-          }
-          return undefined;
-        }
-        emit({ step: 'unexpected-server-request', method: req.method, params: req.params ?? {} });
-        return {};
-      },
+      personalProviderFile: personalFile.path,
+      providerAuth: (providerId) => (providerId === EXECUTOR_PROVIDER_ID ? provider.apiKey?.value : undefined),
     });
   } catch (err) {
     failStep('spawn', err);
@@ -89,53 +125,79 @@ async function runProbe(dir) {
 
   const workspace = { workspacePath: dir, workspaceKey: dir };
 
-  // 直连时 app-server 不自己读配置，create 之前必须推 provider 表（decisions.md D10）
-  try {
-    if (registryError !== null) throw registryError;
-    await client.request('workspace/updateProviderRegistry', { workspace, registry }, { timeoutMs: 20_000 });
-    okStep('updateProviderRegistry', {
-      providers: registry.providers.length,
-      providerIds: registry.providers.map((p) => p.providerId),
-    });
-  } catch (err) {
-    failStep('updateProviderRegistry', err);
-  }
+  // 两个 3.12 删掉的方法/字段：确认已删（PLAN-3.12.md 一节层 2、3；decisions D10、D11）
+  await expectGone(
+    'updateProviderRegistry-gone',
+    () =>
+      client.request(
+        'workspace/updateProviderRegistry',
+        { workspace, registry: { providers: [], generatedAt: 1, revision: 'x' } },
+        { timeoutMs: 20_000 },
+      ),
+    -32601,
+  );
+  await expectGone(
+    'create-runtimeModel-gone',
+    () =>
+      client.request(
+        'session/create',
+        {
+          workspace,
+          mode: 'build',
+          persistence: 'deferred',
+          titleGenerationEnabled: false,
+          runtimeModel: { model: { providerId: provider.providerId, modelId: provider.models[0]?.modelId } },
+        },
+        { timeoutMs: 20_000 },
+      ),
+    -32602,
+  );
 
+  // 新形状 create：model + 顶层 thoughtLevel + toolDenylist 试探（PLAN-3.12.md 二节第 3 条）
+  const modelId = provider.models[0]?.modelId;
+  const model = buildModelSelection(provider, modelId, 'high');
   const createParams = {
     workspace,
     mode: 'build',
     persistence: 'immediate',
     titleGenerationEnabled: false,
     thoughtLevel: 'high',
+    model,
     toolDenylist: ['WebSearch'],
   };
-  createSent = true;
   let created = null;
   try {
-    const result = await client.request('session/create', createParams, { timeoutMs: 20_000 });
-    created = result;
-    okStep('create', { result });
+    created = await client.request('session/create', createParams, { timeoutMs: 20_000 });
+    okStep('create', { result: created });
   } catch (err) {
     failStep('create', err);
-    // 任务单要求：toolDenylist 可能不被接受，去掉再建一次看结果
+    // toolDenylist 可能不被接受，去掉再建一次看结果
     const { toolDenylist: _dropped, ...withoutDenylist } = createParams;
     try {
-      const result = await client.request('session/create', withoutDenylist, { timeoutMs: 20_000 });
-      created = result;
-      okStep('create-retry-without-denylist', { result });
+      created = await client.request('session/create', withoutDenylist, { timeoutMs: 20_000 });
+      okStep('create-retry-without-denylist', { result: created });
     } catch (err2) {
       failStep('create-retry-without-denylist', err2);
     }
   }
 
-  try {
-    const result = await client.request('workspace/readState', { workspace }, { timeoutMs: 20_000 });
-    okStep('readState', { result });
-  } catch (err) {
-    failStep('readState', err);
+  const sessionId = created?.session?.sessionId;
+
+  if (sessionId !== undefined) {
+    try {
+      const result = await client.request(
+        'session/subscribe',
+        { sessionId, deliveryKind: 'desktop-continuous', includeSnapshot: false, afterSeq: 0 },
+        { timeoutMs: 20_000 },
+      );
+      okStep('subscribe', { result });
+    } catch (err) {
+      failStep('subscribe', err);
+    }
+  } else {
+    console.error('probe: 没拿到 sessionId，跳过 session/subscribe');
   }
 
-  const sessionId = created?.session?.sessionId;
   try {
     const result = await client.request('session/list', { workspace }, { timeoutMs: 20_000 });
     const ids = extractSessionIds(result);
@@ -144,6 +206,17 @@ async function runProbe(dir) {
   } catch (err) {
     failStep('list', err);
     emit({ step: 'list-contains-created', ok: false });
+  }
+
+  if (sessionId !== undefined) {
+    try {
+      const result = await client.request('session/resume', { sessionId, workspace }, { timeoutMs: 20_000 });
+      okStep('resume', { result });
+    } catch (err) {
+      failStep('resume', err);
+    }
+  } else {
+    console.error('probe: 没拿到 sessionId，跳过 session/resume');
   }
 
   if (sessionId !== undefined) {
@@ -160,20 +233,12 @@ async function runProbe(dir) {
   const exitInfo = await client.close();
   emit({ step: 'exit', code: exitInfo.code, signal: exitInfo.signal });
   process.exitCode = exitInfo.code ?? 1;
-
-  // 收尾汇总 requestRuntimePreferences 有没有到过、相对 create 前后的时序，不再等待（T0.2b）
-  emit({
-    step: 'runtimePreferences',
-    arrived: runtimePrefs.params !== null,
-    arrivedBeforeCreate: runtimePrefs.beforeCreate,
-    params: runtimePrefs.params,
-  });
 }
 
 try {
   await main();
 } catch (err) {
-  // 兜底（评审第 11 条）：任何没接住的错打到 stderr，退出码按 ExecutorError 的表走
+  // 兜底：任何没接住的错打到 stderr，退出码按 ExecutorError 的表走
   console.error(`probe: ${err?.message ?? err}`);
   process.exitCode = err?.exitCode ?? 1;
 }

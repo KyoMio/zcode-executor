@@ -1,18 +1,21 @@
-// 本文件负责：真机投递脚本（会花额度，由 Claude 跑）——读 provider 表、拉起 app-server、
-// 推表、create 或 resume、attach 会话、投递一条正文、等回合结算并打印结果。
+// 本文件负责：真机投递脚本（会花额度，由 Claude 跑）——读 provider 表、写个人 provider 文件、
+// 拉起 app-server、create 或 resume、attach 会话、投递一条正文、等回合结算并打印结果。
 // 不负责：闸门的红线与模型审批（这里的人肉 y/n 只是通道）、批量任务、pending 之外的落盘。
 // 用法：
 //   node scripts/real-send.mjs --yes [--cwd <目录>] [--text "<投递正文>"] [--resume <sess_>]
 //        [--provider <providerId>] [--model <modelId>]
 //        [--on-permission allow|deny] [--on-question "<文字>"]
-// create 默认带 runtimeModel（D11：不带则回合因 provider 无 key 失败）：provider 按 D6 优先级选
-// （--provider 指定则必须命中），模型取该 provider 里 id 含 flash/lite/mini/air 的第一个、没有就第一个
-// （--model 指定则必须存在）；--resume 不带 runtimeModel（verified）。
+// create 默认带 model + 顶层 thoughtLevel（D14：3.12 起 create 不再接受 runtimeModel，也不再推表，
+// app-server 自己从个人 provider 文件读 provider 表）：provider 按 D6 优先级选（--provider 指定则
+// 必须命中），模型取该 provider 里 id 含 flash/lite/mini/air 的第一个、没有就第一个（--model 指定则
+// 必须存在）；--resume 不带 model（verified）。--provider/--model 校验在 mkdtemp、写个人文件、spawn
+// 之前，给错了直接退 2，不留临时目录、不起子进程。
 // RULES §9：跑前先提示会花额度，没有 --yes 直接退出码 2，不 spawn 任何东西。
 // 审批/提问的作答顺序：给了 --on-permission / --on-question 就用参数；没给且 stdin 是终端
 // 就交互问（空答案审批按 deny、提问抛错）；两者都没有 → 保留 pending.json、打印
 // {"outcome":"blocked",…}、退出码 5（T1.2b 第 2 条）。
-// stdout 每步一行 JSON，全部过 redactSecrets + scrubValues（apiKey 不出现在任何输出里）。
+// stdout 每步一行 JSON，全部过 redactSecrets + scrubValues（apiKey 不出现在任何输出里）；个人
+// provider 文件在 finally 里 dispose（RULES §6：密钥只落这一个临时文件，收场即删）。
 import { mkdtemp } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -22,7 +25,13 @@ import process from 'node:process';
 import { AppServerClient } from '../lib/appserver.mjs';
 import { attachSession } from '../lib/session.mjs';
 import { createPendingGate } from '../lib/pending.mjs';
-import { readProviderRegistry, pickProvider, buildRuntimeModel } from '../lib/providers.mjs';
+import {
+  EXECUTOR_PROVIDER_ID,
+  buildModelSelection,
+  pickProvider,
+  readProviderRegistry,
+  writePersonalProviderFile,
+} from '../lib/providers.mjs';
 import { ExecutorError } from '../lib/errors.mjs';
 import { redactSecrets, scrubValues } from '../lib/scrub.mjs';
 
@@ -100,6 +109,7 @@ async function main() {
   let sessionId = null;
   let pendingPath = null;
   let exitCodeSet = false;
+  let personalFile = null; // D14 个人 provider 文件：finally 里 dispose
   // 审批/提问无法作答或作答出错时，打断 send 的等待，让 main 统一收尾（T1.2b 第 1 条）
   let abortTrigger = null;
   const aborted = new Promise((resolve) => {
@@ -110,9 +120,11 @@ async function main() {
     const registry = readProviderRegistry(process.env.ZCODE_CONFIG_PATH);
     secrets = registry.providers.map((p) => p.apiKey?.value).filter(Boolean);
 
-    // runtimeModel（D11）在任何 spawn 之前定好：--provider/--model 给错了直接退 2，不留临时目录、不起子进程
+    // model 选择（D14）在任何 mkdtemp / spawn 之前定好：--provider/--model 给错了直接退 2，
+    // 不留临时目录、不起子进程、不写个人 provider 文件
     const provider = selectProvider(registry, args.provider);
-    const runtimeModel = buildRuntimeModel(provider, args.model ?? defaultModelId(provider));
+    const thoughtLevel = 'high';
+    const model = buildModelSelection(provider, args.model ?? defaultModelId(provider), thoughtLevel);
 
     let cwd = args.cwd;
     if (!cwd) {
@@ -128,16 +140,17 @@ async function main() {
     const eventsPath = path.join(cwd, '.zcode-executor-events.jsonl');
     pendingPath = path.join(cwd, '.zcode-executor-pending.json');
 
-    client = await AppServerClient.spawn({ cwd, secrets });
+    // D14：app-server 不再接受推表，改成给它一份只含这一个 provider 的个人文件；
+    // apiKey 只经这一个临时文件和 requestProviderRuntimeHeaders 的应答传出去，永不进 stdout
+    personalFile = writePersonalProviderFile(provider);
+    const apiKey = provider.apiKey?.value;
+    const providerAuth = (providerId) => {
+      // 检查点 5 要核的事实之一：这个反向请求到底来不来（PLAN-3.12.md 一节层 5）
+      console.error(`real-send: [反向请求] requestProviderRuntimeHeaders providerId=${providerId ?? '(缺 providerId)'}`);
+      return providerId === EXECUTOR_PROVIDER_ID ? apiKey : undefined;
+    };
+    client = await AppServerClient.spawn({ cwd, secrets, personalProviderFile: personalFile.path, providerAuth });
     emit({ step: 'spawn', ok: true, result: { pid: client.pid } });
-
-    await client.request('workspace/updateProviderRegistry', { workspace, registry }, { timeoutMs: 20_000 });
-    emit({
-      step: 'updateProviderRegistry',
-      ok: true,
-      providers: registry.providers.length,
-      providerIds: registry.providers.map((p) => p.providerId),
-    });
 
     // 评审 T1.3b 第 2 条：这里必须用外层 sessionId，之前内层 let 遮蔽后 blocked 行永远是 null
     sessionId = args.resume;
@@ -146,8 +159,8 @@ async function main() {
     } else {
       const created = await client.request(
         'session/create',
-        // D11：create 必带 runtimeModel（model ref + provider 定义含内联 apiKey）
-        { workspace, mode: 'build', persistence: 'immediate', titleGenerationEnabled: false, thoughtLevel: 'high', runtimeModel },
+        // D14：create 带 model（不再是 runtimeModel），顶层 thoughtLevel 也要带（GLM-5.3 系列必填 reasoningLevel）
+        { workspace, mode: 'build', persistence: 'immediate', titleGenerationEnabled: false, thoughtLevel, model },
         { timeoutMs: 20_000 },
       );
       sessionId = created.session.sessionId;
@@ -188,6 +201,8 @@ async function main() {
     } catch (err) {
       console.error(`real-send: 收场失败：${scrubValues(String(err?.message ?? err), secrets)}`);
     }
+    // D14：个人 provider 文件用完即删，不管上面成功还是出错
+    personalFile?.dispose();
   }
 
   // ---------- 挂起作答 ----------

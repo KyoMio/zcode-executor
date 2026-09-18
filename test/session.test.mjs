@@ -1,5 +1,7 @@
 // lib/session.mjs 的行为测试：attachSession / Session / settleTurn。
 // 全部对 test/mock-appserver.mjs 跑（T0.3 的 helpers），不发真机 session/send，不花额度。
+// 3.12 起每个回合前 mock 会要一次 provider 运行时头（PLAN-3.12.md 一节层 5），spawn 都带
+// providerAuth 答 startMock 的 key，回合才跑得起来。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, rm, mkdtemp } from 'node:fs/promises';
@@ -19,7 +21,6 @@ test.after(async () => {
 });
 
 const SESSION_ID = 'sess_test-1';
-const WORKSPACE = { workspacePath: '/tmp/probe-ws', workspaceKey: '/tmp/probe-ws' };
 
 // 起 mock + 客户端 + attach 会话的公共壳；eventsPath 在临时目录里由本壳指定（路径约定归调用者）。
 // spawn 失败也要清临时目录、收掉起了一半的客户端（T2.7 第 3 条）
@@ -34,6 +35,7 @@ async function withSession(script, opts, fn) {
       zcodePath: mock.zcodePath,
       cwd: mock.dir,
       env: mock.env,
+      providerAuth: () => mock.apiKey,
       onStderr: (line) => stderrLines.push(line),
     });
     pids.push(client.pid);
@@ -51,9 +53,6 @@ async function withSession(script, opts, fn) {
     await mock.cleanup();
   }
 }
-
-const pushRegistry = (client, registry) =>
-  client.request('workspace/updateProviderRegistry', { workspace: WORKSPACE, registry }, { timeoutMs: 2000 });
 
 test('settleTurn：completed → done，lastText 拼接 text_delta，usage 透传', () => {
   const settled = settleTurn([
@@ -113,6 +112,24 @@ test('attach 后 send：事件依次落盘，outcome done，lastText 与 usage �
     );
     assert.ok(events.every((e) => e.sessionId === SESSION_ID));
   });
+});
+
+test('spawn 没给 providerAuth → 回合在模型请求前失败，reason 说明缺哪个 provider 的 key（层 5）', async () => {
+  const script = { turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: '不该到' } }] }] };
+  const mock = await startMock({ script });
+  mockDirs.push(mock.dir);
+  const client = await AppServerClient.spawn({ zcodePath: mock.zcodePath, cwd: mock.dir, env: mock.env, onStderr: () => {} });
+  pids.push(client.pid);
+  try {
+    const session = await attachSession({ client, sessionId: SESSION_ID, cwd: mock.dir, eventsPath: path.join(mock.dir, 'events.jsonl') });
+    const result = await session.send('hi');
+    assert.equal(result.outcome, 'failed');
+    assert.equal(result.reason, 'zcode-executor 没有 provider zcode-executor 的 API key，模型请求发不出去');
+    assert.equal(result.lastText, '');
+  } finally {
+    await client.close({ timeoutMs: 2000 }).catch(() => {});
+    await mock.cleanup();
+  }
 });
 
 test('剧本 fail → outcome failed，reason 是剧本里的 message', async () => {
@@ -238,7 +255,7 @@ test('handlers.permission：收到 params（toolName/input/options），应答�
       assert.ok(Array.isArray(seen[0].options));
       assert.ok(seen[0].options.some((o) => o.kind === 'allow_once'));
       const record = readRecord(recordPath);
-      const answers = record.filter((m) => m.id !== undefined && m.method === undefined);
+      const answers = record.filter((m) => m.id !== undefined && m.method === undefined && m.result?.headersApplied === undefined);
       assert.deepEqual(answers[0].result, { decision: 'allow', reason: '放行' });
     },
   );
@@ -296,7 +313,7 @@ test('eventsPath 的目录不存在时自动创建（先建目录再追加）', 
     const mock = await startMock({ script });
     mockDirs.push(mock.dir);
     const eventsPath = path.join(tmp, 'a', 'b', 'events.jsonl');
-    const client = await AppServerClient.spawn({ zcodePath: mock.zcodePath, cwd: mock.dir, env: mock.env });
+    const client = await AppServerClient.spawn({ zcodePath: mock.zcodePath, cwd: mock.dir, env: mock.env, providerAuth: () => mock.apiKey });
     pids.push(client.pid);
     const session = await attachSession({ client, sessionId: SESSION_ID, cwd: mock.dir, eventsPath });
     const result = await session.send('hi', { timeoutMs: 200 });

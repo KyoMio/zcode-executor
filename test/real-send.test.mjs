@@ -44,7 +44,11 @@ function parseLines(stdout) {
     .map((l) => JSON.parse(l));
 }
 
-// 起 mock、写好 MOCK_* 环境变量，spawnSync 跑 real-send；返回结果和各路径
+// 起 mock、写好 MOCK_* 环境变量，spawnSync 跑 real-send；返回结果和各路径。
+// 3.12（D14）：mock 只认 zcode.cjs 位置推不出来的内置 provider 文件，必须显式给
+// ZCODE_BUILTIN_PROVIDER_CONFIG_FILE（mock.env 那份，随便一个存在的文件即可，mock 只查存在与否）。
+// 个人 provider 文件不用传——real-send.mjs 自己用 ZCODE_CONFIG_PATH 读到的 provider 写一份、
+// 显式传给 AppServerClient.spawn 的 personalProviderFile，优先级本来就盖过环境变量。
 async function runRealSend(script, extraArgs) {
   const mock = await startMock({ script });
   mockDirs.push(mock.dir);
@@ -58,6 +62,7 @@ async function runRealSend(script, extraArgs) {
     ZCODE_CONFIG_PATH: zcodeConfigPath,
     MOCK_APPSERVER_SCRIPT: mock.env.MOCK_APPSERVER_SCRIPT,
     MOCK_APPSERVER_RECORD: mock.env.MOCK_APPSERVER_RECORD,
+    ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: mock.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE,
   };
   const run = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'real-send.mjs'), '--yes', '--cwd', workDir, ...extraArgs], {
     encoding: 'utf8',
@@ -80,6 +85,9 @@ test('real-send：--on-permission allow 走到 done，退出码 0，pending 已�
   const permAnswer = answers.find((m) => m.result && m.result.decision !== undefined);
   assert.deepEqual(permAnswer.result, { decision: 'allow' });
   await assert.rejects(readFile(pendingPath), (err) => err.code === 'ENOENT'); // 应答后 pending 已删
+  // PLAN-3.12.md 一节层 5：回合真的会先收到这个反向请求，real-send 要打一行 stderr 能被看见
+  // （检查点 5 的核对项之一：真机上它到底来不来）
+  assert.match(run.stderr, /\[反向请求\] requestProviderRuntimeHeaders providerId=zcode-executor/);
 });
 
 test('real-send：非终端且没给 --on-permission → blocked，退出码 5，pending 保留', async () => {
@@ -108,24 +116,24 @@ test('real-send：--on-question 文字答案走到 done', async () => {
   assert.deepEqual(questionAnswer.result, { action: 'accept', content: { answers: { '计划如何？': '继续' } } });
 });
 
-test('real-send：create 带 runtimeModel，provider/model 自洽且 mock 回显一致', async () => {
+test('real-send：create 带 model（含 reasoningLevel）与顶层 thoughtLevel，不带 runtimeModel，不推表', async () => {
   // 自洽断言（评审 T1.3b 第 3 条）：不依赖本机 config 里有哪些 provider/model
   const { run, recordPath } = await runRealSend({}, []);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+  const methods = readRecord(recordPath).map((m) => m.method);
+  assert.equal(methods.includes('workspace/updateProviderRegistry'), false); // 3.12 起该方法已删（D14），real-send 不再推表
   const creates = readRecord(recordPath).filter((m) => m.method === 'session/create');
   assert.equal(creates.length, 1);
-  const rm = creates[0].params.runtimeModel;
-  assert.ok(rm, 'create 要带 runtimeModel');
+  const params = creates[0].params;
+  assert.equal(params.runtimeModel, undefined, 'create 不该再带 runtimeModel');
+  assert.equal(params.model.providerId, 'zcode-executor'); // EXECUTOR_PROVIDER_ID：D14 固定值，不沿用 config.json 的 provider id
+  assert.ok(['GLM-5.3', 'GLM-5.3-Flash'].includes(params.model.modelId));
+  assert.equal(params.model.options?.reasoningLevel, 'high'); // GLM-5.3 系列 create 缺它会被拒
+  assert.equal(params.thoughtLevel, 'high'); // 顶层也要带（PLAN-3.12.md 二节第 3 条）
+  // mock 回显：settings.model.current 是 model 指定的 ref，stdout 的 create 行带出来
   const lines = parseLines(run.stdout);
-  const push = lines.find((l) => l.step === 'updateProviderRegistry');
-  assert.ok(push.providerIds.includes(rm.model.providerId)); // 选的 provider 确实推过表
-  assert.equal(rm.provider.providerId, rm.model.providerId); // provider 定义与 model ref 同一家
-  assert.ok(rm.provider.models.some((m) => m.modelId === rm.model.modelId)); // 模型确实在该 provider 下
-  assert.equal(rm.provider.apiKey?.source, 'inline'); // provider 原样带内联 key（值已在记录里抹掉）
-  assert.match(rm.revision, /^[0-9a-f]{8}$/);
-  // mock 回显：settings.model.current 是 runtimeModel 指定的 ref，stdout 的 create 行带出来
   const createLine = lines.find((l) => l.step === 'create');
-  assert.deepEqual(createLine.result.model, rm.model);
+  assert.deepEqual(createLine.result.model, params.model);
 });
 
 test('real-send：--provider 不存在 → 退出码 2，mock 没被 spawn（记录为空）', async () => {
@@ -135,28 +143,28 @@ test('real-send：--provider 不存在 → 退出码 2，mock 没被 spawn（记
   assert.deepEqual(readRecord(recordPath), []); // 评审 T1.3b 第 4 条：参数给错不起子进程
 });
 
-test('real-send：--model 不存在 → 退出码 2，mock 没被 spawn（记录为空）', async () => {
+test('real-send：--model 不存在 → 退出码 2，mock 没被 spawn（记录为空），不留临时目录', async () => {
   const { run, recordPath } = await runRealSend({}, ['--model', 'no-such-model']);
   assert.equal(run.status, 2, `stderr: ${run.stderr}`);
   assert.match(run.stderr, /no-such-model/);
-  assert.deepEqual(readRecord(recordPath), []);
+  assert.deepEqual(readRecord(recordPath), []); // 校验在 mkdtemp / 写个人文件 / spawn 之前，什么都没起
 });
 
-test('real-send：mock 记录里的 apiKey 值已抹掉（RULES §8 永不落盘）', async () => {
+test('real-send：requestProviderRuntimeHeaders 应答里的 apiKey 已抹掉（RULES §8 永不落盘）', async () => {
   const { run, recordPath } = await runRealSend({}, []);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
-  const pushes = readRecord(recordPath).filter((m) => m.method === 'workspace/updateProviderRegistry');
-  assert.ok(pushes.length >= 1);
-  const withKey = pushes[0].params.registry.providers.filter((p) => p.apiKey !== undefined);
-  assert.ok(withKey.length >= 1, '至少一个 provider 带内联 key');
-  for (const p of withKey) {
-    assert.equal(p.apiKey.value, '[REDACTED]'); // 评审 T1.3b 第 6 条：mock 端抹密
+  // D14 起 apiKey 不再经 create 的 params 传（selection 里根本没有这个字段），
+  // 唯一会出现在线路上的地方是这条反向请求的应答（result.requestAuth.apiKey）
+  const headerAnswers = readRecord(recordPath).filter((m) => m.result?.requestAuth !== undefined);
+  assert.ok(headerAnswers.length >= 1, '至少答过一次 requestProviderRuntimeHeaders');
+  for (const m of headerAnswers) {
+    assert.equal(m.result.requestAuth.apiKey, '[REDACTED]'); // 评审 T1.3b 第 6 条：mock 端抹密
   }
   const creates = readRecord(recordPath).filter((m) => m.method === 'session/create');
-  assert.equal(creates[0].params.runtimeModel.provider.apiKey.value, '[REDACTED]');
+  assert.equal(JSON.stringify(creates[0].params.model).includes('sk-test-plan'), false); // model 里本就没有 key，双保险
 });
 
-test('real-send：--resume 不发 session/create、不带 runtimeModel（verified）', async () => {
+test('real-send：--resume 不发 session/create，仍会写个人 provider 文件应答反向请求', async () => {
   const { run, recordPath } = await runRealSend({}, ['--resume', 'sess_resume-t13']);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
   const methods = readRecord(recordPath).map((m) => m.method);

@@ -18,6 +18,7 @@ test.after(async () => {
 });
 
 const SESSION_ID = 'sess_test-1';
+// 记录里的应答：3.12 起每回合第一条是 requestProviderRuntimeHeaders 的（headersApplied），闸门的应答排它后面
 
 // 起 mock + 客户端 + 挂起闸门的公共壳：pendingPath 放进 mkdtemp 目录随 cleanup 一起清。
 // spawn 失败也要清临时目录、收掉起了一半的客户端（T2.7 第 3 条）
@@ -27,7 +28,8 @@ async function withGateSession(script, opts, fn) {
   const pendingPath = path.join(mock.dir, 'pending.json');
   let client = null;
   try {
-    client = await AppServerClient.spawn({ zcodePath: mock.zcodePath, cwd: mock.dir, env: mock.env });
+    // 3.12：回合前 mock 要 provider 运行时头，providerAuth 答 startMock 的 key
+    client = await AppServerClient.spawn({ zcodePath: mock.zcodePath, cwd: mock.dir, env: mock.env, providerAuth: () => mock.apiKey });
     pids.push(client.pid);
     // opts.onPending 的第二参把 gate 传回去：同步 answer 的用例要用
     const gate = createPendingGate({ pendingPath, onPending: (pending) => opts.onPending?.(pending, gate) });
@@ -142,7 +144,7 @@ test('permission 挂起全链路：pending 形状、answer(allow)、回合 done�
     assert.equal(readPending(pendingPath), null);
     // 临时文件也不残留（rename 消费掉了）
     assert.equal(readPending(`${pendingPath}.${process.pid}.tmp`), null);
-    const answers = readRecord(recordPath).filter((m) => m.id !== undefined && m.method === undefined);
+    const answers = readRecord(recordPath).filter((m) => m.id !== undefined && m.method === undefined && m.result?.headersApplied === undefined);
     assert.deepEqual(answers[0].result, { decision: 'allow' });
   });
 });
@@ -154,7 +156,7 @@ test('answer(deny) → mock 收到 {decision:deny, reason:人工拒绝}', async 
     gate.answer({ decision: 'deny' });
     const result = await sendPromise;
     assert.equal(result.outcome, 'done');
-    const answers = readRecord(recordPath).filter((m) => m.id !== undefined && m.method === undefined);
+    const answers = readRecord(recordPath).filter((m) => m.id !== undefined && m.method === undefined && m.result?.headersApplied === undefined);
     assert.deepEqual(answers[0].result, { decision: 'deny', reason: '人工拒绝' });
   });
 });
@@ -166,7 +168,7 @@ test('question 两题：values 按序号与 option.value 匹配，多选拼接',
     gate.answer({ values: ['2', ['a', 'b']] });
     const result = await sendPromise;
     assert.equal(result.outcome, 'done');
-    const answers = readRecord(recordPath).filter((m) => m.id !== undefined && m.method === undefined);
+    const answers = readRecord(recordPath).filter((m) => m.id !== undefined && m.method === undefined && m.result?.headersApplied === undefined);
     assert.deepEqual(answers[0].result, {
       action: 'accept',
       content: { answers: { '选择模式': '稳妥', '选模块': 'A 模块, B 模块' } },
@@ -181,7 +183,7 @@ test('按 label 匹配也算对', async () => {
     gate.answer({ values: ['快速', 'B 模块'] });
     const result = await sendPromise;
     assert.equal(result.outcome, 'done');
-    const answers = readRecord(recordPath).filter((m) => m.id !== undefined && m.method === undefined);
+    const answers = readRecord(recordPath).filter((m) => m.id !== undefined && m.method === undefined && m.result?.headersApplied === undefined);
     assert.deepEqual(answers[0].result.content.answers, { '选择模式': '快速', '选模块': 'B 模块' });
   });
 });
@@ -242,7 +244,7 @@ test('两个反向请求接连来：先排队，第一个应答后第二个才�
     assert.equal(second.requestId, 'rq2');
     gate.answer({ values: ['继续'] });
     const answers = await waitFor(() => {
-      const list = readRecord(recordPath).filter((m) => m.id !== undefined && m.method === undefined);
+      const list = readRecord(recordPath).filter((m) => m.id !== undefined && m.method === undefined && m.result?.headersApplied === undefined);
       return list.length >= 2 ? list : undefined;
     });
     assert.deepEqual(answers[0].result, { decision: 'allow' });

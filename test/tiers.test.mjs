@@ -3,9 +3,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ExecutorError } from '../lib/errors.mjs';
-import { assignTiers, thoughtLevelFor } from '../lib/tiers.mjs';
+import { assignTiers, reasoningLevelFor, thoughtLevelFor } from '../lib/tiers.mjs';
 
-// 造一个 readState settings.model.available 形状的条目
+// 造一个 settings.model.available 形状的条目（registry 的 provider.models 本地换算出来的同一形状）
 const M = (modelId, { label, disabledReason, levels } = {}) => {
   const m = { ref: { providerId: 'p', modelId } };
   if (label !== undefined) m.label = label;
@@ -97,4 +97,12 @@ test('thoughtLevelFor：explicit 且不合法 → ExecutorError(2) 并列出档�
   });
   const flash = M('GLM-5.3-Flash'); // 模型没有任何档位
   assert.throws(() => thoughtLevelFor(flash, 'high', { explicit: true }), (err) => err?.exitCode === 2);
+});
+
+test('reasoningLevelFor：登记簿的 thoughtLevel 优先；null 退到模型 defaultLevel；再没有退 high（3.12 起 create 必带）', () => {
+  const glm = { modelId: 'GLM-5.3', reasoning: { levels: [{ value: 'low' }, { value: 'max' }], defaultLevel: 'max' } };
+  assert.equal(reasoningLevelFor('low', glm), 'low'); // 登记簿有值就用它
+  assert.equal(reasoningLevelFor(null, glm), 'max'); // new 存了 null：退到模型默认档
+  assert.equal(reasoningLevelFor(undefined, { modelId: 'GLM-5.3-Flash' }), 'high'); // 模型没有 reasoning：兜底 high
+  assert.equal(reasoningLevelFor(null, undefined), 'high'); // 连模型都找不到也不抛，让 create 自己拒
 });

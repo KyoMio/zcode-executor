@@ -43,8 +43,10 @@ const ZCODE_CONFIG = {
   },
 };
 
-// 造环境：mock + 临时家目录（白名单指到 git 仓库）+ new 一条会话
-async function setupSend(t, { script, deny } = {}) {
+// 造环境：mock + 临时家目录（白名单指到 git 仓库）+ new 一条会话。
+// TMPDIR 指到每个用例自己的空目录：runner 的个人 provider 文件（含 apiKey，D14）落在 os.tmpdir()，
+// 收场后看这个目录空不空就知道有没有删干净（send 起的 runner 继承 send 的环境）
+async function setupSend(t, { script, deny, tier = 'strong', zcodeConfig = ZCODE_CONFIG } = {}) {
   // 评审 T2.3b 第 10 条：用例开头就登记清理，不等断言后手动补
   t.after(() => {
     killAll(runnerPids);
@@ -63,15 +65,18 @@ async function setupSend(t, { script, deny } = {}) {
   const zcodeConfigDir = await mkdtemp(path.join(os.tmpdir(), 'zcode-run-zconfig-'));
   dirs.push(zcodeConfigDir);
   const zcodeConfigPath = path.join(zcodeConfigDir, 'config.json');
-  await writeFile(zcodeConfigPath, JSON.stringify(ZCODE_CONFIG));
+  await writeFile(zcodeConfigPath, JSON.stringify(zcodeConfig));
+  const tmp = await mkdtemp(path.join(os.tmpdir(), 'zcode-run-tmp-'));
+  dirs.push(tmp);
   const env = {
     ...process.env,
     ZCODE_BIN: mock.zcodePath,
     ZCODE_EXECUTOR_HOME: home,
     ZCODE_CONFIG_PATH: zcodeConfigPath,
+    TMPDIR: tmp,
     ...mock.env,
   };
-  const newArgs = ['new', '--cwd', repo, '--tier', 'strong', '--json'];
+  const newArgs = ['new', '--cwd', repo, '--tier', tier, '--json'];
   if (deny) newArgs.push('--deny', deny);
   const created = spawnSync(process.execPath, [BIN, ...newArgs], {
     encoding: 'utf8',
@@ -80,7 +85,7 @@ async function setupSend(t, { script, deny } = {}) {
   });
   assert.equal(created.status, 0, `new 失败：${created.stderr}`);
   const entry = JSON.parse(created.stdout);
-  return { mock, home, env, entry, runsDir: path.join(home, 'runs', entry.id), scriptPath: mock.env.MOCK_APPSERVER_SCRIPT, recordPath: mock.env.MOCK_APPSERVER_RECORD };
+  return { mock, home, env, entry, tmp, zcodeConfigPath, runsDir: path.join(home, 'runs', entry.id), scriptPath: mock.env.MOCK_APPSERVER_SCRIPT, recordPath: mock.env.MOCK_APPSERVER_RECORD };
 }
 
 function runBin(env, args, { input } = {}) {
@@ -358,21 +363,19 @@ test('投递重投超过 2 次 → 按 failed 丢弃并清队列（评审 T2.3b 
   trackRunnerPids(env.runsDir);
 });
 
-test('runner 阶段方法集合：推了 provider 表且排在 resume 前（评审 T2.3b 第 1 条）', async (t) => {
+test('runner 阶段方法集合：3.12 起不推 provider 表，create 排在最前（PLAN-3.12.md 一节层 2）', async (t) => {
   const env = await setupSend(t);
   const run = runBin(env.env, ['send', env.entry.id, '干活', '--wait', '--json']);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+  // new 不再起子进程，记录里从头到尾都是 runner 的
   const methods = readRecord(env.mock.env.MOCK_APPSERVER_RECORD).map((m) => m.method).filter(Boolean);
-  const runnerStart = methods.lastIndexOf('workspace/updateProviderRegistry'); // runner 推表那一次
-  assert.ok(runnerStart >= 0);
-  const runnerMethods = methods.slice(runnerStart);
-  assert.deepEqual([...new Set(runnerMethods)].sort(), [
+  assert.equal(methods[0], 'session/create');
+  assert.deepEqual([...new Set(methods)].sort(), [
     'session/close',
     'session/create',
     'session/send',
     'session/subscribe',
-    'workspace/updateProviderRegistry',
-  ]); // 首投走 create 路径：没有 resume（第二次 send 才 resume，见 D13 专用用例）
+  ]); // 首投走 create 路径：没有 resume（第二次 send 才 resume，见 D13 专用用例）；没有 updateProviderRegistry
 });
 
 test('runner 启动白名单复查：登记簿 cwd 改到白名单外 → _runner 退 2 且锁删掉（评审 T2.3b 第 10 条）', async (t) => {
@@ -452,7 +455,7 @@ test('send：正文 - 从 stdin 读', async (t) => {
 
 // ---------- D13：new 不建会话，runner 先 create 后 resume（T2.4b） ----------
 
-test('D13：首次 send 建 zcode 会话——create 带登记簿的 runtimeModel/thoughtLevel/toolDenylist', async (t) => {
+test('D13：首次 send 建 zcode 会话——create 带登记簿的 model/thoughtLevel/toolDenylist，没有 runtimeModel', async (t) => {
   const env = await setupSend(t, { script: {}, deny: 'WebSearch' });
   const run = runBin(env.env, ['send', env.entry.id, '首投', '--wait', '--json']);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
@@ -460,15 +463,102 @@ test('D13：首次 send 建 zcode 会话——create 带登记簿的 runtimeMode
   const registry = JSON.parse(await readFile(path.join(env.home, 'sessions.json'), 'utf8'));
   const entry = registry.sessions[env.entry.id];
   assert.match(entry.sessionId, /^sess_/);
-  // mock 记录的 create：runtimeModel / thoughtLevel / toolDenylist 都从登记簿带下来
+  // mock 记录的 create：model / thoughtLevel / toolDenylist 都从登记簿带下来；3.12.2 的形状
+  // （PLAN-3.12.md 一节层 3）：model.providerId 固定 zcode-executor，档位两处都给
   const create = readRecord(env.recordPath).filter((m) => m.method === 'session/create');
   assert.equal(create.length, 1);
   const p = create[0].params;
-  assert.equal(p.runtimeModel.model.modelId, entry.modelId);
-  assert.equal(p.runtimeModel.model.providerId, entry.provider);
-  assert.equal(p.runtimeModel.provider.providerId, entry.provider);
+  assert.equal('runtimeModel' in p, false);
+  assert.deepEqual(p.model, { providerId: 'zcode-executor', modelId: entry.modelId, options: { reasoningLevel: 'high' } });
+  assert.equal(entry.provider, 'builtin:bigmodel-coding-plan'); // 登记簿存的仍是 config.json 的 id
   assert.deepEqual(p.toolDenylist, ['WebSearch']);
   assert.equal(p.thoughtLevel, 'high');
+  assert.equal(p.persistence, 'immediate');
+});
+
+test('登记簿 thoughtLevel 为 null（模型没有 high 档）→ create 带模型 defaultLevel 当 reasoningLevel', async (t) => {
+  const env = await setupSend(t, {
+    zcodeConfig: {
+      provider: {
+        'builtin:bigmodel-coding-plan': {
+          kind: 'anthropic',
+          options: { apiKey: 'sk-test-plan' },
+          models: { 'GLM-5.3': { reasoning: { enabled: true, variants: ['low', 'max'], defaultVariant: 'max' } } },
+        },
+      },
+    },
+  });
+  assert.equal(env.entry.thoughtLevel, null); // new 存了 null：档位里没有 high
+  const run = runBin(env.env, ['send', env.entry.id, '首投', '--wait', '--json']);
+  assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+  const p = readRecord(env.recordPath).find((m) => m.method === 'session/create').params;
+  assert.deepEqual(p.model, { providerId: 'zcode-executor', modelId: 'GLM-5.3', options: { reasoningLevel: 'max' } });
+  assert.equal(p.thoughtLevel, 'max');
+});
+
+// ---------- D14：个人 provider 文件（含 apiKey）收场即删，三条退出路径各验一次 ----------
+
+test('D14：正常结束后个人 provider 文件目录已删', async (t) => {
+  const env = await setupSend(t);
+  const run = runBin(env.env, ['send', env.entry.id, '干活', '--wait', '--json']);
+  assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+  await waitFor(async () => (existsSync(path.join(env.runsDir, 'lock')) ? undefined : true));
+  assert.deepEqual(await readdir(env.tmp), []);
+});
+
+test('D14：cancel 收场后个人 provider 文件目录已删', async (t) => {
+  const env = await setupSend(t, { script: { turns: [{ hang: true }] } });
+  const envShortGrace = { ...env.env, ZCODE_EXECUTOR_CANCEL_GRACE_MS: '600' };
+  const queued = runBin(envShortGrace, ['send', env.entry.id, '要取消的活']);
+  assert.equal(queued.status, 0, queued.stderr);
+  await waitFor(async () => (readEvents(env.runsDir).some((e) => e.type === 'executor.send') ? true : undefined));
+  trackRunnerPids(env.runsDir);
+  const cancel = runBin(envShortGrace, ['cancel', env.entry.id]);
+  assert.equal(cancel.status, 0, cancel.stderr);
+  await waitFor(async () => (existsSync(path.join(env.runsDir, 'lock')) ? undefined : true));
+  const last = JSON.parse(await readFile(path.join(env.runsDir, 'last.json'), 'utf8'));
+  assert.equal(last.outcome, 'cancelled');
+  assert.deepEqual(await readdir(env.tmp), []);
+});
+
+test('D14：SIGTERM 收尾后个人 provider 文件目录已删', { skip: process.platform === 'win32' && 'Windows 收不到 SIGTERM' }, async (t) => {
+  const env = await setupSend(t, { script: { turns: [{ hang: true }] } });
+  const queued = runBin(env.env, ['send', env.entry.id, '会被 SIGTERM 打断的投递']);
+  assert.equal(queued.status, 0, queued.stderr);
+  // 等回合真的开始（个人文件此时一定已写、连接已起）再发信号，不然测的是「还没写就退」
+  await waitFor(async () => (readEvents(env.runsDir).some((e) => e.type === 'executor.send') ? true : undefined));
+  assert.ok((await readdir(env.tmp)).length > 0, '回合进行中个人文件应该在');
+  const { pid } = JSON.parse(await readFile(path.join(env.runsDir, 'lock'), 'utf8'));
+  process.kill(pid, 'SIGTERM');
+  await waitFor(async () => (existsSync(path.join(env.runsDir, 'lock')) ? undefined : true));
+  await waitFor(async () => ((await readdir(env.tmp)).length === 0 ? true : undefined), { timeoutMs: 5000 });
+});
+
+test('D14：create 被拒 runner 抛错收场，个人 provider 文件目录同样已删', async (t) => {
+  const env = await setupSend(t, { script: { errors: { 'session/create': { code: -32603, message: 'Provider Registry 中不存在 Model: zcode-executor/GLM-5.3' } } } });
+  const run = runBin(env.env, ['send', env.entry.id, '首投', '--wait', '--json']);
+  assert.equal(run.status, 4, `stderr: ${run.stderr}`);
+  assert.match(JSON.parse(run.stdout).reason, /Provider Registry/);
+  await waitFor(async () => (existsSync(path.join(env.runsDir, 'lock')) ? undefined : true));
+  assert.deepEqual(await readdir(env.tmp), []);
+});
+
+test('登记簿的 provider 不在 config.json 里 → state exited 带原因，send --wait 退 4', async (t) => {
+  const env = await setupSend(t);
+  // App 改过配置：原来选中的 provider 没了
+  await writeFile(env.zcodeConfigPath, JSON.stringify({
+    provider: { 'builtin:other-plan': { kind: 'anthropic', options: { apiKey: 'sk-other' }, models: { 'GLM-5.3': {} } } },
+  }));
+  const run = runBin(env.env, ['send', env.entry.id, '首投', '--wait', '--json']);
+  assert.equal(run.status, 4, `stderr: ${run.stderr}`);
+  const out = JSON.parse(run.stdout);
+  assert.equal(out.kind, 'runner-gone');
+  assert.match(out.reason, /builtin:bigmodel-coding-plan/);
+  await waitFor(async () => (existsSync(path.join(env.runsDir, 'lock')) ? undefined : true));
+  const state = JSON.parse(await readFile(path.join(env.runsDir, 'state.json'), 'utf8'));
+  assert.equal(state.phase, 'exited');
+  assert.match(state.error, /config\.json/);
+  assert.deepEqual(readRecord(env.recordPath), []); // provider 都没有，不该起子进程
 });
 
 test('D13：第二次 send 走 resume，不再 create', async (t) => {

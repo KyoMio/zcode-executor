@@ -1,15 +1,16 @@
-// scripts/real-review.mjs —— 真机核模型审批链路（T3.2）：spawn → 推 provider 表 →
-// 用 createComplete + createReview 对一条固定审批请求（Write 到 cwd 内的 hello.txt）跑一次
-// 两段判定，打印两段的原文、解析结果、耗时与 usage。不建会话、不投递。
+// scripts/real-review.mjs —— 真机核模型审批链路（T3.2，起 3.12.2 协议改按 D14）：写个人 provider
+// 文件 → spawn（带 personalProviderFile、providerAuth）→ 用 createComplete + createReview 对一条
+// 固定审批请求（Write 到 cwd 内的 hello.txt）跑一次两段判定，打印两段的原文、解析结果、耗时与 usage。
+// 不建会话、不投递。
 // **会花额度**（一到两次 workspace/generateText）：RULES §9 要求跑前打印提示并要 --yes。
-// 给 Claude 真机核 querySource（固定 'zcode-executor.review'）与 variant 传法是否被接受；
+// 给 Claude 真机核 querySource（固定 'zcode-executor.review'）与 selection 传法是否被接受；
 // 结论回写 docs/verified.md。
 // 不负责：npm test（这条脚本不进测试）、会话的创建与挂起。
 import path from 'node:path';
 import process from 'node:process';
 import { loadConfig } from '../lib/config.mjs';
-import { loadZcodeConfig, resolveReviewModelRef } from '../lib/models.mjs';
-import { pickProvider } from '../lib/providers.mjs';
+import { loadZcodeConfig, resolveReviewSelection } from '../lib/models.mjs';
+import { EXECUTOR_PROVIDER_ID, pickProvider, writePersonalProviderFile } from '../lib/providers.mjs';
 import { AppServerClient } from '../lib/appserver.mjs';
 import { createComplete } from '../lib/review/complete.mjs';
 import { createReview } from '../lib/review/run.mjs';
@@ -24,18 +25,27 @@ if (!process.argv.includes('--yes')) {
 const config = loadConfig();
 const { configPath, registry } = loadZcodeConfig();
 const provider = pickProvider(registry, { preferredProvider: config.preferredProvider });
-const { modelRef } = resolveReviewModelRef({ registry, providerId: provider.providerId, config });
-note(`zcode 配置 ${configPath}，provider ${provider.providerId}，modelRef ${JSON.stringify(modelRef)}`);
-note('querySource 固定 zcode-executor.review；variant 来自 review.thought（模型没有那档就不带）');
+// resolveReviewSelection 按 fast 档 + review.thought 选模型，直接给出 D14 的 selection 形状
+// （{providerId: EXECUTOR_PROVIDER_ID, modelId, options?}），不用再自己转换
+const { selection } = resolveReviewSelection({ registry, providerId: provider.providerId, config });
+note(`zcode 配置 ${configPath}，provider ${provider.providerId}，selection ${JSON.stringify(selection)}`);
+note('querySource 固定 zcode-executor.review；思考等级走 selection.options.reasoningLevel（D14）');
 
 const cwd = process.cwd();
 const workspace = { workspacePath: cwd, workspaceKey: cwd };
-const secrets = registry.providers.map((p) => p.apiKey?.value).filter(Boolean);
-const client = await AppServerClient.spawn({ cwd, secrets });
+const apiKey = provider.apiKey?.value;
+const secrets = [apiKey].filter(Boolean);
+// D14：不再推表，改写一份个人 provider 文件给 app-server 自己读；apiKey 只经这个临时文件和
+// requestProviderRuntimeHeaders 的应答传出去，finally 里 dispose
+const personalFile = writePersonalProviderFile(provider);
+const providerAuth = (providerId) => {
+  note(`[反向请求] requestProviderRuntimeHeaders providerId=${providerId ?? '(缺 providerId)'}`);
+  return providerId === EXECUTOR_PROVIDER_ID ? apiKey : undefined;
+};
+const client = await AppServerClient.spawn({ cwd, secrets, personalProviderFile: personalFile.path, providerAuth });
 try {
-  await client.request('workspace/updateProviderRegistry', { workspace, registry }, { timeoutMs: 20_000 });
   const raws = [];
-  const complete = createComplete({ client, workspace, modelRef, onRaw: (raw) => raws.push(raw) });
+  const complete = createComplete({ client, workspace, selection, onRaw: (raw) => raws.push(raw) });
   const review = createReview(complete);
   const action = {
     toolName: 'Write',
@@ -67,7 +77,7 @@ try {
       ruleId: result.ruleId ?? null,
       calls: raws.length,
       elapsedMs: Date.now() - started,
-      modelRef,
+      selection,
       querySource: 'zcode-executor.review',
       calls_detail: raws.map((r) => ({ maxOutputTokens: r.maxOutputTokens, usage: r.usage ?? null, durationMs: r.durationMs })),
     })}\n`,
@@ -78,4 +88,6 @@ try {
   } catch (err) {
     note(`收场失败：${err?.message ?? err}`);
   }
+  // D14：个人 provider 文件用完即删
+  personalFile.dispose();
 }
