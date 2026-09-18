@@ -24,7 +24,7 @@ Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给�
 - 模型审批只产出放行或转人工；拒绝同样退回人工。人工由 Claude 用 AskUserQuestion 转交。
 - 用词照 `CONTEXT.md`：会话、任务单、投递、回合、审批请求、提问、红线、模型审批、挂起、模型等级、思考等级。
 - 纯 `.mjs`，零运行时依赖，不加构建。
-- `~/.zcode/v2/config.json` 只读：里面有 API key，App 会重写它。
+- `~/.zcode/v2/config.json` 只读：里面有 API key，App 会重写它。读到的 apiKey 只落 D14 的临时个人 provider 文件。
 - 从 zcode-acp 搬来的代码保留 Apache-2.0 版权声明，记入 `NOTICE`。
 - 排障看 `~/.zcode/cli/log/zcode-YYYY-MM-DD.jsonl`。JSON-RPC 错误的细节在 `error.data.details`，`message` 只有一句概括。
 

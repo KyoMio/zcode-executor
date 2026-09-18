@@ -60,8 +60,8 @@
 - `events.jsonl` 只追加，一行一个对象，本项目自己的事件 `type` 以 `executor.` 开头。
 - 时间一律 ISO 8601 UTC 字符串。
 - `runs/`、`worktrees/` 不进仓库；测试用 `mkdtemp` 建临时目录并在 `after()` 里清掉。
-- `~/.zcode/v2/config.json` 只读不写。读它只为构造 provider 表推给子进程（decisions D10）；
-  读到的内容不落盘、不进日志、不出协议层。
+- `~/.zcode/v2/config.json` 只读不写；读到的 apiKey 只写进 mkdtemp 出来的 0600 临时个人 provider 文件
+  （decisions D14），子进程收场即删，永不进 `runs/`、日志和任何输出。
 
 ## 7. 协议层
 
@@ -80,7 +80,7 @@
   `hasAllowOnce`，闸门放行、挂起落盘、`approve` 三处共用同一份，不各写各的。
 - runner 只认 `answer.json` 里 requestId 与当前挂起一致的应答，对不上的丢弃：上一轮留下的答案不能放行这一轮。
 - 白名单检查在 `new` 做一次，runner 启动时对登记簿里的 cwd 再做一次。
-- API key、token 一类字符串永不打印、永不落盘；`doctor` 报 config.json 只报存在与否和 provider 个数。
+- API key、token 一类字符串永不打印；落盘只允许 D14 那一个临时文件；`doctor` 报 config.json 只报存在与否和 provider 个数。
 - 红线表是代码常量，不读配置。
 
 ## 9. 测试

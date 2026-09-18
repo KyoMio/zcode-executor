@@ -54,8 +54,8 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 
 | 命令 | 作用 |
 | --- | --- |
-| `doctor [--json]` | 零 token 自检三步：找到 `zcode.cjs` 且版本 ≥ 0.14.8 → `~/.zcode/v2/config.json` 存在 → 真握手一次；顺带报模型等级每档选了谁、有没有档空着 |
-| `models [--json]` | 从 `workspace/readState` 拿可用模型，显示每个模型的思考等级、被禁用原因、自动分到哪个等级 |
+| `doctor [--json]` | 零 token 自检三步：`zcode.cjs` 旁边找得到 `config/provider/zcode-builtin.json`（3.12+ 判据，找不到提示升级 ZCode App）→ `~/.zcode/v2/config.json` 存在 → 真握手一次；顺带报模型等级每档选了谁、有没有档空着，以及选中 provider 在 config.json 里有没有明文 apiKey |
+| `models [--json]` | 从 `session/create` 返回的 `settings.model.available` 拿可用模型（3.12 起 `workspace/readState` 已删），显示每个模型的思考等级、被禁用原因、自动分到哪个等级 |
 | `list [--project 关键字] [--json]` | 列登记簿里的会话：id、标题、cwd、等级、上次结果、是否挂起 |
 | `new --cwd <绝对路径> [--title T] [--tier fast\|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]` | 建会话。cwd 必须在白名单内；不是 worktree 只警告不拒 |
 | `send <id> <正文\|-> [--task 文件] [--wait] [--steer] [--timeout 秒] [--stream] [--json]` | 投递。默认排队；`--steer` 用 zcode 原生方式插进当前回合，不打断 |
@@ -88,7 +88,7 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 ## 5. 模型等级与思考等级
 
 - **两个等级**：`fast`（Flash、lite、mini、air 这类）和 `strong`（旗舰）。
-- **对上具体模型**：从 `workspace/readState` 拿列表，按模型名关键词自动分，同档多个取版本最新的，
+- **对上具体模型**：从 `session/create` 返回的 `settings.model.available` 拿列表（3.12 起 `workspace/readState` 已删），按模型名关键词自动分，同档多个取版本最新的，
   跳过有 `disabledReason` 的。`config.json` 的 `tiers` 可覆盖。不按模型名写死，模型换代不用改代码。
 - **provider 优先 coding plan**（配置 `preferredProvider` 可改），国内 `bigmodel` 与国际 `zai` 站点哪个启用用哪个。
 - **不给 `--tier`** 就用优先 provider 下 zcode 当前选中的模型；那个模型不在这个 provider 下或不可用时退到 `fast`，再没有才退到 `strong`。
@@ -185,7 +185,7 @@ Flash 类模型思考等级不要往低调，效果差。
 ## 10. 测试与验证
 
 - `npm test` 只对 `test/mock-appserver.mjs` 跑，不花额度。
-- 真机分两类：零 token 的（握手、create、readState、list、close）随手验；
+- 真机分两类：零 token 的（握手、create（含模型表）、list、close）随手验；
   花额度的（`session/send`）每步只做一次，见 handoff 的完成判据。
 - ~~验收标准：新开一个 Claude Code 会话，只靠 skill 完成一次派单、挂起、审批、验收~~ 已达成（T4.2，2026-09-08）。
 
@@ -196,7 +196,7 @@ Flash 类模型思考等级不要往低调，效果差。
 - ~~`session/requestRuntimePreferences` 是否先于 create 到达~~ 已验：0.16.5 直连没收到，处理器保留但不等它。
 - ~~不同步 provider 表时 create 返回的模型对不对~~ 已验：不推表 create 直接被拒，必须推（decisions D10）。
 - ~~`toolDenylist` 的字段名和取值格式~~ 已验：`--deny "Write Edit MultiEdit"` 后模型全程碰不到这些工具（verified.md「交付后七项核验」⑤）。
-- ~~`workspace/generateText` 的 `querySource` 填什么被接受；`modelRef.variant` 传思考等级是否生效~~ 已验：`zcode-executor.review` 被接受，`modelRef.variant` 传得进去（当时试的是 high，现在审批默认 low）（verified.md）。
+- ~~`workspace/generateText` 的 `querySource` 填什么被接受；`modelRef.variant` 传思考等级是否生效~~ 已验：`zcode-executor.review` 被接受，`modelRef.variant` 传得进去（当时试的是 high，现在审批默认 low）（verified.md）。3.12 起 `modelRef` 改名 `selection`、`variant` 改成 `options.reasoningLevel`，见 decisions.md D14。
 
 花额度：
 

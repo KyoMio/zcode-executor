@@ -6,6 +6,83 @@
 This document describes the internal JSON-RPC protocol between zcode-acp-server
 and the ZCode CLI.
 
+## 3.12.2 变化（2026-09-18 实测）
+
+> 这一节是本项目加的，不是 zcode-acp-server 原文。协议在 ZCode App 3.12.2 上的变化记在这里；
+> 下文原有段落若描述了被这次改动影响的方法，段首会加一句「3.12 起失效，见顶部」，原文不删，留作
+> 与老版本对照。完整推导过程见 [`decisions.md`](../decisions.md) D14、[`verified.md`](../verified.md)
+> 「3.12.2 直连探针实测」。
+
+**被删的方法**：`workspace/updateProviderRegistry`、`workspace/readState` 都返回 `-32601 Method not found`。
+provider 表（哪些 provider、哪些模型、密钥怎么鉴权）改由 app-server 自己从两个文件拼：内置 provider 文件
++ 个人 provider 文件（两词定义见 [`CONTEXT.md`](../CONTEXT.md)）。
+
+**启动**：新版 CLI 自己去找内置 provider 文件（内部函数 `resolveBundledZCodeBuiltinProviderConfig`），
+只看两处：`zcode.cjs` 同目录下的 `provider/`，和 `zcode.cjs` 往上五级的 `config/provider/`——后者是源码仓库
+的目录层次，打包进 App 后这条路径算出来是磁盘根目录下的 `/config/…`，找不到就报错退出（真实位置是
+`<App>/Contents/Resources/config/provider/zcode-builtin.json`）。App 自己拉起 CLI 时用环境变量告诉它这个
+位置，我们直接 spawn 子进程时没人告诉它，所以要自己算好两个环境变量传进去：
+`ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`（内置 provider 文件路径，从 `zcode.cjs` 路径推出）和
+`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`（个人 provider 文件路径，我们自己写的一份）。两个都给了，CLI 就原样
+采用、不去 CDN 刷新、也不碰用户的 `~/.zcode/v2/provider_config.json`。
+
+**个人 provider 文件的形状**（照 CLI 自带的 legacy 导入函数 `importLegacyCliPersonalProviderConfig` 抄）：
+
+```json
+{"schemaVersion":1,"config":{
+  "providerConfigRules":{"providerRules":[{
+    "providerId":"zcode-executor","providerName":"zcode-executor",
+    "config":{"group":"standard-personal",
+              "access":{"type":"api-key","apiKey":"<config.json 里的 key>"},
+              "api":{"type":"anthropic-messages","baseUrl":"<config.json 里的 baseURL>"},
+              "personalModelIds":["GLM-5.3-Flash","GLM-5.3"],"modelOrder":["GLM-5.3-Flash","GLM-5.3"]}}]},
+  "modelConfigRules":{"providerModelRules":[],"manualProviderModelRules":[]}}}
+```
+
+**`session/create` 的新参数**（strict schema，多传字段直接报错）：
+
+| 字段 | 说明 |
+| --- | --- |
+| `model` | `{providerId, modelId, options?:{reasoningLevel}}`，取代旧版的 `runtimeModel` |
+| `runtimeModel` | 不再接受，带上就报 `Unrecognized key: "runtimeModel"` |
+| `thoughtLevel` | 顶层仍要带（实测只传 `options.reasoningLevel` 时 `settings.thoughtLevel.current` 是空的，两处都给最稳） |
+
+GLM-5.3 系列模型 `options.reasoningLevel` 必填，不带报 `Reasoning level is required`。返回值里
+`settings.model.available` 就是当前可用的模型表——原来要另外调 `workspace/readState` 才能拿到，现在
+create 一次返回，等级分配直接从这里取。
+
+**`workspace/generateText`**：参数 `modelRef` 改名 `selection`，形状与上面的 `model` 一样
+（`{providerId, modelId, options?:{reasoningLevel}}`），不带 `selection` 就报
+`Unrecognized key: "modelRef"`。
+
+**新反向请求 `interaction/requestProviderRuntimeHeaders`**（推断，待真机 send 证实）：宿主模式下（本项目
+`app-server --stdio` 走的就是宿主模式）app-server 每次模型请求前都会向客户端发这个反向请求，等客户端答复
+后才继续。
+
+```json
+{
+  "id": 200,
+  "method": "interaction/requestProviderRuntimeHeaders",
+  "params": { "providerId": "zcode-executor" }
+}
+```
+
+应答两种形状：
+
+```json
+{ "headersApplied": true, "requestAuth": { "apiKey": "...", "headers": { "...": "..." } } }
+```
+
+```json
+{ "headersApplied": false, "errorMessage": "..." }
+```
+
+超时 180 秒未答，回合报 `-32031 Provider runtime headers were not applied before model request attempt`。
+
+**不变的方法**：`session/send`、`resume`、`subscribe`、`stop`、`close`、`list`、
+`requestRuntimePreferences`、`interaction/requestPermission`、`interaction/requestUserInput`、
+`session/event` 的事件种类都没变——会话生命周期、回合结束判定、闸门那三层不用动。
+
 ## Protocol Overview
 
 ZCode communicates over stdio using **line-delimited JSON**. The message format

@@ -196,7 +196,7 @@ ln -s "$PWD/skills/zcode-executor" ~/.claude/skills/zcode-executor
 
 - macOS 或 Linux，**Windows 暂不支持**。ZCode App 的位置按各平台的惯例找（`/Applications/…`、`/opt/ZCode/…`、`/usr/share/zcode/…`），装在别处就用 `ZCODE_BIN` 指到 `zcode.cjs`。
 - Node ≥ 22（ZCode 的 app-server 要 `node:sqlite`）。
-- 装好并登录过 ZCode 桌面 App（CLI 只读 `~/.zcode/v2/config.json` 来推 provider 表，从不写回）。
+- 装好并登录过 **3.12.2 及以上**的 ZCode 桌面 App（3.11 及以下不支持）。CLI 只读 `~/.zcode/v2/config.json`，从不写回。
 
 ## 推荐工作流
 

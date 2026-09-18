@@ -6,5 +6,5 @@ runs/
 # 本地开发过程记录，不进 GitHub：任务单、交接、主计划、旧探针
 docs/tasks/
 docs/handoff/
-docs/PLAN.md
+docs/PLAN*.md
 docs/archive/

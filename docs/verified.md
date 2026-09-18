@@ -75,7 +75,27 @@
 | `session/requestRuntimePreferences` 时序 | **在 create 成功之后**才到，params `{sessionId, scope:"runtime-materialization"}`。所以它不是 create 的前置握手，是 create 之后的物化阶段请求；处理器要常驻，不能只在 create 前等 |
 | cli 日志 | 探针会话只有 info 和一条 warn `session.model_selection.persist_failed`（Session model selection persistence failed，无 details），没有 error。warn 的影响未知，先记着 |
 
+## 3.12.2 直连探针实测（2026-09-18，App 3.12.2，CLI --version 仍 0.16.5）
 
+3.12.2 把「provider 表由宿主推给 app-server」整个换成了「app-server 自己从两个文件读」，老的握手对不上。
+一共五层，前两层是用户看到的，后三层要等修完前两层才会露出来（决定见 decisions.md D14）：
+
+| 层 | 症状 | 真因 | 影响 |
+| --- | --- | --- | --- |
+| 1 | `zcode: 无法定位 CLI ZCode Built-in Provider Config：…/glm/provider/zcode-builtin.json, /config/provider/zcode-builtin.json`，子进程秒退 code=1 | 新 CLI 启动时自己找内置 provider 配置（`resolveBundledZCodeBuiltinProviderConfig`），只看两处：`zcode.cjs` 同目录下的 `provider/`，和 `zcode.cjs` 往上五级的 `config/provider/`——后者是源码仓库的目录层次，打包进 App 后算出来是根目录 `/config/…`。真实位置是 `<App>/Contents/Resources/config/provider/zcode-builtin.json`。App 自己拉 CLI 时是用环境变量告诉它的，我们直接 spawn 就没人告诉 | 所有命令：doctor、models、runner 全挂 |
+| 2 | `workspace/updateProviderRegistry` → -32601 Method not found；`workspace/readState` 同样没了 | 方法被删。provider 表改由 app-server 进程内的 `startProcessProviderRegistryRuntime` 从「内置配置文件 + 个人配置文件」拼出来。个人文件默认 `~/.zcode/v2/provider_config.json`，本机这份是空的（`providerRules: []`），因为用户走的是 OAuth 账号型 coding plan，App 侧没有 API-key 型 provider | 握手、doctor ③、models 全挂 |
+| 3 | （修完 1、2 才会见）`session/create` → -32602 `Unrecognized key: "runtimeModel"` | create 的参数改成 strict schema，`runtimeModel` 没了，换成 `model: {providerId, modelId, options?: {reasoningLevel}}`；而且 GLM 5.3 系列 `reasoningLevel` 必填，不带报 `Reasoning level is required` | runner 建不了会话 |
+| 4 | （同上）`workspace/generateText` → -32602 `Unrecognized key: "modelRef"` | 参数 `modelRef` 改名 `selection`，形状同上面的 `model`；老的 `variant` 改成 `options.reasoningLevel` | 模型审批全部转人工（闸门本身设计成故障安全，不会放行） |
+| 5 | （推断，要一次真机 send 才能证实）回合起不来或 180 秒后 -32031 `Provider runtime headers were not applied before model request attempt` | 宿主模式下（`app-server --stdio` 就是宿主模式）app-server **每次模型请求前**都向客户端发反向请求 `interaction/requestProviderRuntimeHeaders`，等客户端答 `{headersApplied: true, requestAuth: {apiKey?, headers?}}`，超时 180 秒。老版本没有这一步，我们的客户端收到不认识的反向请求只会不答 | 每个回合的第一次模型调用 |
+
+不变的部分（都在新版上核过参数 schema）：`session/send`、`resume`、`subscribe`、`stop`、`close`、`list`、`requestRuntimePreferences`、`interaction/requestPermission`、`interaction/requestUserInput`、`session/event` 的事件种类。也就是说会话生命周期、回合结束判定、闸门那三层不用动。
+
+两个额外事实：
+
+- `node zcode.cjs --version` 在 3.12.2 上仍然打印 `0.16.5`，和 3.11.2 一样。**版本号区分不了新旧**，doctor 的门槛得换判据。
+- 密钥来源：`~/.zcode/v2/config.json`（新版把它叫 legacy CLI config）里 `builtin:bigmodel-coding-plan.options.apiKey` 还是明文，而且 App 3.12.2 仍在写这个文件（mtime 2026-09-18 00:23）。`credentials.json` 里的所有值都是 `enc:v1:` 加密，读不了。所以现阶段密钥只能继续从 config.json 拿；哪天 App 不写这个文件了就断粮——这是本次适配之后最大的外部风险，doctor 要能早一步报出来。
+
+探针脚本已并入 `scripts/probe.mjs`（另一位在做，不在本次文档改动范围内）。
 
 ## 第一次真机投递（2026-09-07，CLI 0.16.5，检查点 1）
 

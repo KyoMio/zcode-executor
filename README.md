@@ -198,7 +198,7 @@ Swap in your agent's directory from the table in the npm section above.
 
 - macOS or Linux. **Windows is not supported yet.** The ZCode app bundle is looked up where each platform puts it (`/Applications/…`, `/opt/ZCode/…`, `/usr/share/zcode/…`); installed anywhere else, point `ZCODE_BIN` at `zcode.cjs`.
 - Node ≥ 22 (ZCode's app-server needs `node:sqlite`).
-- ZCode desktop app installed and logged in (the CLI reads `~/.zcode/v2/config.json` read-only to push the provider registry; nothing is ever written back).
+- ZCode desktop app **≥ 3.12.2** installed and logged in (3.11 and earlier are not supported). The CLI reads `~/.zcode/v2/config.json` read-only; nothing is ever written back.
 
 ## Recommended workflow
 

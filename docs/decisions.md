@@ -1,7 +1,8 @@
 # 决策记录
 
 每条记「定了什么、为什么、什么情况下值得重开」。D1 到 D5 于 2026-09-07 定下，D6 到 D9 是同日需求对齐时补的，
-D10 是 T0.2 探针之后补的，D11 是检查点 1 撞出来的，D12 D13 是 2026-09-08 做阶段 2 时定的。
+D10 是 T0.2 探针之后补的，D11 是检查点 1 撞出来的，D12 D13 是 2026-09-08 做阶段 2 时定的，
+D14 是 2026-09-18 适配 ZCode App 3.12.2 时补的。
 
 ## D1 定位：派单与验收层，协议是别人的事
 
@@ -97,7 +98,7 @@ Node 22.18 的运行时剥类型会把 Node 门槛抬高并多一种文件形态
 
 重开条件：搬来的代码超过两三千行，手工维护两份开始出错。
 
-## D10 建会话前必须推 provider 表，所以要读 `~/.zcode/v2/config.json`
+## D10 建会话前必须推 provider 表，所以要读 `~/.zcode/v2/config.json`（3.12 起失效，见 D14）
 
 T0.2 探针证实：直连 app-server 时不推 `workspace/updateProviderRegistry`，`session/create` 直接被拒
 （Model config is missing），readState 也拿不到模型列表。app-server 不自己读 v2 config，
@@ -110,13 +111,17 @@ models 为空或 `enabled:false` 的 provider 过滤掉。之前 RULES 里「只
 
 重开条件：zcode 让 app-server 自己读配置。
 
-## D11 建会话带 `runtimeModel`，模型与 provider 由我们指定
+2026-09-18 起 ZCode 3.12.2 删掉了 `workspace/updateProviderRegistry` / `runtimeModel`，见 D14。
+
+## D11 建会话带 `runtimeModel`，模型与 provider 由我们指定（3.12 起失效，见 D14）
 
 检查点 1 证实：推 provider 表之后 create 若不带 `runtimeModel`，回合仍因 provider 无 key 失败，而且默认模型落在
 API Key 计费的 provider。带上 `runtimeModel`（model ref + provider 定义含内联 apiKey）两个问题一起消失。
 所以 `new` 一律按等级和 provider 优先级算出 model ref，构造 runtimeModel 传给 create；resume 不带。
 
 重开条件：zcode 让 app-server 自己解析 provider 鉴权。
+
+2026-09-18 起 ZCode 3.12.2 删掉了 `workspace/updateProviderRegistry` / `runtimeModel`，见 D14。
 
 ## D12 runner 一律后台，前台命令只读文件
 
@@ -137,6 +142,33 @@ runner 若 resume 报 Session not found（会话在 zcode 侧丢了）→ 记事
 
 重开条件：zcode 允许自定义 sessionId 或空会话可持久化。
 
+## D14 3.12 起自带个人 provider 文件，密钥落临时文件
+
+定了什么：ZCode App 3.12.2 把 provider 表从「宿主推给 app-server」改成「app-server 自己从两个文件读」，
+`workspace/updateProviderRegistry` 和 `runtimeModel` 一并消失（见 D10、D11）。我们改成 spawn 子进程时带两个
+环境变量：`ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 指向 ZCode App 自带的内置 provider 文件（`zcode-builtin.json`，
+CONTEXT.md 有词条），`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 指向我们自己写的一份个人 provider 文件——里面只有
+一个 provider，providerId 固定写死 `zcode-executor`（不沿用 config.json 里的 `builtin:bigmodel-coding-plan`，
+理由同 D11：新版 `builtin:` / `account:` 前缀有保留含义）。`session/create` 的模型参数从 `runtimeModel` 改成
+`model:{providerId:'zcode-executor', modelId, options:{reasoningLevel}}`，`workspace/generateText` 的
+`modelRef` 改成同形状的 `selection`。建会话时还会收到一条新的反向请求 `interaction/requestProviderRuntimeHeaders`，
+我们给它一个内置应答：有 key 答 `{headersApplied:true, requestAuth:{apiKey}}`，没有答
+`{headersApplied:false, errorMessage}`。
+
+为什么：app-server 改成自己读文件，不再接受宿主推表，`workspace/updateProviderRegistry`（D10）和
+`runtimeModel`（D11）都被删了，我们必须换一套办法把密钥和模型表交给它。试过的不落盘路径都走不通：
+`provider/updateAccountConfig` 只收 `access.type:"zhipu-account"` 那一种账号型 provider，塞 `apiKey` 直接
+被拒；反向请求 `requestProviderRuntimeHeaders` 又是模型请求时才会来，建会话那一步 registry 里还是要先有这个
+provider，不能靠它临时插入。写用户自己的 `~/.zcode/v2/provider_config.json` 也不行：App 会重写这个文件、
+会和用户自己的配置打架，还违反「`~/.zcode` 只读」的约束（RULES §6）。所以只能自己写一份个人 provider 文件
+让 app-server 读。
+
+密钥放哪：个人 provider 文件放在 `os.tmpdir()` 下用 `mkdtemp` 建的临时目录里，权限 0600，子进程收场的
+`finally` 里删掉；不进 `runs/<id>/`（那个目录是留着事后查看的，不该有密钥）。
+
+重开条件：zcode 提供一种不落盘就能推 api-key 型 provider 的方法；或者 legacy 的 `~/.zcode/v2/config.json`
+不再存明文 apiKey（那样密钥的落盘问题从根上消失）。
+
 ## 补记：模型审批的模型从已推的 provider 表里选，不再多一次 readState
 
 runner 起来时已经推了表，registry 里的模型清单与 readState 一致；省一次往返。代价是看不到后端的 `disabledReason`，
@@ -153,3 +185,8 @@ runner 起来时已经推了表，registry 里的模型清单与 readState 一�
 - 往 `~/.zcode/v2/tasks-index.sqlite` 同步会话让 App 列表看到。第一版不做。
 - MCP 外壳与 elicitation。
 - 给 zcode-acp 上游报问题。现在不依赖它了，报不报看心情，报之前问用户。
+- 账号 provider 路线（`account:bigmodel-individual-coding-plan` + `provider/updateAccountConfig`）：推
+  `{access:{type:'zhipu-account',entitled:true}}` 返回 received，但 `session/create` 仍报 registry 里没有
+  这个模型，还要再拆 `states` 与内置活动文件的语义才能往下走。收益只是「会话在 App 里显示成同一个账号」，先记着。
+- 只支持 ZCode App 3.12+，不做新旧两套握手兼容。理由：`--version` 区分不出新旧（3.11.2 和 3.12.2 都打印
+  `0.16.5`），两套握手会让 mock 和测试翻倍；App 自动更新，用户机器回不去老版本。

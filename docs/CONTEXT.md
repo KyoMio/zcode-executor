@@ -75,3 +75,12 @@ _Avoid_: 模型名、型号
 **思考等级（thought level）**：
 执行端一次回合里推理的深浅，建会话时定。
 _Avoid_: effort、reasoning、思考档位
+
+**个人 provider 文件（personal provider config file）**：
+我们写给 app-server 子进程的一份只含一个 provider 的 JSON，内容从 `~/.zcode/v2/config.json` 里选中的
+provider 换算而来，路径经环境变量 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 传给子进程（decisions D14）。
+_Avoid_: provider 表、registry
+
+**内置 provider 文件（builtin provider config file）**：
+ZCode App 自带的 `zcode-builtin.json`，路径经环境变量 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 告诉子进程；
+本项目只负责算出并传入这个路径，不生成也不改它的内容。
