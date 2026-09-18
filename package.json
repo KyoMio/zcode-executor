@@ -55,7 +55,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kyomio/zcode-executor.git"
+    "url": "git+https://github.com/KyoMio/zcode-executor.git"
   },
   "homepage": "https://github.com/kyomio/zcode-executor#readme",
   "bugs": "https://github.com/kyomio/zcode-executor/issues"
