@@ -6,7 +6,7 @@
 
 <p align="center">一个 Claude Code（也支持 Codex）插件：把一件想清楚的开发任务派给本机的 <a href="https://zcode.z.ai">ZCode</a>（GLM）执行，在隔离的 git worktree 里跑，每一次写操作都过「红线 + 模型审批」两道闸，最后用 <code>git diff</code> 和测试验收，而不是听执行端的自述。</p>
 
-<p align="center"><img src="https://img.shields.io/badge/version-v0.2.0-5B4CF0" alt="v0.2.0"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-303%20passing-brightgreen" alt="Tests"></p>
+<p align="center"><img src="https://img.shields.io/badge/version-v0.3.0-5B4CF0" alt="v0.3.0"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-303%20passing-brightgreen" alt="Tests"></p>
 
 ## 为什么
 
