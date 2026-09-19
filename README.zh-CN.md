@@ -14,7 +14,7 @@ Claude Code 擅长把任务想清楚，ZCode 擅长用很低的成本把代码�
 
 - **任务单是契约。** Claude 写 `tasks/T-xxx.md`，发给 ZCode 的消息只是门铃。
 - **worktree 是沙箱。** ZCode 在 `~/.zcode-executor/worktrees/<仓库名>` 里干活，永远不碰你的主检出。
-- **闸门决定谁来批。** ZCode 每一次工具调用都走三段：红线（越出执行副本的写一律停下）、模型审批（先快筛后慢判）、判不下来才找人。模型只会「放行」或「转人工」，从不替你「拒绝」。
+- **闸门决定谁来批。** ZCode 每一次工具调用都过红线、模型审批，必要时找人。可选 Jev 前筛能明确通过就提前结束；其余回到原 ZCode `fast` + `low` 快筛，必要时再慢判。模型只会「放行」或「转人工」，从不替你「拒绝」。
 - **证据胜过自述。** 验收看 `git diff` 和你的测试。
 
 ## 快速开始
@@ -46,7 +46,7 @@ Claude Code 擅长把任务想清楚，ZCode 擅长用很低的成本把代码�
 ## 两层结构
 
 - **工作流层**：派活与验收。任务单 → 隔离的 worktree → 本地会话 id → 后台 runner → `git diff` 与测试。CLI 命令和 skill 讲的都是这一层。
-- **安全管理层**：自动处理 ZCode 发来的审批请求。逻辑参考 Claude Code 的 **auto 模式**：一张谁也推不翻的红线表，然后是**快慢两段模型审批**（便宜的快筛只答 Y/N，快筛拿不准才进带理由的慢判），最后判不下来的交给人。审批模型只会「放行」或「转人工」，从不替你「拒绝」。
+- **安全管理层**：自动处理 ZCode 发来的审批请求。逻辑参考 Claude Code 的 **auto 模式**：一张谁也推不翻的红线表，然后是**可选 Jev 前筛 → ZCode 快筛 → 必要时慢判**，判不下来再交给人。Jev 增加提前通过的机会，不替代原快筛。审批模型只会「放行」或「转人工」，从不替你「拒绝」。
 
 ## 怎么运转
 
@@ -213,7 +213,7 @@ zcode-executor 自己就是这么开发出来的：
 
 | 命令 | 作用 |
 | --- | --- |
-| `doctor [--json]` | 零 token 自检：找到 `zcode.cjs` 与内置 provider 文件（ZCode App ≥ 3.12.2）、确认配置存在、真握手一次、报模型等级分配 |
+| `doctor [--json]` | 零 token 自检：找到 `zcode.cjs` 与内置 provider 文件（ZCode App ≥ 3.12.2）、确认配置存在、真握手一次、报模型等级及新启动 runner 将使用的审批链；不调用 Jev |
 | `models [--json]` | 列可用模型：思考等级、分到哪个等级 |
 | `new --cwd <绝对路径> [--title T] [--tier fast\|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]` | 登记会话（返回本地 id `x_…`）；ZCode 会话在第一次 `send` 时才建 |
 | `send <id> <正文\|-> [--task 文件] [--wait] [--timeout 秒] [--steer] [--stream] [--json]` | 投递；`--wait` 跟到结束或挂起；`--task` 是模型审批拿来当授权依据的任务单 |
@@ -236,15 +236,36 @@ zcode-executor 自己就是这么开发出来的：
 | `waitTimeoutSec` | `1800` | `send --wait` 超时，到点停掉回合 |
 | `preferredProvider` | 优先 coding plan | 同名模型在多个 provider 下时选哪个 |
 | `tiers` | 按名字自动分 | 手动指定 `fast` / `strong` 的模型 |
-| `review` | `{enabled, model, thought:"low", fastMaxTokens:300, slowMaxTokens:2000, timeoutMs:60000}` | 模型审批：开关、模型（默认 `fast` 档）、思考等级、两段预算、单次超时 |
-| `environment` / `sensitive` | `[]` | 给审批模型看的环境说明与敏感位置 |
+| `review` | `{enabled, model, thought:"low", fastMaxTokens:300, slowMaxTokens:2000, timeoutMs:60000}` | 模型审批：开关、ZCode 模型（默认 `fast` 档）、思考等级、两段预算、单次超时 |
+| `review.jev.apiKey` | 未配置 | 非空白 key 在 ZCode `fast` + `review.thought`（默认 `low`）前启用 Jev 前筛；缺失或全空白时保留原 ZCode 链 |
+| `environment` / `sensitive` | `[]` | 给 ZCode 模型审批看的环境说明与敏感位置（不发送给 Jev） |
+
+启用 Jev 时直接编辑 JSON 文件；不要把真实 key 放进命令参数、环境变量、提交到仓库的示例、issue 或日志：
+
+```json
+{
+  "review": {
+    "jev": {
+      "apiKey": "jev_请替换为你自己的密钥"
+    }
+  }
+}
+```
+
+随后收紧文件权限：
+
+```bash
+chmod 600 ~/.zcode-executor/config.json
+```
+
+配置 `review.jev.apiKey` 后，`config.json` 必须由当前 UID 拥有、是普通非符号链接文件，并且只有属主可访问（`0600` 或更严格），否则 zcode-executor 拒绝读取。没有环境变量 fallback，也没有 Jev mode 或 shadow 配置。删除 `apiKey`（或留成全空白）即可只走原 ZCode 审批链。`review.enabled:false` 会关闭包括 Jev 在内的**全部**模型审批；红线仍生效，其余审批请求转人工。
 
 ## 安全模型
 
 - **红线是代码常量，不是配置。** 带路径的工具写到执行副本之外一律停下等人。规则表的类别沿用 Claude Code auto 模式（凭据、外泄、破坏性 git、删除、供应链、持久化、部署、共享资源、外部写入）。
-- **审批模型从不拒绝。** 它只产出「放行」或「转人工」；调用失败、超时、解析不出都落到「转人工」。
+- **审批模型从不拒绝。** 最终只产出「放行」或「转人工」。Jev flag/error/skip 都回到 ZCode 快筛，再按需慢判；原快筛调用失败仍直接转人工。
 - **只在允许时放行。** 自动放行和 `approve` 都要求 options 里有 `allow_once`；没有「一直允许」。
-- **密钥不落地。** 从 ZCode 配置读到的 API key 只进 app-server 的 stdin，所有日志都脱敏，本工具从不写盘。
+- **密钥严格限域。** ZCode provider key 仍只走 app-server 路径。可选的 Jev key 是唯一主动持久化的密钥：只存在受属主权限保护的 `config.json` 中，只作为 Jev Authorization 发送，绝不复制进事件、挂起状态、runner 日志或 app-server 进程。
 - **应答绑定请求。** `approve`/`deny`/`answer` 都带请求 id，陈年应答一律丢弃。
 
 ## 开发
@@ -266,7 +287,11 @@ node --check lib/**/*.mjs
 
 **一件任务花多少？** 按 token 算，改一个文件在 ZCode 侧约 3 到 6.5 万输入（它的系统提示很重），审批每次快筛约 5k 输入、2 秒。折成 coding plan 的积分再打 ZCode 的折扣，只是用前沿模型做同一改动的零头。
 
-**审批模型判错了怎么办？** 它只会多问、不会多放：判不准的全部以退出码 5 交到你手上。
+**Jev 拿不准或不可用怎么办？** flag、错误、超时或非法响应都回到原 ZCode 快筛。原快筛未通过或无法解析才进慢判；原快筛调用失败仍直接转人工（退出码 5）。
+
+正文省略、缺少有效意图或必要输入被截断时，本地 skip，不发 Jev HTTP 请求。命令复杂本身不是跳过或拒绝理由。
+
+`doctor --json` 的 `review.pipeline`：有 key 为 `['jev','zcode-fast','zcode-slow']`，无 key 为后两项，禁用为 `[]`，配置失败为 `null`。兼容字段 `fastScreen` 不表示 Jev 替代原快筛。
 
 ## 许可证
 

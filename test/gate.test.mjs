@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createComplete } from '../lib/review/complete.mjs';
 import { createReview } from '../lib/review/run.mjs';
+import { createJevFastScreen } from '../lib/review/jev.mjs';
 import { createGate } from '../lib/gate.mjs';
 import { gatherIntent } from '../lib/intent.mjs';
 import { ExecutorError } from '../lib/errors.mjs';
@@ -79,7 +80,7 @@ function permissionParams(cwd, overrides = {}) {
   };
 }
 
-function makeGate({ texts, throwAt, complete, cwd = makeCwd(), config, evidenceProbe = probe } = {}) {
+function makeGate({ texts, throwAt, complete, fastScreen, cwd = makeCwd(), config, evidenceProbe = probe } = {}) {
   const scripted = scriptedComplete(texts ?? ['Y'], { throwAt });
   const events = [];
   const pendings = [];
@@ -89,6 +90,7 @@ function makeGate({ texts, throwAt, complete, cwd = makeCwd(), config, evidenceP
     pendingPath: path.join(cwd, 'pending.json'),
     onPending: (p) => pendings.push(p),
     complete: complete === undefined ? scripted.fn : complete, // 显式 null = 模型审批不可用
+    fastScreen,
     evidenceProbe,
     getIntent: () => [{ source: 'task', text: '任务单第一句' }],
     getPriorActions: () => ['Read'],
@@ -186,6 +188,95 @@ test('createReview：快筛 pass 直接 allow，只花一次调用的钱', async
   const review = createReview(fn);
   const result = await review({ toolName: 'Write', args: {}, workspaceRoot: '/w' }, { intent: [], environment: [], sensitive: [] });
   assert.deepEqual({ decision: result.decision, stage: result.stage }, { decision: 'allow', stage: 'review-fast' });
+  assert.equal(result.reviewer, 'zcode');
+  assert.equal(calls.length, 1);
+});
+
+test('createReview：Jev pass 直接 allow，ZCode complete 零调用并透传 metadata', async () => {
+  const { fn, calls } = scriptedComplete(['不应调用']);
+  const fastReview = {
+    reviewer: 'jev',
+    reviewModel: 'jev-1.13.0',
+    reviewSchema: 'approval-v1',
+    probabilities: { scope_conflict: 0.01 },
+    durationMs: 10,
+  };
+  const review = createReview(fn, {
+    fastScreen: async () => ({ decision: 'pass', outcome: 'pass', metadata: fastReview }),
+  });
+  const result = await review({ toolName: 'Write', args: {}, workspaceRoot: '/w' }, { intent: [], environment: [], sensitive: [] });
+  assert.deepEqual(result, {
+    decision: 'allow',
+    stage: 'review-fast',
+    reason: 'Jev 快筛通过',
+    ...fastReview,
+    preScreen: { ...fastReview, outcome: 'pass', reasonCode: 'pass' },
+  });
+  assert.equal(calls.length, 0);
+});
+
+test('createReview：Jev flag 和 error 先快筛再必要慢判，保留 fastReview 原语义', async () => {
+  for (const fast of [
+    { decision: 'flag', outcome: 'flag', metadata: { reviewer: 'jev', probabilities: { scope_conflict: 0.8 } } },
+    { decision: 'flag', outcome: 'error', metadata: { reviewer: 'jev', errorCode: 'http_429' } },
+  ]) {
+    const { fn, calls } = scriptedComplete(['N', '结论: allow | 理由: 慢判通过']);
+    const review = createReview(fn, { fastScreen: async () => fast });
+    const result = await review({ toolName: 'Write', args: {}, workspaceRoot: '/w' }, { intent: [], environment: [], sensitive: [] });
+    assert.equal(result.decision, 'allow');
+    assert.equal(result.stage, 'review-slow');
+    assert.deepEqual(result.fastReview, { outcome: fast.outcome, ...fast.metadata });
+    assert.equal(result.preScreen.outcome, fast.outcome);
+    assert.equal(result.reviewer, 'zcode');
+    assert.deepEqual(calls.map((c) => c.maxTokens), [300, 2000]);
+  }
+});
+
+test('createReview：Jev adapter 意外抛错回原快筛再慢判，不直接挂起', async () => {
+  const { fn, calls } = scriptedComplete(['N', '结论: ask | 理由: 慢判不确定']);
+  const review = createReview(fn, {
+    fastScreen: async () => { throw new Error('adapter secret body'); },
+  });
+  const result = await review({ toolName: 'Write', args: {}, workspaceRoot: '/w' }, { intent: [], environment: [], sensitive: [] });
+  assert.equal(result.decision, 'ask');
+  assert.equal(result.stage, 'review-slow');
+  assert.deepEqual(result.fastReview, { reviewer: 'jev', outcome: 'error', errorCode: 'adapter_error' });
+  assert.equal(JSON.stringify(result).includes('secret body'), false);
+  assert.equal(result.preScreen.outcome, 'error');
+  assert.equal(calls.length, 2);
+});
+
+test('createReview：Jev 未通过的四种结果均可由原快筛通过，原 action/context/prompt 不变', async () => {
+  const action = { toolName: 'Write', args: { content: '完整正文'.repeat(2000) }, workspaceRoot: '/w' };
+  const ctx = { intent: [{ source: 'task', text: '完整授权' }], environment: [], sensitive: [] };
+  const baseline = scriptedComplete(['Y']);
+  await createReview(baseline.fn)(action, ctx);
+  for (const outcome of ['flag', 'error', 'skip', 'throw']) {
+    const { fn, calls } = scriptedComplete(['Y']);
+    const result = await createReview(fn, { fastScreen: async (a, c) => {
+      assert.equal(a, action);
+      assert.equal(c, ctx);
+      if (outcome === 'throw') throw new Error('secret');
+      return { decision: 'flag', outcome, metadata: { reviewer: 'jev', reasonCode: 'evidence_omitted', probabilities: { scope_conflict: 0.99 }, attempts: 0 } };
+    } })(action, ctx);
+    assert.equal(result.decision, 'allow');
+    assert.equal(result.stage, 'review-fast');
+    assert.equal(result.reviewer, 'zcode');
+    assert.equal(result.preScreen.outcome, outcome === 'throw' ? 'error' : outcome);
+    if (outcome === 'skip') assert.equal(result.fastReview, undefined);
+    assert.deepEqual(calls, baseline.calls);
+  }
+});
+
+test('createReview：Jev 回落后原快筛调用失败仍 ask，不偷偷重试慢判', async () => {
+  const { fn, calls } = scriptedComplete([], { throwAt: 1 });
+  const result = await createReview(fn, { fastScreen: async () => ({ decision: 'flag', outcome: 'flag' }) })(
+    { toolName: 'Bash', args: {}, workspaceRoot: '/w' }, { intent: [], environment: [], sensitive: [] },
+  );
+  assert.equal(result.decision, 'ask');
+  assert.equal(result.stage, 'review-failed');
+  assert.equal(result.reviewer, 'zcode');
+  assert.equal(result.preScreen.outcome, 'flag');
   assert.equal(calls.length, 1);
 });
 
@@ -263,7 +354,166 @@ test('gate：快筛 pass 自动应答 allow，不落 pending，事件 review-fas
   assert.equal(gateEvents.length, 1);
   assert.equal(gateEvents[0].stage, 'review-fast');
   assert.equal(gateEvents[0].decision, 'allow');
+  assert.equal(gateEvents[0].reviewer, 'zcode');
   assert.equal(calls.length, 1);
+});
+
+test('gate：Jev pass 只写一条最终 review-fast 事件和筛选后 metadata', async () => {
+  const fastScreen = async () => ({
+    decision: 'pass',
+    outcome: 'pass',
+    metadata: {
+      reviewer: 'jev', reviewModel: 'jev-1.13.0', reviewSchema: 'approval-v1',
+      probabilities: { scope_conflict: 0.02 }, requestId: 'req_jev', durationMs: 12,
+    },
+  });
+  const { gate, events, calls, cwd } = makeGate({ fastScreen });
+  assert.deepEqual(await gate.handlers.permission(permissionParams(cwd)), { decision: 'allow' });
+  assert.equal(calls.length, 0);
+  assert.deepEqual(events, [{
+    type: 'executor.gate', stage: 'review-fast', decision: 'allow', reason: 'Jev 快筛通过',
+    reviewer: 'jev', reviewModel: 'jev-1.13.0', reviewSchema: 'approval-v1',
+    probabilities: { scope_conflict: 0.02 }, requestId: 'req_jev', durationMs: 12,
+    preScreen: {
+      reviewer: 'jev', reviewModel: 'jev-1.13.0', reviewSchema: 'approval-v1',
+      probabilities: { scope_conflict: 0.02 }, requestId: 'req_jev', durationMs: 12,
+      outcome: 'pass', reasonCode: 'pass',
+    },
+  }]);
+});
+
+test('gate：Jev error 后慢判只写一条最终事件，fastReview 经过 allowlist', async () => {
+  const fastScreen = async () => ({
+    decision: 'flag',
+    outcome: 'error',
+    metadata: {
+      reviewer: 'jev', reviewModel: 'jev-1.13.0', reviewSchema: 'approval-v1',
+      status: 503, attempts: 2, durationMs: 100, errorCode: 'http_503', forbidden: 'secret body',
+    },
+  });
+  const { gate, events, calls, cwd } = makeGate({ fastScreen, texts: ['N', '结论: allow | 理由: 慢判通过'] });
+  assert.deepEqual(await gate.handlers.permission(permissionParams(cwd)), { decision: 'allow' });
+  assert.equal(calls.length, 2);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].stage, 'review-slow');
+  assert.deepEqual(events[0].fastReview, {
+    reviewer: 'jev', outcome: 'error', reviewModel: 'jev-1.13.0', reviewSchema: 'approval-v1',
+    attempts: 2, status: 503, durationMs: 100, errorCode: 'http_503',
+  });
+  assert.equal(JSON.stringify(events).includes('secret body'), false);
+});
+
+test('gate：preScreen 四种结果只落一个终态，skip 不伪装 fastReview', async () => {
+  for (const outcome of ['pass', 'flag', 'error', 'skip']) {
+    const { gate, events, calls, cwd } = makeGate({ fastScreen: async () => ({
+      decision: outcome === 'pass' ? 'pass' : 'flag', outcome,
+      metadata: { reviewer: 'jev', reasonCode: 'evidence_omitted', attempts: outcome === 'skip' ? 0 : 1 },
+    }) });
+    assert.deepEqual(await gate.handlers.permission(permissionParams(cwd)), { decision: 'allow' });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].reviewer, outcome === 'pass' ? 'jev' : 'zcode');
+    assert.equal(events[0].preScreen.outcome, outcome);
+    assert.equal(calls.length, outcome === 'pass' ? 0 : 1);
+    if (outcome === 'skip') {
+      assert.equal(events[0].preScreen.reasonCode, 'evidence_omitted');
+      assert.equal(events[0].fastReview, undefined);
+    }
+  }
+});
+
+test('gate：Jev 回落的慢判 ask/失败及快筛失败均只有一个最终事件', async () => {
+  for (const scenario of [
+    { texts: ['N', '结论: ask | 理由: 证据不足'], stage: 'review-slow' },
+    { texts: ['N'], throwAt: 2, stage: 'review-failed' },
+    { texts: [], throwAt: 1, stage: 'review-failed' },
+  ]) {
+    const { gate, events, calls, cwd } = makeGate({ ...scenario,
+      fastScreen: async () => ({ decision: 'flag', outcome: 'flag', metadata: { reviewer: 'jev' } }),
+    });
+    const pending = gate.handlers.permission(permissionParams(cwd));
+    await sleep(5);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].stage, scenario.stage);
+    assert.equal(events[0].decision, 'ask');
+    assert.equal(events[0].reviewer, 'zcode');
+    assert.equal(events[0].preScreen.outcome, 'flag');
+    assert.equal(calls.length, scenario.throwAt ?? 2);
+    gate.answer({ decision: 'deny' });
+    await pending;
+  }
+});
+
+test('gate：硬规则、无 allow_once、review 禁用都不调用 Jev', async () => {
+  for (const scenario of ['hard', 'no-allow-option', 'review-disabled']) {
+    let screened = 0;
+    const { gate, cwd, events } = makeGate({
+      complete: scenario === 'review-disabled' ? null : undefined,
+      fastScreen: async () => { screened++; return { decision: 'flag', outcome: 'error' }; },
+    });
+    const overrides = scenario === 'hard' ? { input: { file_path: path.join(makeCwd(), 'outside') } }
+      : scenario === 'no-allow-option' ? { options: [] } : {};
+    const pending = gate.handlers.permission(permissionParams(cwd, overrides));
+    await sleep(5);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].stage, scenario);
+    assert.equal(screened, 0);
+    assert.equal(events[0].preScreen, undefined);
+    gate.answer({ decision: 'deny' });
+    await pending;
+  }
+});
+
+test('gate：metadata 值需验证，已知 Jev key 不从诊断字符串落盘', async () => {
+  const secret = 'SYNTHETIC_SECRET';
+  for (const outcome of ['pass', 'error']) {
+    const { gate, events, cwd } = makeGate({
+      config: { review: { jev: { apiKey: secret } } },
+      fastScreen: async () => ({ decision: outcome === 'pass' ? 'pass' : 'flag', outcome, metadata: {
+        reviewer: secret, reviewModel: secret, reviewSchema: secret, requestId: `req_${secret}`,
+        probabilities: { scope_conflict: 0.1, outside_worktree_write: Infinity, credential_or_exfiltration: -1, unknown: secret },
+        usage: { input_tokens: 12, output_tokens: secret, arbitrary: secret },
+        durationMs: -1, attempts: '3', status: 999, reasonCode: secret, errorCode: secret,
+        decision: 'deny', stage: 'hard', reason: secret,
+      } }),
+    });
+    assert.deepEqual(await gate.handlers.permission(permissionParams(cwd)), { decision: 'allow' });
+    assert.equal(events.length, 1);
+    assert.equal(JSON.stringify(events).includes(secret), false);
+    const metadata = events[0].preScreen;
+    assert.deepEqual(metadata.probabilities, { scope_conflict: 0.1 });
+    assert.deepEqual(metadata.usage, { input_tokens: 12 });
+    for (const key of ['requestId', 'reviewModel', 'reviewSchema', 'durationMs', 'attempts', 'status', 'reasonCode', 'errorCode']) {
+      assert.equal(metadata[key], key === 'reasonCode' && outcome === 'pass' ? 'pass' : undefined);
+    }
+  }
+});
+
+test('gate：真实 Jev adapter 的 pass/flag/skip 接入原链路，fake fetch 零外网', async () => {
+  for (const outcome of ['pass', 'flag', 'skip']) {
+    const requests = [];
+    const fastScreen = createJevFastScreen({ apiKey: 'synthetic-gate-key', fetchImpl: async (_url, request) => {
+      requests.push(JSON.parse(request.body));
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({
+        model: 'jev-1.13.0',
+        answers: Object.fromEntries(['scope_conflict', 'outside_worktree_write', 'credential_or_exfiltration', 'destructive_or_external', 'unrelated_or_gratuitous'].map((id) => [id, { type: 'noul', noul: outcome === 'flag' ? 0.8 : 0.01 }])),
+      }) };
+    } });
+    const { gate, events, calls, cwd } = makeGate({ fastScreen });
+    const input = outcome === 'skip' ? { file_path: path.join(cwd, 'a.txt'), content: '原始正文，不得丢弃' } : { command: 'printf hello | sort' };
+    assert.deepEqual(await gate.handlers.permission(permissionParams(cwd, { toolName: outcome === 'skip' ? 'Write' : 'Bash', input })), { decision: 'allow' });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].preScreen.outcome, outcome);
+    assert.equal(events[0].preScreen.reviewSchema, 'approval-v2');
+    assert.equal(requests.length, outcome === 'skip' ? 0 : 1);
+    assert.equal(calls.length, outcome === 'pass' ? 0 : 1);
+    if (outcome === 'skip') {
+      assert.equal(events[0].preScreen.attempts, 0);
+      assert.equal(events[0].preScreen.reasonCode, 'evidence_omitted');
+      assert.ok(calls[0].user.includes(input.content));
+      assert.ok(calls[0].user.includes('任务单第一句'));
+      assert.equal(calls[0].maxTokens, 300);
+    }
+  }
 });
 
 test('gate：快筛 flag + 慢判 allow → 应答 allow，事件 review-slow', async () => {

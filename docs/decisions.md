@@ -2,7 +2,7 @@
 
 每条记「定了什么、为什么、什么情况下值得重开」。D1 到 D5 于 2026-09-07 定下，D6 到 D9 是同日需求对齐时补的，
 D10 是 T0.2 探针之后补的，D11 是检查点 1 撞出来的，D12 D13 是 2026-09-08 做阶段 2 时定的，
-D14 是 2026-09-18 适配 ZCode App 3.12.2 时补的。
+D14 是 2026-09-18 适配 ZCode App 3.12.2 时补的，D15 是同日确定 Jev 可选快筛时补的；D16 记录本轮批准的 Jev 前筛修订，替代 D15 的路由与审计方案。
 
 ## D1 定位：派单与验收层，协议是别人的事
 
@@ -173,6 +173,36 @@ provider，不能靠它临时插入。写用户自己的 `~/.zcode/v2/provider_c
 
 重开条件：zcode 提供一种不落盘就能推 api-key 型 provider 的方法；或者 legacy 的 `~/.zcode/v2/config.json`
 不再存明文 apiKey（那样密钥的落盘问题从根上消失）。
+
+## D15 Jev 以插件配置里的 key 选择快筛，不设 shadow 阶段（历史决定，路由已由 D16 修订）
+
+> 以下保留当时的决定与理由，不是现行路由。原替代快筛、失败直接慢判及 `fastReview` 写入方案由 D16 修订；key 来源、文件保护、无 shadow 等约束继续保留。历史校准不构成新路线的安全或性能证明。
+
+定了什么：`~/.zcode-executor/config.json` 的 `review.jev.apiKey` 为非空时，闸门第一段直接使用固定版本 Jev；没有 key 时回退到已有 ZCode fast 档 + `low` 思考等级快筛。Jev 只替代快筛，flag 与任何调用/校验失败都进入同一份 ZCode 慢判。红线、`allow_once`、慢判与挂起不变。首版不提供 shadow/off/screen、provider 枚举或环境变量 key 来源。
+
+为什么：本机历史回放已经完成校准，用户选择跳过 shadow。配置文件比 detached runner 继承环境变量稳定，也能被 `doctor` 确定性检查；只有一份 key 来源则没有优先级歧义。让 Jev 失败回落慢判，而不是直接挂起，可以保持两段模型审批的可用性；让慢判仍走 ZCode，避免把外部服务故障扩大成人工审批风暴。
+
+安全与数据边界：含 Jev key 的 config 必须是当前 uid 拥有的普通非符号链接文件，权限不宽于 `0600`；否则拒绝读取。只发送字段 allowlist 下的最小 state，Write/Edit 正文不出机，路径与凭据脱敏；key、Authorization、完整 state 和原始响应 body不进事件、pending、runner.log 或 app-server 子进程。Jev questions 全是独立负向风险，不使用“日常操作”或综合 confidence。事件保留现有 stage/decision，只附加 reviewer 与筛选后的 typed metadata；慢判事件通过嵌套 `fastReview` 说明 Jev flag/失败原因。
+
+代价：key 以明文保存在用户目录的配置文件中，因此必须强制文件 owner/mode，不再满足旧 RULES “除临时 provider 文件外不落 key”的限制；这是用户为稳定读取明确选择的权衡。配置改动只影响之后由命令启动/重启且重新读取配置的 runner，已经在跑的连接不热更新。
+
+重开条件：需要系统 keychain、企业 secret store、自定义 TypeSafe endpoint/模型、多个 key 来源；Jev 不稳定到“失败回落慢判”仍不可接受；或用户明确需要按会话/项目开关。
+
+## D16 Jev 改为可选前筛，原 ZCode 快筛完整保留
+
+定了什么：按已批准的 [修复与优化方案](jev-hardening-plan.md)，Jev 是提前通过层，不再替代 ZCode 快筛。红线和 `allow_once` 在前；非空白 `review.jev.apiKey` 启用 Jev。证据充分且五项概率均达标的 pass 提前 allow；flag/error/skip、超时、非法响应和 adapter 异常都进入原 ZCode fast + low 快筛，结果未通过或无法解析才慢判。原快筛调用失败仍 `review-failed` / ask，慢判失败仍 ask。无 key 保留原链路，关闭 review 的原挂起合同不变。
+
+为什么：保留原快筛的判断机会，让 Jev 不能提前通过时回到既有审批链，而不是强制慢判。前筛仍有提前放行权，增加一层本身不是安全证明；必要证据门槛、输入脱敏、响应校验和严格 deadline 必须同时成立。
+
+证据边界：Write/Edit/MultiEdit 正文省略、缺有效意图、命令或授权信息截断、无法可靠脱敏时，本地 skip，零 Jev HTTP 请求。复杂性不是风险：完整且任务相关的管道、子 shell、批处理、项目脚本仍可前筛；确实缺少必要事实才回落。原快筛收到原 action/context，不接 Jev 概率指令；不上传正文来换取直通率，不扩大原隐私权限。
+
+审计与诊断：每次请求仍只有一个最终 `executor.gate`；`preScreen` 独立记录 Jev pass/flag/error/skip，最终 stage/reviewer 区分 Jev 提前通过、ZCode 快筛通过与慢判。历史 `fastReview` 保持旧 Jev 回落含义，不静默改义。`doctor` 新增 `review.pipeline`，有 key 为 `['jev','zcode-fast','zcode-slow']`，无 key 为后两项，禁用为 `[]`，配置失败为 `null`（不可确定）；兼容 `fastScreen` 不表示替代原快筛。
+
+保留：配置文件唯一 key 来源、属主与权限检查、无环境变量后门、无 shadow/mode、固定模型、零运行时依赖；不并发竞速。本轮题目去重与边界修订升级为 `approval-v2`（模型仍为 `jev-1.13.0`），尚未重新真实校准；阈值维持 0.20，不放宽。
+
+代价：Jev 未提前通过会增加串行等待；本地 skip 无这笔 HTTP 开销。省略正文的写操作不再享有 Jev 直通。必须用同批样本比较端到端耗时、提前通过率、回落与费用；旧真实 Write pass 和旧校准仅是历史证据，不改写成新路线已验。
+
+重开条件：配对测量无净收益，需缩小适用范围或调整预算；若要恢复正文省略动作的直通、让原快筛调用异常也进入慢判，须另行决策并验收，不能借本轮暗改。
 
 ## 补记：模型审批的模型从已推的 provider 表里选，不再多一次 readState
 

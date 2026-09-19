@@ -80,7 +80,7 @@
   `hasAllowOnce`，闸门放行、挂起落盘、`approve` 三处共用同一份，不各写各的。
 - runner 只认 `answer.json` 里 requestId 与当前挂起一致的应答，对不上的丢弃：上一轮留下的答案不能放行这一轮。
 - 白名单检查在 `new` 做一次，runner 启动时对登记簿里的 cwd 再做一次。
-- API key、token 一类字符串永不打印；落盘只允许 D14 那一个临时文件；`doctor` 报 config.json 只报存在与否、provider 个数、选中的 providerId 和该 provider 有没有明文 apiKey，永不报 key 本身。
+- API key、token 一类字符串永不打印。落盘只允许两处：D14 的 0600 临时个人 provider 文件，以及用户明确配置的 `~/.zcode-executor/config.json` 中 `review.jev.apiKey`（D15；含 key 时必须当前 uid 拥有、普通非符号链接且权限不宽于 0600）。`doctor` 只报 key 是否配置，永不报 key 本身。
 - 红线表是代码常量，不读配置。
 
 ## 9. 测试

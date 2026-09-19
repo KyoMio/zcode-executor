@@ -3,7 +3,7 @@
 // 不发 session/send，不花额度（3.12 起只有 doctor 握手：create deferred + close；models、new 纯本地）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, symlink, writeFile, readFile, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, symlink, writeFile, readFile, rm } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
@@ -56,11 +56,16 @@ async function writeZcodeConfig(config = ZCODE_CONFIG) {
 // 起 mock、准备家目录与 zcode 配置，spawnSync 跑 CLI；version 经 startMock 注入（T2.1b 第 11 条），
 // mock 环境变量整包用 ...mock.env；noBuiltin 拿掉内置 provider 文件的环境变量——mock 旁边没有
 // ../config/provider/zcode-builtin.json，这就是「App 低于 3.12」在 doctor 眼里的样子
-async function runCli(args, { version, configPath, zcodeConfig, noBuiltin = false } = {}) {
+async function runCli(args, { version, configPath, zcodeConfig, executorConfig, noBuiltin = false } = {}) {
   const mock = await startMock({ version });
   dirs.push(mock.dir);
   const home = await mkdtemp(path.join(os.tmpdir(), 'zcode-cli-home-'));
   dirs.push(home);
+  if (executorConfig !== undefined) {
+    const executorConfigPath = path.join(home, 'config.json');
+    await writeFile(executorConfigPath, JSON.stringify(executorConfig));
+    await chmod(executorConfigPath, 0o600);
+  }
   const zcodeConfigPath = configPath ?? (await writeZcodeConfig(zcodeConfig));
   const env = {
     ...process.env,
@@ -291,18 +296,85 @@ test('doctor：正常 → 退出码 0，--json 里有内置文件、apiKey 在�
   assert.deepEqual(out.handshake.warnings, []);
 });
 
-test('doctor：人读输出三步各一行', async () => {
+test('doctor：配置 review.jev.apiKey 时只报告已配置与新 runner 使用 Jev，不泄漏密钥', async () => {
+  const secret = 'jev_doctor_secret_never_print';
+  const { run, recordPath } = await runCli(['doctor', '--json'], {
+    executorConfig: { review: { jev: { apiKey: secret } } },
+  });
+  assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+  const out = JSON.parse(run.stdout);
+  assert.deepEqual(out.review, { enabled: true, fastScreen: 'jev', jevConfigured: true, pipeline: ['jev', 'zcode-fast', 'zcode-slow'] });
+  assert.equal(run.stdout.includes(secret), false);
+  assert.equal(run.stderr.includes(secret), false);
+  const methods = readRecord(recordPath).map((message) => message.method).filter(Boolean);
+  assert.deepEqual([...new Set(methods)].sort(), ['session/close', 'session/create']);
+
+  const plain = await runCli(['doctor'], {
+    executorConfig: { review: { jev: { apiKey: secret } } },
+  });
+  assert.equal(plain.run.status, 0, `stderr: ${plain.run.stderr}`);
+  assert.match(plain.run.stdout, /Jev 前筛 → ZCode 快筛 → 慢判/);
+  assert.equal(`${plain.run.stdout}${plain.run.stderr}`.includes(secret), false);
+});
+
+test('doctor：未配置 Jev key 时报告新 runner 使用 ZCode 快筛', async () => {
+  const { run } = await runCli(['doctor', '--json']);
+  assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+  assert.deepEqual(JSON.parse(run.stdout).review, {
+    enabled: true,
+    fastScreen: 'zcode',
+    jevConfigured: false,
+    pipeline: ['zcode-fast', 'zcode-slow'],
+  });
+});
+
+test('doctor：review.enabled:false 报模型审批关闭，不误报会使用 Jev', async () => {
+  const secret = 'jev_disabled_secret_never_print';
+  const jsonRun = await runCli(['doctor', '--json'], {
+    executorConfig: { review: { enabled: false, jev: { apiKey: secret } } },
+  });
+  assert.equal(jsonRun.run.status, 0, `stderr: ${jsonRun.run.stderr}`);
+  assert.deepEqual(JSON.parse(jsonRun.run.stdout).review, {
+    enabled: false,
+    fastScreen: null,
+    jevConfigured: true,
+    pipeline: [],
+  });
+  assert.equal(`${jsonRun.run.stdout}${jsonRun.run.stderr}`.includes(secret), false);
+
+  const plain = await runCli(['doctor'], {
+    executorConfig: { review: { enabled: false, jev: { apiKey: secret } } },
+  });
+  assert.equal(plain.run.status, 0, `stderr: ${plain.run.stderr}`);
+  assert.match(plain.run.stdout, /模型审批：关闭/);
+  assert.doesNotMatch(plain.run.stdout, /将使用 Jev|将使用 ZCode/);
+  assert.equal(`${plain.run.stdout}${plain.run.stderr}`.includes(secret), false);
+});
+
+test('doctor：插件配置错误时审批链不可确定，不虚报 ZCode', async () => {
+  const { run } = await runCli(['doctor', '--json'], {
+    executorConfig: { review: { jev: { apiKey: 123 } } },
+  });
+  assert.equal(run.status, 1);
+  assert.deepEqual(JSON.parse(run.stdout).review, {
+    enabled: null, fastScreen: null, jevConfigured: null, pipeline: null,
+  });
+});
+
+test('doctor：人读输出三步与模型审批状态各一行', async () => {
   const { run, mock } = await runCli(['doctor']);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
   const lines = run.stdout.split('\n').filter((l) => l.trim());
   assert.deepEqual(
-    lines.map((l) => l.slice(0, 9)),
+    lines.slice(0, 3).map((l) => l.slice(0, 9)),
     ['doctor ① ', 'doctor ② ', 'doctor ③ '],
   );
+  assert.equal(lines.length, 4);
   assert.match(lines[0], /版本 0\.16\.5，内置 provider 文件 /);
   assert.ok(lines[0].includes(mock.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE), lines[0]);
   assert.match(lines[1], /2 个可用 provider，选中 builtin:bigmodel-coding-plan，apiKey 在/);
   assert.match(lines[2], /builtin:bigmodel-coding-plan/);
+  assert.match(lines[3], /doctor ④ 模型审批：开启，新启动 runner 将使用 ZCode 快筛/);
 });
 
 test('doctor：选中的 provider 没有明文 apiKey → ② 先报「apiKey 不在」，③ 失败，退出码 1（断粮预警）', async () => {

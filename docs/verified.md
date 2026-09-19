@@ -11,6 +11,26 @@
 | 凭据 | `~/.zcode/v2/config.json`，`builtin:bigmodel-coding-plan` 带 key，模型 `GLM-5.3` / `GLM-5.3-Flash`；`builtin:zai-start-plan` 禁用且 models 为空 |
 | Node | app-server 子进程需要带 `node:sqlite` 的 Node ≥ 22；zcode-acp 的 `backend/resolve.js` 有探测逻辑 |
 
+## Jev 前筛三级链（D16，T7 零费用验收）
+
+- 已实现 Jev pass 提前通过；flag/error/skip/异常进入原 ZCode 快筛，再必要慢判；原快筛调用失败仍 ask。题目版本 approval-v2，固定 jev-1.13.0，阈值维持 0.20。
+- TDD 分片：doctor RED 4→GREEN 9/9；adapter 多次 RED→GREEN 最终25/25；gate/review 75/75；runner 29/29；real-review 脚本4/4。最终 `npm test` **384/384**，退出码0，版本标记检查通过；无运行时依赖。
+- 独立只读评审发现并复验修复：凭据续行/转义空格/引用值拼接的残尾外发；路径转义空白误标。复验使用合成秘密与 fake fetch，风险凭据本地 skip、零请求，错误路径原文保留。最终限定范围 Approve，无未解决 Required/Critical；不保证未知编码、任意 shell、符号链接竞态或模型真实正确率。
+- preScreen 四种结果与最终 reviewer 区分、唯一 gate 事件、原正文回原快筛均有集成断言。响应固定模型、metadata 值过滤、最终 deadline 检查、非2xx body 取消、jitter、窗口截断 skip 有回归测试。取消不可信 body promise 不等待，不声称能强制释放恶意替身资源。
+- doctor 显示完整 pipeline；配置错误时审批状态 null，不误报 ZCode。real-review 的固定 Write 现在本地 skip Jev，明确不是 Jev HTTP 性能探针；review disabled 在 spawn/付费前拒绝。
+- 本轮无真实 Jev HTTP、无付费 session/send、无新性能比较。approval-v2 的中文数据校准及三级链配对测量仍待另行确认；旧样本不作为新版本安全证明。
+- 中间一次 review-runner 套件出现 runner-gone，临时日志已由测试清理，根因未证实；之后独立12/12与最终全量对应用例全部通过，不将未复现问题说成已查明修复。
+
+## Jev 可选快筛（2026-09-18，旧替代路线的历史记录）
+
+> 下列记录对应修复前版本，不能作为新三级前筛路线的验收证据。后续审查发现了路径替换、未知凭据处理、metadata 值与 deadline 竞态等缺口；这里的“已验证”仅限当时样本，不代表全面安全保证。
+
+- 自动化 fake transport 已验证固定 `jev-1.13.0` / `approval-v1`、五项 Noul、0.20 阈值、最小 state、正文省略、凭据脱敏、路径归一、有界重试和覆盖响应正文读取的总 deadline。
+- gate/runner mock 已验证：Jev pass 零次 `workspace/generateText`；Jev flag/error/adapter throw 恰好进入一次 ZCode 慢判；一次审批仍只落一条最终 `executor.gate`。
+- doctor 已验证只报告新启动 runner 的选择，不调用 TypeSafe、不 `session/send`，并且不显示 key。
+- `scripts/real-review.mjs` 已支持配置 key / 无 key 两条真实路径，要求显式 `--yes`，且不打印完整 Jev state、工具正文或模型原文。
+- 真实 TypeSafe key 真机验证（2026-09-18）：先派会话写 `jev-smoke.txt`，3 秒默认 deadline 得到 `deadline_exceeded`，随后按设计进入一次 ZCode 慢判并放行；同一最小 action 用 15 秒临时 deadline 直调 Jev，4.665 秒返回 pass。由此把内部默认总 deadline 改为 10 秒（不扩大公开配置面）。再派同一真实会话写 `jev-direct-pass.txt`，Jev 1.290 秒直接 pass，事件为唯一 `review-fast:allow`，ZCode 慢判 0 次；实际 model `jev-1.13.0`，五项概率均 <=0.20。事件负向核对无 key、Authorization、完整 state 或任务正文。mock 仍负责网络/429/schema 等不可控故障，不能把这些表述成真机故障证据。
+
 ## 跨平台（2026-09-08，CI 实测）
 
 - GitHub Actions 上 ubuntu-latest 与 windows-latest、Node 22 与 24 四档全跑得起来，不用装依赖。

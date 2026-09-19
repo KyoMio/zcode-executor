@@ -14,7 +14,7 @@ Claude Code is good at thinking a task through. ZCode grinds out the code at a f
 
 - **The task file is the contract.** Claude writes `tasks/T-xxx.md`; the message to ZCode is just a doorbell.
 - **The worktree is the sandbox.** ZCode works in `~/.zcode-executor/worktrees/<repo>`, never in your main checkout.
-- **The gate decides who gets asked.** Every tool call ZCode wants to make passes three stages: hard rules (writes outside the worktree always stop), a model review (fast screen, then a slow judgment), and finally a human if the model can't decide. The model can only *allow* or *ask*; it never *denies* on your behalf.
+- **The gate decides who gets asked.** Every tool call ZCode wants to make passes hard rules, model review, and a human if needed. Optional Jev pre-screening can allow early; otherwise the original ZCode `fast` + `low` screen runs, followed by slow review only when needed. The models can only *allow* or *ask*; they never *deny* on your behalf.
 - **Evidence beats narrative.** You accept with `git diff` and your test suite.
 
 ## Quick start
@@ -48,7 +48,7 @@ Either way, say what "done" looks like — which command should pass, which file
 ## Two layers
 
 - **Workflow layer** — dispatch and acceptance: task file → isolated worktree → local session id → background runner → `git diff` and tests. This is what the CLI commands and the skill are about.
-- **Safety layer** — automatic handling of ZCode's permission requests. Its logic follows Claude Code's *auto mode*: a fixed table of hard rules that nothing can override, then a **two-stage model review** (a cheap fast screen that answers Y/N, and a slow judgment with reasons only when the screen is unsure), and finally a human for anything the model cannot pass. The reviewer can *allow* or *ask*; it can never *deny* on your behalf.
+- **Safety layer** — automatic handling of ZCode's permission requests. Its logic follows Claude Code's *auto mode*: a fixed table of hard rules that nothing can override, then **optional Jev pre-screening → ZCode fast screen → slow review if needed**, then a human when review cannot pass. Jev adds an early-pass path; it does not replace the ZCode fast screen. The reviewers can *allow* or *ask*; they can never *deny* on your behalf.
 
 ## How it works
 
@@ -215,7 +215,7 @@ The split keeps the expensive model on judgment and the cheap one on typing.
 
 | Command | What it does |
 | --- | --- |
-| `doctor [--json]` | Zero-token self-check: finds `zcode.cjs` and the bundled `zcode-builtin.json` (ZCode App ≥ 3.12.2), confirms the config exists, does one real handshake, reports the model tiers |
+| `doctor [--json]` | Zero-token self-check: finds `zcode.cjs` and the bundled `zcode-builtin.json` (ZCode App ≥ 3.12.2), confirms the config exists, does one real handshake, reports model tiers and the review pipeline for a newly started runner; it does not call Jev |
 | `models [--json]` | Lists available models with thought levels and tier assignment |
 | `new --cwd <abs> [--title T] [--tier fast\|strong] [--thought L] [--deny "Tool…"] [--provider id] [--json]` | Registers a session (returns a local id `x_…`); the ZCode session is created on first `send` |
 | `send <id> <text\|-> [--task file] [--wait] [--timeout s] [--steer] [--stream] [--json]` | Queues a message; `--wait` follows until done or blocked; `--task` is the task file the review uses as your authorization |
@@ -238,15 +238,36 @@ Exit codes: `0` done · `1` usage / cannot start · `2` refused (whitelist, unkn
 | `waitTimeoutSec` | `1800` | `send --wait` timeout; the turn is stopped when it fires |
 | `preferredProvider` | coding-plan providers first | Which provider to pick when the same model exists under several |
 | `tiers` | auto by name | Override which model is `fast` / `strong` |
-| `review` | `{enabled, model, thought:"low", fastMaxTokens:300, slowMaxTokens:2000, timeoutMs:60000}` | Model review: on/off, model (default: the `fast` tier), thought level, token budgets, per-call timeout |
-| `environment` / `sensitive` | `[]` | Extra facts and sensitive locations shown to the reviewing model |
+| `review` | `{enabled, model, thought:"low", fastMaxTokens:300, slowMaxTokens:2000, timeoutMs:60000}` | Model review: on/off, ZCode model (default: the `fast` tier), thought level, token budgets, per-call timeout |
+| `review.jev.apiKey` | absent | A non-blank key enables Jev pre-screening ahead of ZCode `fast` + `review.thought` (default `low`); absent or all-whitespace keeps the original ZCode chain |
+| `environment` / `sensitive` | `[]` | Extra facts and sensitive locations shown to ZCode review calls (not sent to Jev) |
+
+To enable Jev, edit the JSON file directly—never put a real key in a command argument, shell environment, checked-in example, issue, or log:
+
+```json
+{
+  "review": {
+    "jev": {
+      "apiKey": "jev_REPLACE_WITH_YOUR_KEY"
+    }
+  }
+}
+```
+
+Then protect the file:
+
+```bash
+chmod 600 ~/.zcode-executor/config.json
+```
+
+When `review.jev.apiKey` is set, `config.json` must be a regular, non-symlink file owned by the current UID and accessible only by that owner (`0600` or stricter). Otherwise zcode-executor refuses to load it. There is no environment-variable fallback and no Jev mode or shadow setting. Remove `apiKey` (or leave it all-whitespace) to use only the original ZCode review chain. Setting `review.enabled` to `false` disables **all** model review, including Jev; hard rules still apply and other permission requests wait for a human.
 
 ## Safety model
 
 - **Hard rules** are code constants, never configuration: any path-bearing tool writing outside the worktree stops for a human. The rule table follows the categories of Claude Code's auto mode (credentials, exfiltration, destructive git, deletion, supply chain, persistence, deploys, shared resources, external writes).
-- **The reviewer never denies.** Its only outputs are *allow* and *ask*. A failed, timed-out or unparseable review falls back to *ask*.
+- **The reviewers never deny.** Their only final outputs are *allow* and *ask*. Jev flag/error/skip returns to the ZCode fast screen, then slow review if needed. A ZCode fast-call failure still asks a human.
 - **Allow only when allowed.** Automatic approval and `approve` both require an `allow_once` option; there is no "always allow".
-- **Secrets stay in the pipe.** The API key read from ZCode's config goes only into the app-server's stdin; it is scrubbed from every log and never written to disk by this tool.
+- **Secrets are tightly scoped.** ZCode's provider key still goes only to the app-server path. The optional Jev key is the one deliberate persistent secret: it lives only in owner-protected `config.json`, is sent only as Jev authorization, and is never copied to events, pending state, runner logs or the app-server process.
 - **Answers are bound to requests.** Every `approve`/`deny`/`answer` carries the request id; stale answers are discarded.
 
 ## Development
@@ -268,7 +289,11 @@ Pure `.mjs`, zero runtime dependencies, no build step. Design documents live in 
 
 **How much does a task cost?** Measured in tokens, a one-file change is roughly 30–65k input on ZCode's side (its system prompt is heavy); the review adds about 5k input and 2 seconds per fast screen. Billed against the coding plan's credits at ZCode's discounted rate, that is a small fraction of doing the same edit with a frontier model.
 
-**What if the reviewer is wrong?** It can only over-ask, never over-allow: anything it cannot confidently pass lands in your lap as exit code 5.
+**What if Jev cannot decide?** Flag, timeout, error or invalid response returns to the original ZCode fast screen. A non-passing or unparseable fast result goes to slow review; a failed fast call asks you directly (exit code 5).
+
+Jev is skipped locally, with no HTTP request, when action bodies are omitted, intent is missing, or required input is truncated. Command complexity alone is not a reason to skip or reject.
+
+`doctor --json` reports `review.pipeline`: `['jev','zcode-fast','zcode-slow']` with a key, the last two without one, `[]` when disabled, and `null` on configuration failure. The legacy `fastScreen` field does not mean Jev replaces ZCode.
 
 ## License
 

@@ -22,6 +22,10 @@ description: 把一件已经想清楚的开发任务交给本机 ZCode（GLM）�
 4. **不替用户批越界。** 挂起（退出码 5）是执行端在等人的信号：审批请求用 AskUserQuestion 转给用户，
    拿到决定再 `approve` / `deny`。模型审批只会放行或转人工、从不拒绝，替用户点「允许」越过这一层，
    等于把人工这道闸门拆了。
+5. **Jev 只由配置启用前筛。** 非空白 `review.jev.apiKey` 启用提前通过层；pass 结束审批，flag/error/skip 回到
+   原 ZCode `fast` + `review.thought`（默认 `low`）快筛，未通过或无法解析才慢判；原快筛调用失败仍转人工。
+   正文省略、缺有效意图或必要输入截断时本地 skip，不发 HTTP；复杂命令本身不是跳过理由。无 key 保留原链，
+   无环境变量 fallback 或 mode/shadow；`review.enabled:false` 关闭全部模型审批。
 
 ## 一个任务的完整走法
 
@@ -65,9 +69,9 @@ git -C <主仓绝对路径> log --oneline -1                # 切新分支前核
 git -C "$WT" checkout -b task/T-yyy main              # 切新分支：在执行副本
 ```
 
-## 模型等级与思考等级
+## 模型等级、思考等级与 Jev 前筛
 
-按等级选模型，不写模型名——模型换代不用改习惯。`models` 能看每个等级当前分到了谁。
+按等级选 ZCode 模型，不写模型名——模型换代不用改习惯。`models` 能看每个等级当前分到了谁。Jev 只增加可选前筛，不改变执行会话的 `--tier`，原 ZCode 快筛与慢判仍保留。
 
 | 活儿 | 建议 |
 | --- | --- |
@@ -78,6 +82,26 @@ git -C "$WT" checkout -b task/T-yyy main              # 切新分支：在执行
 - **思考等级默认 `high`，都不用调。** Flash 类模型不要往低调，实测效果差。
 - provider 已优先 coding plan；同名模型在多个 provider 下并存时不用管，插件自己选对。
 - 模型和思考等级建会话时定，同一条会话后续投递沿用。难活别复用之前建的 fast 会话，新开一条。
+
+可选启用 Jev 前筛时，编辑 `~/.zcode-executor/config.json`；**不要**把真实 key 放进命令参数、环境变量、任务单、聊天消息或仓库文件：
+
+```json
+{
+  "review": {
+    "jev": {
+      "apiKey": "jev_请替换为用户自己的密钥"
+    }
+  }
+}
+```
+
+保存后必须执行：
+
+```bash
+chmod 600 ~/.zcode-executor/config.json
+```
+
+含 key 的配置文件必须由当前 UID 拥有、是普通非符号链接文件且权限不宽于 `0600`，否则命令会报配置错误。删除 `apiKey` 或留成全空白可只走原 ZCode 链；不要找 Jev 环境变量或 mode/shadow 开关。`doctor` 显示新 runner 的审批链，不联网调用 Jev、不显示 key：`review.pipeline` 有 key 为 `['jev','zcode-fast','zcode-slow']`，无 key 为后两项，禁用为 `[]`，配置错误为 `null`。兼容 `fastScreen` 不表示替代原快筛。
 
 ## 退出码与应对
 
@@ -136,12 +160,13 @@ zcode-executor cancel <id>                                # 叫停：挂起的�
   那是保护不是障碍；两个 agent 同时改同一批文件会互相覆盖。
 - **不要把「zcode 说改好了」当验收写进汇报。** 验收只认 `git diff` 和测试结果（铁律 2）。
 - 不要投第四轮。三四轮没过，改任务单（铁律 3）。
-- **任务单里别写凭据。** 任务单全文会作为授权依据发给模型审批。
+- **任务单里别写凭据。** 任务单会作为授权依据进入模型审批；启用 Jev 且通过本地证据检查时，脱敏后的任务契约与操作摘要会送往 TypeSafe；必要内容被截断则本地跳过。
+- **不要用 shell 参数或环境变量配置 Jev key。** 唯一入口是受 `0600` 保护的 `review.jev.apiKey`；示例永远用占位值。
 
 ## 命令速查
 
 ```bash
-zcode-executor doctor [--json]                  # 零 token 自检：zcode 版本、配置存在、真握手、等级分配
+zcode-executor doctor [--json]                  # 零 token 自检：zcode、配置、握手、等级及新 runner 的审批链
 zcode-executor models [--json]                  # 可用模型、思考等级、禁用原因、自动分到哪个等级
 zcode-executor list [--project 关键字] [--json]  # 登记簿里的会话：本地 id、sess_、上次结果、是否挂起
 zcode-executor new --cwd <绝对路径> [--title T] [--tier fast|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]

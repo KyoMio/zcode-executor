@@ -1,6 +1,6 @@
 # PRD — zcode-executor
 
-> 状态：第一版已实现（2026-09-08），下面写的都是现在的行为。需求于 2026-09-07 对齐（31 个问题一轮轮问完）。
+> 状态：第一版已实现（2026-09-08）；模型审批部分已按批准的 [Jev 修订路线](jev-hardening-plan.md) 更新为目标合同，实施与验证进度以对应记录为准。需求于 2026-09-07 对齐（31 个问题一轮轮问完）。
 > 术语以 [CONTEXT.md](CONTEXT.md) 为准；为什么这么定见 [decisions.md](decisions.md)；
 > 本机实测事实见 [verified.md](verified.md)；接手开发见 `docs/handoff/handoff-20260908.md`（本地记录，不进仓库）。
 
@@ -54,7 +54,7 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 
 | 命令 | 作用 |
 | --- | --- |
-| `doctor [--json]` | 零 token 自检三步：`zcode.cjs` 旁边找得到 `config/provider/zcode-builtin.json`（3.12+ 判据，找不到提示升级 ZCode App）→ `~/.zcode/v2/config.json` 存在 → 真握手一次；顺带报模型等级每档选了谁、有没有档空着，以及选中 provider 在 config.json 里有没有明文 apiKey |
+| `doctor [--json]` | 零 token 自检三步：`zcode.cjs` 旁边找得到 `config/provider/zcode-builtin.json`（3.12+ 判据，找不到提示升级 ZCode App）→ `~/.zcode/v2/config.json` 存在 → 真握手一次；顺带报模型等级、provider key 状态，以及新启动 runner 的审批链（可选 Jev 前筛 → ZCode 快筛 → 慢判）；不联网探测 Jev |
 | `models [--json]` | 从 `~/.zcode/v2/config.json` 本地换算可用模型（3.12 起 `workspace/readState` 已删，不握手），显示每个模型的思考等级、自动分到哪个等级 |
 | `list [--project 关键字] [--json]` | 列登记簿里的会话：id、标题、cwd、等级、上次结果、是否挂起 |
 | `new --cwd <绝对路径> [--title T] [--tier fast\|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]` | 建会话。cwd 必须在白名单内；不是 worktree 只警告不拒 |
@@ -92,7 +92,7 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
   `doctor` 握手时把返回的 `settings.model.available` 里 `zcode-executor` 名下的模型和本地清单比对，缺的进警告。`config.json` 的 `tiers` 可覆盖。不按模型名写死，模型换代不用改代码。
 - **provider 优先 coding plan**（配置 `preferredProvider` 可改），国内 `bigmodel` 与国际 `zai` 站点哪个启用用哪个。
 - **不给 `--tier`** 用 `fast` 档，没有 `fast` 才用 `strong`。
-- **派活的思考等级默认 `high`**，模型没有 `high` 档就不传，跟模型默认。`--thought` 可覆盖。**模型审批默认 `low`**（审批只需判是不是日常工作，high 让快筛多花几秒和几百 token；用户 2026-09-08 定），配置 `review.thought` 可改。
+- **派活的思考等级默认 `high`**，模型没有 `high` 档就不传，跟模型默认。`--thought` 可覆盖。ZCode 模型审批默认 `low`，配置 `review.thought` 可改；若配置里有非空白 `review.jev.apiKey`，原快筛之前增加 Jev 前筛，ZCode 快筛与慢判仍用该思考等级。
 - **档位只有 `build`**。不开 `--mode`。
 - **`--deny`** 默认不拿掉任何工具。
 
@@ -103,7 +103,7 @@ Flash 类模型思考等级不要往低调，效果差。
 
 执行端发来的 `interaction/requestPermission` 和 `interaction/requestUserInput` 都进闸门。
 
-**审批请求**走三段，每段的结果作为一条 `executor.gate` 事件写进 `events.jsonl`，事件里的 stage 取这几个值：
+**审批请求**走三段，每个请求写一个最终 `executor.gate` 事件到 `events.jsonl`，事件里的 stage 取这几个值（Jev 前筛细节嵌在 `preScreen`，历史 `fastReview` 保留旧义）：
 `hard`（红线）、`no-allow-option`（options 里没有 `allow_once`，放不出来）、`review-fast`（快筛放行）、
 `review-slow`（慢判）、`review-failed`（模型调用或解析失败）、`review-disabled`（配置关了模型审批）、
 `gate-error`（闸门自己出错）、`question`（提问直接挂起）。
@@ -113,13 +113,14 @@ Flash 类模型思考等级不要往低调，效果差。
    - **本项目专属**：带路径参数的工具（Write、Edit 等）路径解析成绝对路径后不在 cwd 之下 → 转人工。
      Bash 的路径没法可靠解析，不做红线，交给模型审批并在提示词里写明「任何越出执行副本的写入或删除一律转人工」。
    - 命中即挂起，不进模型审批。
-2. **模型审批**：经 `workspace/generateText`，用 `fast` 档模型、思考 `low`。两段：快筛 pass / flag，flag 再慢判。
-   快筛输出预算 300 token（`review.fastMaxTokens`），慢判 2000（`review.slowMaxTokens`）。
+2. **模型审批**：可选 Jev 前筛 → 原 ZCode `fast` + `low` 快筛 → 必要时慢判。非空白 `review.jev.apiKey` 启用前筛；Jev pass 提前放行，flag/error/skip（含超时、非法响应、adapter 异常）都回到原快筛。无 key 时原链路不变。原快筛结果未通过或无法解析才进入慢判；原快筛调用失败仍以 `review-failed` 转人工。
+   原快筛收到既有的完整 action/context，不使用 Jev 缩减后的 state，也不接受 Jev 概率作为指令；提示词、思考等级与解析规则沿用原合同。ZCode 快筛输出预算 300 token（`review.fastMaxTokens`），慢判 2000（`review.slowMaxTokens`）。Jev 不设 shadow/mode，也不从环境变量读取 key。含 Jev key 的 `~/.zcode-executor/config.json` 必须是当前用户拥有的普通非符号链接文件且权限不宽于 `0600`，否则配置读取失败。
    慢判要求**第一行就是结论行**（`结论: allow` / `结论: ask` / `结论: deny <规则 id>`），理由写在后面——
    结论放最后一行时推理一长就被截断，整次判定作废。
-   **只产出放行或转人工，从不拒绝**；模型返回解析不了、调用失败 → 转人工。
-   输入：任务单全文 + 本会话所有投递正文（意图）、本回合之前的工具调用摘要、`config.json` 的
+   **只产出放行或转人工，从不拒绝**；慢判返回解析不了、调用失败 → 转人工。
+   ZCode 慢判输入：任务单全文 + 本会话所有投递正文（意图）、本回合之前的工具调用摘要、`config.json` 的
    `environment` / `sensitive`、证据（目标文件是否已存在、工作区脏不脏）、cwd 下的 AGENTS.md / CLAUDE.md。
+   Jev 前筛只发送脱敏且最小化的任务契约、最近消息和工具输入。Write/Edit/MultiEdit 正文省略、缺少有效意图、命令或授权信息截断、无法可靠脱敏时，本地 skip，不发 HTTP，直接运行原快筛。Jev 的五项负向风险为 scope conflict、worktree 外写、凭据/外发、破坏/外部副作用、明显无关/无必要，全部概率 `<=0.20` 且本地证据充分才 pass；复杂 Bash、管道、子 shell、批处理和项目脚本本身不是风险或跳过理由。
    soft 规则原样搬，任务单同时点到「动作」和「对象」才算清除。
    放行 → 应答 `allow_once`。
 3. **挂起**：写 `runs/<id>/pending.json`（kind = permission，含工具名、参数、命中的红线或转人工理由），
@@ -128,7 +129,11 @@ Flash 类模型思考等级不要往低调，效果差。
 **提问**（zcode 的 AskUserQuestion）不进红线和模型审批，直接挂起，kind = question，含问题和选项。
 `answer` 应答。build 档下不会有 ExitPlanMode。
 
-**`--task`** 是模型审批的意图来源。不给的话意图只有投递正文，越界判断没有依据，几乎全转人工——skill 里要求必给。
+**`--task`** 是模型审批的意图来源。不给的话意图只有投递正文，越界判断没有依据，快筛更容易 flag——skill 里要求必给。
+
+每次审批只记一个最终 `executor.gate`：`stage:"review-fast"` + `reviewer:"jev"` 表示前筛提前通过，同一 stage + `reviewer:"zcode"` 表示原快筛通过；慢判/调用失败的最终 reviewer 为 ZCode。独立 `preScreen` 记录 Jev pass/flag/error/skip 与允许的原因、耗时、次数和概率等元数据；skip 不伪装成模型 flag。历史 `fastReview` 保持旧 Jev 回落含义，不改作 ZCode 快筛记录。终态统计不重复计数，字段合同见 SPEC。
+
+`doctor --json` 的 `review.pipeline`：启用且有 key 为 `['jev','zcode-fast','zcode-slow']`，无 key 为 `['zcode-fast','zcode-slow']`，关闭 review 为 `[]`，配置读取失败为 `null` 并说明不可确定。旧 `fastScreen` 字段仅兼容第一可选筛选器的名称，不代表替代 ZCode 快筛。
 
 ## 7. 存储
 
@@ -137,7 +142,7 @@ Flash 类模型思考等级不要往低调，效果差。
   config.json                      allowedRoots（默认 [~/.zcode-executor/worktrees]）、waitTimeoutSec（1800）、
                                    preferredProvider、tiers 覆盖、environment、sensitive、
                                    review（enabled、model、thought 默认 low、fastMaxTokens 300、
-                                   slowMaxTokens 2000、timeoutMs）。都可选
+                                   slowMaxTokens 2000、timeoutMs、jev.apiKey）。都可选；含 Jev key 时文件必须 0600
   sessions.json                    登记簿：本地 id、zcode 的 sess_（首回合后）、标题、cwd、是否 worktree、等级、模型、思考等级、创建时间、上次结果
   worktrees/<仓库名>/               执行副本，Claude 建
   runs/<本地 id>/

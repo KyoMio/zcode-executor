@@ -2,7 +2,7 @@
 // 全部用临时目录，不读真机 ~/.zcode-executor，不碰 zcode 的配置。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, readdir, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, writeFile, readFile, readdir, rm, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ExecutorError } from '../lib/errors.mjs';
@@ -151,4 +151,87 @@ test('loadConfig：review.slowMaxTokens 校验——正数收下、非法抛 Exe
   } finally {
     await rm(home, { recursive: true, force: true });
   }
+});
+
+test('loadConfig：0600 config 里的 review.jev.apiKey 启用 Jev，密钥原值不 trim', async () => {
+  const home = await tmp('zcode-config-jev-');
+  const configPath = path.join(home, 'config.json');
+  await writeFile(configPath, JSON.stringify({ review: { jev: { apiKey: '  jev_test_secret  ' } } }), { mode: 0o600 });
+
+  const config = loadConfig(home);
+  assert.equal(config.review.jev.apiKey, '  jev_test_secret  ');
+  assert.equal(config.warnings.some((warning) => warning.includes('jev')), false);
+});
+
+test('loadConfig：review.jev.apiKey 缺失或全空白时回退，旧配置不增加权限门槛', async () => {
+  const home = await tmp('zcode-config-jev-');
+  const configPath = path.join(home, 'config.json');
+  await writeFile(configPath, JSON.stringify({ review: { thought: 'low' } }), { mode: 0o644 });
+  assert.equal(loadConfig(home).review.jev.apiKey, undefined);
+
+  await writeFile(configPath, JSON.stringify({ review: { jev: { apiKey: '   ' } } }), { mode: 0o644 });
+  assert.equal(loadConfig(home).review.jev.apiKey, undefined);
+});
+
+test('loadConfig：含 Jev key 的 config 权限宽于 0600 时拒绝且不泄漏 key', async () => {
+  const home = await tmp('zcode-config-jev-');
+  const configPath = path.join(home, 'config.json');
+  const secret = 'jev_never_print_this';
+  await writeFile(configPath, JSON.stringify({ review: { jev: { apiKey: secret } } }), { mode: 0o600 });
+  await chmod(configPath, 0o644);
+
+  assert.throws(() => loadConfig(home), (err) => {
+    assert.ok(err instanceof ExecutorError);
+    assert.equal(err.exitCode, 1);
+    assert.match(err.message, /chmod 600/);
+    assert.ok(err.message.includes(configPath));
+    assert.equal(err.message.includes(secret), false);
+    return true;
+  });
+});
+
+test('loadConfig：含 Jev key 的 config 是符号链接时拒绝且不泄漏 key', async () => {
+  const home = await tmp('zcode-config-jev-');
+  const target = path.join(home, 'real-config.json');
+  const configPath = path.join(home, 'config.json');
+  const secret = 'jev_symlink_secret';
+  await writeFile(target, JSON.stringify({ review: { jev: { apiKey: secret } } }), { mode: 0o600 });
+  await symlink(target, configPath);
+
+  assert.throws(() => loadConfig(home), (err) => {
+    assert.ok(err instanceof ExecutorError);
+    assert.equal(err.exitCode, 1);
+    assert.match(err.message, /符号链接|普通文件/);
+    assert.equal(err.message.includes(secret), false);
+    return true;
+  });
+});
+
+test('loadConfig：review.jev 未知字段给 warning 但不泄漏 key', async () => {
+  const home = await tmp('zcode-config-jev-');
+  const configPath = path.join(home, 'config.json');
+  const secret = 'jev_warning_secret';
+  await writeFile(configPath, JSON.stringify({ review: { jev: { apiKey: secret, timeoutMs: 3 } } }), { mode: 0o600 });
+
+  const config = loadConfig(home);
+  assert.equal(config.review.jev.apiKey, secret);
+  assert.equal(config.warnings.length, 1);
+  assert.match(config.warnings[0], /review\.jev.*timeoutMs/);
+  assert.equal(config.warnings[0].includes(secret), false);
+});
+
+test('loadConfig：review.jev 与 apiKey 类型错误时拒绝且错误不序列化整个配置', async () => {
+  const home = await tmp('zcode-config-jev-');
+  const configPath = path.join(home, 'config.json');
+  await writeFile(configPath, JSON.stringify({ review: { jev: 'bad' } }), { mode: 0o600 });
+  assert.throws(() => loadConfig(home), (err) => err instanceof ExecutorError && /review\.jev/.test(err.message));
+
+  const secret = { nested: 'jev_object_secret' };
+  await writeFile(configPath, JSON.stringify({ review: { jev: { apiKey: secret } } }), { mode: 0o600 });
+  assert.throws(() => loadConfig(home), (err) => {
+    assert.ok(err instanceof ExecutorError);
+    assert.match(err.message, /review\.jev\.apiKey/);
+    assert.equal(err.message.includes(secret.nested), false);
+    return true;
+  });
 });
