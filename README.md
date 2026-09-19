@@ -242,7 +242,29 @@ Exit codes: `0` done · `1` usage / cannot start · `2` refused (whitelist, unkn
 | `review.jev.apiKey` | absent | A non-blank key enables Jev pre-screening ahead of ZCode `fast` + `review.thought` (default `low`); absent or all-whitespace keeps the original ZCode chain |
 | `environment` / `sensitive` | `[]` | Extra facts and sensitive locations shown to ZCode review calls (not sent to Jev) |
 
-To enable Jev, edit the JSON file directly—never put a real key in a command argument, shell environment, checked-in example, issue, or log:
+### Optional: enable Jev pre-screening
+
+[Jev](https://docs.typesafe.ai/introduction) is TypeSafe's structured decision model: it returns probabilities rather than explanations. It **does not execute tasks or replace the original ZCode fast screen**. It only tries to pass actions early when the evidence is sufficient:
+
+```text
+After hard-rule and allow_once checks
+  → Jev pre-screen: pass early, otherwise continue
+  → ZCode fast screen (default fast + low): pass, otherwise continue
+  → ZCode slow review: allow or ask a human
+```
+
+- Five risk checks cover task-boundary conflicts, writes outside the workspace, credential exposure or sensitive-data exfiltration, destructive/external side effects, and unrelated actions. The current model is pinned to `jev-1.13.0`; all five probabilities must be at most `0.20` for early approval. This is a screening threshold, not a safety guarantee.
+- Write/Edit/MultiEdit bodies are not sent to Jev; these actions currently skip pre-screening locally. Missing intent, truncated required input, or credentials that cannot be reliably redacted also cause a local skip, with **no Jev HTTP request**. Command complexity alone is not a reason to skip.
+- Jev flags, timeouts, network errors, and invalid responses go to the original ZCode fast screen—not directly to denial or mandatory slow review. A failed ZCode fast-screen call still asks a human.
+- Early passes can save subsequent review calls; other requests add serial latency. Jev currently has a 10-second total budget, separate from ZCode's `review.timeoutMs`. Actual speed and cost benefits depend on the pass rate.
+
+#### 1. Configure the API key
+
+Obtain your own API key from [TypeSafe](https://typesafe.ai/) (see the [official quick start](https://docs.typesafe.ai/introduction/quickstart)). It is separate from your ZCode provider key; do not edit ZCode App's configuration for this.
+
+Edit `~/.zcode-executor/config.json`. **Merge the `review.jev` field into your existing configuration; keep allowedRoots, provider settings, and other fields rather than replacing the whole file.** If you set `ZCODE_EXECUTOR_HOME`, edit `config.json` in that directory instead.
+
+Never put a real key in a command argument, shell environment, checked-in example, issue, or log. The value below is only a placeholder; real keys need not use that prefix:
 
 ```json
 {
@@ -254,13 +276,38 @@ To enable Jev, edit the JSON file directly—never put a real key in a command a
 }
 ```
 
-Then protect the file:
+#### 2. Protect the configuration file
+
+The file must already exist. Restrict its permissions (adjust the path if you use a custom configuration directory):
 
 ```bash
 chmod 600 ~/.zcode-executor/config.json
 ```
 
 When `review.jev.apiKey` is set, `config.json` must be a regular, non-symlink file owned by the current UID and accessible only by that owner (`0600` or stricter). Otherwise zcode-executor refuses to load it. There is no environment-variable fallback and no Jev mode or shadow setting. Remove `apiKey` (or leave it all-whitespace) to use only the original ZCode review chain. Setting `review.enabled` to `false` disables **all** model review, including Jev; hard rules still apply and other permission requests wait for a human.
+
+#### 3. Verify configuration and activation
+
+```bash
+zcode-executor doctor --json
+```
+
+With review enabled and a key configured, the output should include:
+
+```json
+"review": {
+  "enabled": true,
+  "fastScreen": "jev",
+  "jevConfigured": true,
+  "pipeline": ["jev", "zcode-fast", "zcode-slow"]
+}
+```
+
+`doctor` does not call Jev. It confirms configuration and the selected chain, **not TypeSafe key validity, account credit, or network connectivity**. This excerpt is part of the full JSON response; `fastScreen` is a compatibility field, not an indication that ZCode's fast screen was replaced.
+
+Newly started runners read the configuration; existing runners do not hot-reload it. Let the current runner exit before sending another turn to pick up changes. Actual approvals record `pass / flag / error / skip` and filtered diagnostics in `executor.gate.preScreen`, never the key or full Jev state.
+
+**To disable only Jev:** remove `review.jev.apiKey`, keeping the original ZCode fast and slow review chain. Do not use `review.enabled:false` for this—it disables all model review.
 
 ## Safety model
 

@@ -240,7 +240,29 @@ zcode-executor 自己就是这么开发出来的：
 | `review.jev.apiKey` | 未配置 | 非空白 key 在 ZCode `fast` + `review.thought`（默认 `low`）前启用 Jev 前筛；缺失或全空白时保留原 ZCode 链 |
 | `environment` / `sensitive` | `[]` | 给 ZCode 模型审批看的环境说明与敏感位置（不发送给 Jev） |
 
-启用 Jev 时直接编辑 JSON 文件；不要把真实 key 放进命令参数、环境变量、提交到仓库的示例、issue 或日志：
+### 可选：启用 Jev 前筛
+
+[Jev](https://docs.typesafe.ai/introduction) 是 TypeSafe 的结构化判断模型，返回概率而不是生成解释。它**不负责执行任务，也不替代原 ZCode 快筛**，只尝试提前通过证据充分的动作：
+
+```text
+红线与 allow_once 检查通过后
+  → Jev 前筛：明确通过就放行；其余进入下一层
+  → ZCode 快筛（默认 fast + low）：通过就放行；未通过进入下一层
+  → ZCode 慢判：放行或转人工
+```
+
+- 前筛检查五类风险：任务边界冲突、工作目录外写入、凭据暴露或敏感数据外发、破坏性或外部副作用、与任务无关的操作。当前固定 `jev-1.13.0`，五项概率均不高于 `0.20` 才可能提前通过；这是筛选阈值，不是安全保证。
+- Write/Edit/MultiEdit 的正文不发给 Jev，当前这类动作直接本地跳过前筛。缺少有效意图、必要输入被截断或无法可靠脱敏时也跳过，**不产生 Jev HTTP 请求**。命令复杂本身不是跳过理由。
+- Jev 标记风险、超时、网络错误或响应非法，都交给原 ZCode 快筛，而不是直接拒绝或强制慢判。原快筛调用失败仍转人工。
+- Jev 通过可省掉后续审批；未通过则多一段串行等待。Jev 当前总预算为 10 秒，独立于配置中的 ZCode `review.timeoutMs`；速度和费用收益取决于实际通过率。
+
+#### 1. 配置 API key
+
+从 [TypeSafe 官方站点](https://typesafe.ai/) 获取自己的 API key（参考[官方快速开始](https://docs.typesafe.ai/introduction/quickstart)）。它与 ZCode 的 provider key 是两套独立凭据，不需要修改 ZCode App 的配置。
+
+编辑 `~/.zcode-executor/config.json`。**已有配置请合并下面的 `review.jev` 字段，保留 allowedRoots、provider 等其他设置，不要整份覆盖。** 若配置了 `ZCODE_EXECUTOR_HOME`，应编辑该目录下的 `config.json`。
+
+不要把真实 key 放进命令参数、环境变量、提交到仓库的示例、issue 或日志；下面的值仅为占位符，不要求真实 key 使用该前缀：
 
 ```json
 {
@@ -252,13 +274,38 @@ zcode-executor 自己就是这么开发出来的：
 }
 ```
 
-随后收紧文件权限：
+#### 2. 保护配置文件
+
+文件必须已存在；随后收紧权限（自定义配置目录请替换路径）：
 
 ```bash
 chmod 600 ~/.zcode-executor/config.json
 ```
 
 配置 `review.jev.apiKey` 后，`config.json` 必须由当前 UID 拥有、是普通非符号链接文件，并且只有属主可访问（`0600` 或更严格），否则 zcode-executor 拒绝读取。没有环境变量 fallback，也没有 Jev mode 或 shadow 配置。删除 `apiKey`（或留成全空白）即可只走原 ZCode 审批链。`review.enabled:false` 会关闭包括 Jev 在内的**全部**模型审批；红线仍生效，其余审批请求转人工。
+
+#### 3. 验证与生效
+
+```bash
+zcode-executor doctor --json
+```
+
+审批开启且 key 已配置时，输出应包含：
+
+```json
+"review": {
+  "enabled": true,
+  "fastScreen": "jev",
+  "jevConfigured": true,
+  "pipeline": ["jev", "zcode-fast", "zcode-slow"]
+}
+```
+
+`doctor` 不调用 Jev，所以它只确认配置与所选链路，**不验证 TypeSafe key 是否有效、账户额度或网络连通性**。上述片段位于完整 JSON 输出中；`fastScreen` 是兼容字段，不表示替代原快筛。
+
+配置由新启动的 runner 读取；已有 runner 不热更新，需等它退出后再投递。实际审批的 `executor.gate.preScreen` 会记录 `pass / flag / error / skip` 及筛选后的诊断信息，不记录 key 或完整 Jev state。
+
+**只想停用 Jev：**删除 `review.jev.apiKey`，保留原 ZCode 快筛和慢判。不要用 `review.enabled:false` 代替，它会关闭整个模型审批链。
 
 ## 安全模型
 
