@@ -110,9 +110,9 @@ Jev 快筛：
 - `session/create` 参数：`workspace:{workspacePath, workspaceKey}` 都填 cwd，`mode:"build"`，`persistence:"immediate"`，
   `titleGenerationEnabled:false`，**必带 `model`**（3.12 起取代 `runtimeModel`，decisions D14；旧形状见
   verified.md「第一次真机投递」），可选 `thoughtLevel`、`toolDenylist`。resume 不带 `model`。
-- 会话事件经 `session/subscribe` 推送，原样追加到事件文件。回合的边界是投递之后第一个 `turn.started` 到 `turn.completed`、`turn.failed`、`turn.terminal`；
+- 会话事件经 `session/subscribe` 推送，原样追加到事件文件。回合的边界是投递之后第一个 `turn.started` 到 `turn.completed`、`turn.failed`；
   `turn.started.payload.inputSource` 为 `background_task` 的回合是后台工具自己触发的，整段不认（协议文档「Background Tasks」）。第一版不做无信号兜底。
-- `session/send` 在回合进行中再发一条即是 zcode 原生的插话，不打断。
+- 插话仍从 runner 的 steer 队列投递，3.12.2 上必然被拒（-32010），失败要可见；换通道是 T6-B 的事。
 - 收场：`session/close` 后 stdin EOF。
 - 模型列表和等级分配从 `~/.zcode/v2/config.json` 本地换算（3.12 前是另调 `workspace/readState`，
   该方法已被删，见 decisions D14）；`doctor` 握手时把 `session/create` 返回的 `settings.model.available`
@@ -174,8 +174,11 @@ Jev 快筛：
   本项目事件形状 `{"type":"executor.<动作>", "at":<ISO 时间>, ...}`，
   动作有 `send`（正文、task 路径）、`steer`、`result`（每次回合结算）、`recreated`（会话在 zcode 侧丢了后重建）、`gate`（stage：hard / no-allow-option / review-fast / review-slow / review-failed / review-disabled / gate-error / question，decision：allow|ask，ruleId，reason；review-fast 可另带 reviewer / reviewModel / reviewSchema / probabilities / usage / durationMs）、
   `approve`、`deny`、`answer`、`cancel`。
-- 结算：`turn.completed` → outcome `done`；`turn.failed` → `failed`；cancel 触发的结束 → `cancelled`；
-  `--wait` 到点 → 发 `session/stop`，outcome `timeout`；挂起 → `blocked`。
+- 结算按 `turn.completed.payload.resultType`（2026-09-21 对照 ZCode 源码：非 success 也走 `turn.completed`）：
+  缺省或 `success` → outcome `done`；`cancelled` → `cancelled`；`error_*` → `failed`（reason 带 resultType 值）；
+  `turn.failed` → `failed`；cancel 触发的结束 → `cancelled`；`--wait` 到点 → 发 `session/stop`（带 id 的请求），
+  outcome `timeout`（stop 生效后回合以 resultType:"cancelled" 收尾是预期现象，对外仍报 timeout：
+  退出码 3 是「再投一次接着做」，4 才是回合异常）；挂起 → `blocked`。
 - 退出码：done 0；用法错或起不来 1；被拒 2；timeout 3；failed / cancelled 4；blocked 5。
 - `--wait` 默认取配置的 `waitTimeoutSec`，`--timeout` 覆盖。挂起时立刻返回 5，不等超时。
 - `follow` 只读 `last.json` 的 mtime 和 `events.jsonl` 的尾部，不接协议。`status` 只读文件。

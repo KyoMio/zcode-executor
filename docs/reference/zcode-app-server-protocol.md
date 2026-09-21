@@ -278,18 +278,31 @@ Send a prompt.
 }
 ```
 
+Sending another `session/send` while a turn is already running is rejected with
+JSON-RPC error code `-32010`, message `A prompt is already running for this
+session`（2026-09-21 对照 ZCode 源码核实：3.12.2 起直接拒绝，3.11 的排队插话已删除）.
+
 ### `session/stop`
 
-Stop the current turn (fire-and-forget).
+Stop the current turn. This is a **request**: it must carry an `id` —
+app-server ignores any message without an `id`（2026-09-21 对照 ZCode 源码核实：
+3.14.0 与本机 3.12.2 的 zcode.cjs）.
+
+**Request:**
 
 ```json
 {
+  "id": 8,
   "method": "session/stop",
   "params": {
     "sessionId": "sess_abc123"
   }
 }
 ```
+
+**Response:** `{}`（result 形状可能另有字段，忽略）。叫停生效后，回合以
+`turn.completed`（`payload.resultType: "cancelled"`，见下）结束，而不是
+`turn.failed`。
 
 ### `session/read`
 
@@ -477,6 +490,18 @@ The turn completed.
 }
 ```
 
+`payload.resultType` can be（2026-09-21 对照 ZCode 源码核实；非 success 也走
+`turn.completed`，不走 `turn.failed`）:
+
+| `resultType` | 含义 |
+| --- | --- |
+| `success` | 正常结束 |
+| `cancelled` | 回合被叫停（`session/stop`） |
+| `error_max_turns` | 达到回合数上限 |
+| `error_max_budget` | 达到预算上限 |
+| `error_during_execution` | 回合执行中出错 |
+| `error_max_tool_calls` | 达到工具调用次数上限 |
+
 ### `turn.failed`
 
 The turn failed.
@@ -537,32 +562,6 @@ not currently translate these — they are tracked as a future enhancement (see
 {
   "type": "turn.steerDrained",
   "payload": {}
-}
-```
-
-### `turn.terminal`
-
-Terminal turn lifecycle event (app-server 0.15.2+). Carries a status plus
-usage. The bridge currently relies on `turn.completed`/`turn.failed` instead;
-documented here for completeness.
-
-```json
-{
-  "method": "session/event",
-  "params": {
-    "sessionId": "sess_abc123",
-    "seq": 49,
-    "type": "turn.terminal",
-    "payload": {
-      "kind": "turn.terminal",
-      "status": "success",
-      "resultType": "end_turn",
-      "durationMs": 12345,
-      "inputTokens": 1234,
-      "outputTokens": 567,
-      "totalTokens": 1801
-    }
-  }
 }
 ```
 

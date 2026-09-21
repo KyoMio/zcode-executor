@@ -5,6 +5,11 @@
 // 目标是「真机行为的复刻」：每个默认返回形状旁注明出处（verified.md / verified.md / 探针实测日期）。
 // 复刻的是 ZCode App 3.12.2 的 app-server（verified.md「3.12.2 直连探针实测」与 docs/reference/zcode-app-server-protocol.md「3.12.2 变化」，2026-09-18）：provider 表不再由
 // 客户端推，而是启动时从两个环境变量指的文件读；session/create 用 model、generateText 用 selection；
+// 2026-09-21 对照 ZCode 源码（3.14.0 与本机 3.12.2 的 zcode.cjs）补三处：app-server 对没有 id 的
+// 消息一律忽略，session/stop 必须带 id 才被处理（回 {}），叫停生效后回合以 turn.completed
+// （payload.resultType="cancelled"）结束；回合进行中再发 session/send 直接拒绝 -32010
+// （3.11 的排队插话已删）；turn.completed.payload.resultType 取值
+// success | cancelled | error_max_turns | error_max_budget | error_during_execution | error_max_tool_calls。
 // 检查点 5 真机（2026-09-18，verified.md「3.12.2 直连探针实测」表第 5 行）：api-key 型 provider 的模型请求
 // **不会**先向客户端要 provider 运行时头（interaction/requestProviderRuntimeHeaders），回合与 generateText
 // 都直接用个人文件里的 key。这个反向请求只在剧本 runtimeHeaders:true 时发（测客户端的内置应答用）。
@@ -59,6 +64,12 @@
 //   generateTextErrors: { "<第 n 次调用>": {code, message} }  那一次调用直接回错误（1 起）
 //   generateTextDelayMs: 0                                  每次 generateText 延后多少毫秒再应答
 //                                                         （配 review.timeoutMs 测超时取消）
+//   completedResultType: "success"                          正常结束的 turn.completed 的 resultType
+//                                                         （2026-09-21 对照 ZCode 源码：非 success 也走
+//                                                         turn.completed，如 error_max_turns）
+//   stopIgnored: true                                       session/stop 照常回 {} 但不叫停回合：
+//                                                         模拟「叫停已发出，运行时这一步的提问已经在路上」
+//                                                         的真机竞态（cancel 与挂起赛跑的用例用）
 import { createInterface } from 'node:readline';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -148,7 +159,10 @@ const state = {
   deferredIds: new Set(), // persistence:'deferred' 建的会话：真机 session/list 不列（探针 2026-09-18）
   seq: 0, // session/event 单调序号
   sendCount: 0, // 第 n 个跑回合的 session/send 用第 n 个 turn（steer 不占）
-  activeTurn: false, // 回合进行中：再收到的 session/send 按 steer 排队，不跑新回合
+  activeTurn: false, // 回合进行中：再收到的 session/send 直接拒 -32010（2026-09-21 对照 ZCode 源码，3.12.2 起）
+  // session/stop 落在回合进行中：runTurn 下一个检查点以 resultType=cancelled 收尾。
+  // 权宜：单会话假设（与 activeTurn 同），多会话用例出现时改成 per-session
+  stopRequested: false,
   generateTextCount: 0, // 第 n 次 workspace/generateText（T3.2：剧本按次序回，错误按次序插）
 };
 const pendingAnswers = new Map(); // 信封 id → 反向请求条目（存引用，见 askServer）
@@ -314,10 +328,18 @@ async function requestRuntimeHeaders({ sessionId, modelSelection }) {
 async function runTurn(sessionId) {
   const turn = script.turns?.[state.sendCount] ?? {};
   state.sendCount += 1;
+  state.stopRequested = false; // 新回合重置：上一回合的叫停不波及这一回合
   const ev = (type, payload) => {
     state.seq += 1;
     // docs/reference/zcode-app-server-protocol.md「Event Types」：session/event 通知形状
     send({ method: 'session/event', params: { sessionId, seq: state.seq, type, payload: payload ?? {} } });
+  };
+  // 2026-09-21 对照 ZCode 源码：叫停生效后回合以 turn.completed（payload.resultType="cancelled"）结束。
+  // runTurn 每往前推一步前看一眼 stopRequested，看到就以 cancelled 提前收尾
+  const stopped = () => {
+    if (!state.stopRequested) return false;
+    ev('turn.completed', { resultType: 'cancelled', usage: { totalTokens: 0 } });
+    return true;
   };
   ev('turn.started', {});
   // 会话的模型：create 时记下的；resume 进来的会话 mock 没建过，退到表里第一个（权宜：resume 不校验会话存在）
@@ -330,13 +352,16 @@ async function runTurn(sessionId) {
     ev('turn.failed', { error: { message: headersError } });
     return;
   }
+  if (stopped()) return;
   for (const e of turn.events ?? []) {
     if (e.delayMs) await sleep(e.delayMs);
+    if (stopped()) return;
     ev(e.type, e.payload);
   }
   // T2.6 第 3 条：真机 build 档一回合会连续两次挂起（Write 后又 Bash/git），permissions 数组
   // 依序发；旧剧本字段 permission 等价于一项的数组
   for (const permission of turn.permissions ?? (turn.permission ? [turn.permission] : [])) {
+    if (stopped()) return;
     const answer = await askServer('interaction/requestPermission', {
       sessionId,
       toolCallId: `tool_${randomUUID().slice(0, 8)}`,
@@ -372,6 +397,7 @@ async function runTurn(sessionId) {
     log(`permission answered: ${JSON.stringify(answer)}`);
   }
   if (turn.question) {
+    if (stopped()) return;
     const params = { sessionId, questions: turn.question.questions };
     if (turn.question.schema !== undefined) params.schema = turn.question.schema; // T0.3c 第 12 条：透传可造 ExitPlanMode 形状
     if (turn.question.toolCallId !== undefined) params.toolCallId = turn.question.toolCallId;
@@ -380,6 +406,7 @@ async function runTurn(sessionId) {
   }
   // T2.8：应答之后到 completed 之间留时间窗，让测试能在「挂起已消费、回合未结束」时起 follow
   if (turn.completeDelayMs) await sleep(turn.completeDelayMs);
+  if (stopped()) return;
   if (turn.hang) {
     log('turn hang：不再推任何事件');
     return;
@@ -389,7 +416,8 @@ async function runTurn(sessionId) {
     ev('turn.failed', { error: turn.fail });
     return;
   }
-  ev('turn.completed', { resultType: 'success', usage: { totalTokens: 0 } });
+  // resultType 剧本可指定（completedResultType）；真机缺省 success（verified.md 有 resultType:"success" 实录）
+  ev('turn.completed', { resultType: script.completedResultType ?? 'success', usage: { totalTokens: 0 } });
   for (const stray of script.strayEvents ?? []) {
     state.seq += 1;
     const params = { sessionId: stray.sessionId, seq: state.seq, ...(stray.params ?? {}) };
@@ -528,10 +556,17 @@ function handleRequest(msg) {
       break;
     }
     case 'session/stop': {
-      // 出处：docs/reference/zcode-app-server-protocol.md「session/stop」一节（fire-and-forget 通知，无应答）。
-      //       真机上 stop 会不会推结束事件未验，mock 不推
+      // 2026-09-21 对照 ZCode 源码（3.14.0 与本机 3.12.2 的 zcode.cjs）：app-server 对没有 id 的
+      // 消息一律忽略（只记一条 debug 日志）；session/stop 带 id 才被处理，处理后回 {}；
+      // 叫停生效后回合以 turn.completed（payload.resultType="cancelled"）结束
+      if (id === undefined) {
+        log('notification ignored: session/stop');
+        break;
+      }
       log(`session/stop 收到（sessionId=${params.sessionId ?? 'none'}）`);
-      if (id !== undefined) respond(id, {});
+      respond(id, {});
+      // 剧本 stopIgnored:true 时只应答不叫停：cancel 与挂起赛跑的用例要提问照常出现
+      if (state.activeTurn && script.stopIgnored !== true) state.stopRequested = true;
       break;
     }
     case 'session/list': {
@@ -558,6 +593,12 @@ function handleRequest(msg) {
       break;
     }
     case 'session/send': {
+      if (state.activeTurn) {
+        // 2026-09-21 对照 ZCode 源码：3.12.2 起回合进行中再发 session/send 直接拒绝
+        // （3.11 的排队插话没有了），code 与 message 是真机原文
+        respondError(id, -32010, 'A prompt is already running for this session');
+        break;
+      }
       // 权宜：{accepted:true} 形状未验，真机跑过第一个回合后回来核
       respond(id, { accepted: true });
       if (script.exitAfter === method) {
@@ -565,15 +606,10 @@ function handleRequest(msg) {
         log(`exitAfter ${method}：process.exit(3)`);
         process.exit(3);
       }
-      if (state.activeTurn) {
-        // verified.md：回合进行中再发一条会被当作 steer 输入排队——不是新回合
-        log(`steer 排队（sessionId=${params.sessionId ?? 'none'}）`);
-      } else {
-        state.activeTurn = true;
-        void runTurn(params.sessionId).then(() => {
-          state.activeTurn = false;
-        });
-      }
+      state.activeTurn = true;
+      void runTurn(params.sessionId).then(() => {
+        state.activeTurn = false;
+      });
       break;
     }
     default: {

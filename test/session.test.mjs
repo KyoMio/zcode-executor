@@ -65,20 +65,63 @@ test('settleTurn：completed → done，lastText 拼接 text_delta，usage 透�
   assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '你好，世界', usage: { totalTokens: 42 } });
 });
 
-test('settleTurn：failed 带 error.message；terminal 单独出现按 status 判', () => {
+test('settleTurn：failed 带 error.message', () => {
   const failed = settleTurn([{ type: 'turn.failed', payload: { error: { code: 1308, message: 'prompt is running' } } }]);
   assert.equal(failed.outcome, 'failed');
   assert.equal(failed.reason, 'prompt is running');
-  const ok = settleTurn([
-    { type: 'turn.terminal', payload: { status: 'success', durationMs: 12, inputTokens: 2, outputTokens: 5, totalTokens: 7 } },
-  ]);
-  assert.equal(ok.outcome, 'done');
-  // T1.1b 第 9 条：terminal 的 payload 是扁平的 token 字段，没有 usage 对象
-  assert.deepEqual(ok.usage, { inputTokens: 2, outputTokens: 5, totalTokens: 7 });
-  const bad = settleTurn([{ type: 'turn.terminal', payload: { status: 'cancelled' } }]);
-  assert.equal(bad.outcome, 'failed');
   const none = settleTurn([{ type: 'turn.started', payload: {} }]);
   assert.equal(none.outcome, null);
+});
+
+// 六种 resultType 各一条（2026-09-21 对照 ZCode 源码：非 success 也走 turn.completed，不走 turn.failed；
+// 结束事件只有这两个）
+test('settleTurn：resultType 缺省 → done', () => {
+  const settled = settleTurn([{ type: 'turn.completed', payload: { usage: { totalTokens: 3 } } }]);
+  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 3 } });
+});
+
+test('settleTurn：resultType null 也算缺省 → done', () => {
+  const settled = settleTurn([{ type: 'turn.completed', payload: { resultType: null, usage: { totalTokens: 3 } } }]);
+  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 3 } });
+});
+
+test('settleTurn：resultType success → done', () => {
+  const settled = settleTurn([{ type: 'turn.completed', payload: { resultType: 'success', usage: { totalTokens: 4 } } }]);
+  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 4 } });
+});
+
+test('settleTurn：resultType cancelled → outcome cancelled，reason 说明被叫停', () => {
+  const settled = settleTurn([{ type: 'turn.completed', payload: { resultType: 'cancelled', usage: { totalTokens: 0 } } }]);
+  assert.deepEqual(settled, {
+    outcome: 'cancelled',
+    reason: '回合被叫停（resultType=cancelled）',
+    lastText: '',
+    usage: { totalTokens: 0 },
+  });
+});
+
+test('settleTurn：resultType error_max_turns → failed，reason 带 resultType 值', () => {
+  const settled = settleTurn([{ type: 'turn.completed', payload: { resultType: 'error_max_turns' } }]);
+  assert.equal(settled.outcome, 'failed');
+  assert.equal(settled.reason, 'turn.completed resultType=error_max_turns');
+});
+
+test('settleTurn：resultType error_max_budget → failed', () => {
+  const settled = settleTurn([{ type: 'turn.completed', payload: { resultType: 'error_max_budget' } }]);
+  assert.equal(settled.outcome, 'failed');
+  assert.equal(settled.reason, 'turn.completed resultType=error_max_budget');
+});
+
+test('settleTurn：resultType error_during_execution → failed', () => {
+  const settled = settleTurn([{ type: 'turn.completed', payload: { resultType: 'error_during_execution' } }]);
+  assert.equal(settled.outcome, 'failed');
+  assert.equal(settled.reason, 'turn.completed resultType=error_during_execution');
+});
+
+test('settleTurn：resultType error_max_tool_calls → failed', () => {
+  const settled = settleTurn([{ type: 'turn.completed', payload: { resultType: 'error_max_tool_calls' } }]);
+  assert.equal(settled.outcome, 'failed');
+  assert.equal(settled.reason, 'turn.completed resultType=error_max_tool_calls');
 });
 
 test('attach 后 send：事件依次落盘，outcome done，lastText 与 usage 正确', async () => {
@@ -143,25 +186,28 @@ test('剧本 fail → outcome failed，reason 是剧本里的 message', async ()
   });
 });
 
-test('只有 turn.terminal（success）→ done', async () => {
+test('只有未知结束事件 → 不结算，outcome null', async () => {
   const script = {
     turns: [
       {
-        hang: true, // 挡住引擎自动推的 turn.completed，制造「terminal 单独出现」
+        hang: true, // 挡住引擎自动推的 turn.completed，制造「只有未知事件」
         events: [
-          { type: 'turn.terminal', payload: { status: 'success', inputTokens: 1, outputTokens: 4, totalTokens: 5 } },
+          // 随便一个不在事件枚举里的类型（旧协议里那个已删的收尾事件也在其列）
+          { type: 'turn.finished', payload: { status: 'success', inputTokens: 1, outputTokens: 4, totalTokens: 5 } },
         ],
       },
     ],
   };
   await withSession(script, {}, async ({ session }) => {
-    const result = await session.send('hi');
-    assert.equal(result.outcome, 'done');
-    assert.deepEqual(result.usage, { inputTokens: 1, outputTokens: 4, totalTokens: 5 });
+    // 2026-09-21 对照 ZCode 源码：结束事件只有 turn.completed / turn.failed，
+    // 未知事件只落盘、不结算；回合要等真正的结束事件（这里等不到，按超时收）
+    const result = await session.send('hi', { timeoutMs: 300 });
+    assert.equal(result.outcome, 'timeout');
+    assert.deepEqual(result.usage, null);
   });
 });
 
-test('hang + timeoutMs → outcome timeout，mock 记录里有 session/stop', async () => {
+test('hang + timeoutMs → outcome timeout，mock 记录里的 session/stop 带 id（请求，不是通知）', async () => {
   const script = { turns: [{ hang: true }] };
   await withSession(script, {}, async ({ session, recordPath }) => {
     const startedAt = Date.now();
@@ -171,7 +217,8 @@ test('hang + timeoutMs → outcome timeout，mock 记录里有 session/stop', as
     // 宽限期最多 5 秒（任务单定死），总耗时应略高于 300ms + 5s，不能无限等
     assert.ok(Date.now() - startedAt < 8000);
     const record = readRecord(recordPath);
-    assert.ok(record.some((m) => m.method === 'session/stop' && m.id === undefined)); // 通知，无 id
+    // 2026-09-21 对照 ZCode 源码：app-server 忽略无 id 的消息，session/stop 必须带 id 才会被处理
+    assert.ok(record.some((m) => m.method === 'session/stop' && m.id !== undefined));
   });
 });
 
@@ -207,7 +254,7 @@ test('两次 send 串行：第二回合 lastText 独立，两回合事件都在'
   });
 });
 
-test('steer 在回合进行中发出：mock 收到第二条 session/send，第一回合正常结束', async () => {
+test('回合中 steer（session/send）被拒 -32010，第一回合正常结束', async () => {
   const script = {
     turns: [
       {
@@ -215,19 +262,24 @@ test('steer 在回合进行中发出：mock 收到第二条 session/send，第�
       },
     ],
   };
-  await withSession(script, {}, async ({ session, recordPath, stderrLines }) => {
+  await withSession(script, {}, async ({ session, recordPath }) => {
     const sendPromise = session.send('慢慢跑');
     await sleep(60); // turn.started 已到、回合进行中
-    const steered = await session.steer('插一句');
-    assert.deepEqual(steered, { accepted: true });
+    // 2026-09-21 对照 ZCode 源码：3.12.2 起回合进行中再发 session/send 直接拒绝（3.11 是排队插话）
+    await assert.rejects(
+      session.steer('插一句'),
+      (err) => {
+        assert.match(err.message, /A prompt is already running for this session/);
+        assert.equal(err.details.code, -32010);
+        return true;
+      },
+    );
     const result = await sendPromise;
     assert.equal(result.outcome, 'done');
-    assert.equal(result.lastText, '慢慢来'); // 插话内容不在本回合文本里
+    assert.equal(result.lastText, '慢慢来'); // 插话被拒，不影响本回合
     const sends = readRecord(recordPath).filter((m) => m.method === 'session/send');
     assert.equal(sends.length, 2);
-    assert.equal(sends[1].params.content, '插一句');
-    // 第二条 send 发生在第一回合结束之前：mock 走的是 steer 排队分支
-    await waitFor(() => (stderrLines.some((l) => l.includes('steer 排队')) ? true : undefined));
+    assert.equal(sends[1].params.content, '插一句'); // 第二条确实发出去了，被 mock 拒的
   });
 });
 
@@ -339,34 +391,72 @@ test('send 的超时定时器在回合结束后撤销，进程不空转', async 
   });
 });
 
-test('上一回合迟到的 turn.completed 不把下一次 send 判成假 done', async () => {
+test('上一回合被叫停后，残留的收尾事件不把下一次 send 判成假 done', async () => {
   const script = {
     turns: [
-      // 回合 1：completed 在超时+宽限都过了之后才到（seq 落在旧时间线）
+      // 回合 1：completed 在超时+宽限都过了之后才到（seq 落在旧时间线）；
+      // stop 在 300ms 就到了，mock 在 5600ms 的检查点以 resultType=cancelled 收尾
       { events: [{ type: 'turn.completed', delayMs: 5600, payload: { resultType: 'success' } }] },
-      { hang: true }, // 回合 2：挂住，专等迟到事件来污染
+      { hang: true }, // 回合 2：挂住，专等上一回合的收尾事件来污染
     ],
   };
-  await withSession(script, {}, async ({ session }) => {
+  await withSession(script, {}, async ({ session, eventsPath }) => {
     const first = await session.send('a', { timeoutMs: 300 });
-    assert.equal(first.outcome, 'timeout'); // 宽限 5 秒耗尽， completed 还没来
+    assert.equal(first.outcome, 'timeout'); // 宽限 5 秒耗尽，mock 的收尾事件还没来
+    // 等 mock 侧回合真正收尾（cancelled 的 turn.completed 落盘）再投第二条：
+    // 不等它，下一次 send 会撞上「回合进行中」的 -32010 拒绝
+    await waitFor(async () => {
+      let events = [];
+      try {
+        const raw = await readFile(eventsPath, 'utf8');
+        events = raw.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+      } catch {
+        // 文件还没建出来，当空处理
+      }
+      return events.some((e) => e.type === 'turn.completed' && e.payload?.resultType === 'cancelled') ? true : undefined;
+    });
     const second = await session.send('b', { timeoutMs: 300 });
-    // T1.1b 第 2 条：迟到的 completed 不能算第二回合的结束
+    // T1.1b 第 2 条：上一回合时间线的收尾事件不能算第二回合的结束
     assert.equal(second.outcome, 'timeout');
     assert.equal(second.lastText, '');
   });
 });
 
-test('超时后约 1 秒回合结束：outcome 仍 timeout，总耗时明显小于 5 秒宽限', async () => {
+test('send 超时 → stop 请求 → mock 推 cancelled → 对外仍报 timeout', async () => {
   const script = {
     turns: [{ events: [{ type: 'turn.completed', delayMs: 1000, payload: { resultType: 'success' } }] }],
   };
-  await withSession(script, {}, async ({ session }) => {
+  await withSession(script, {}, async ({ session, recordPath, eventsPath }) => {
     const startedAt = Date.now();
     const result = await session.send('hi', { timeoutMs: 300 });
-    assert.equal(result.outcome, 'timeout'); // 宽限内结束了也判 timeout
+    // 只要本次 send 触发过超时，宽限内不管等到什么结束事件对外都是 timeout（退出码 3：再投一次接着做），
+    // 4 的「回合异常」和 3 的「取消后重投」用户处理方式不同，不能丢掉「是超时」这个事实
+    assert.equal(result.outcome, 'timeout');
+    assert.match(result.reason, /已发 session\/stop/);
     const elapsed = Date.now() - startedAt;
-    assert.ok(elapsed >= 1000 && elapsed < 5000); // 结束事件一来就返回，不等满宽限
+    assert.ok(elapsed >= 300 && elapsed < 5000); // cancelled 一到就返回，不等满 5 秒宽限
+    // 但 stop 是真的生效了：带 id 的请求发出去了，mock 也以 resultType=cancelled 收掉了回合
+    const stops = readRecord(recordPath).filter((m) => m.method === 'session/stop');
+    assert.equal(stops.length, 1);
+    assert.ok(stops[0].id !== undefined); // 带 id 的请求
+    const raw = await readFile(eventsPath, 'utf8');
+    const completed = raw
+      .split('\n')
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l))
+      .find((e) => e.type === 'turn.completed');
+    assert.equal(completed.payload.resultType, 'cancelled'); // 剧本的 success 没推，推的是叫停的 cancelled
+  });
+});
+
+test('stop() 返回 mock 的 result，记录里带 id', async () => {
+  await withSession({}, {}, async ({ session, recordPath }) => {
+    const result = await session.stop(); // 空闲时叫停：mock 回 {}
+    assert.deepEqual(result, {});
+    const stops = readRecord(recordPath).filter((m) => m.method === 'session/stop');
+    assert.equal(stops.length, 1);
+    assert.ok(stops[0].id !== undefined);
+    assert.equal(stops[0].params.sessionId, SESSION_ID);
   });
 });
 

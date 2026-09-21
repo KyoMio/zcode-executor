@@ -205,6 +205,74 @@ test('send --wait：剧本 fail → 退出码 4，reason 带出来', async (t) =
   assert.equal(last.outcome, 'failed');
 });
 
+test('第一回合 steer 被拒置上标记，第二回合开始后 state.steerUnavailable 清回 null', async (t) => {
+  const env = await setupSend(t, {
+    script: {
+      turns: [
+        { events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: '慢慢来' }, delayMs: 2000 }] },
+        {}, // 第二条投递的回合：回合起点的 writeState 要把标记清掉——「不可用」只描述当前回合
+      ],
+    },
+  });
+  const a = runBin(env.env, ['send', env.entry.id, '主投递']);
+  const b = runBin(env.env, ['send', env.entry.id, '第二条']);
+  assert.equal(a.status, 0, a.stderr);
+  assert.equal(b.status, 0, b.stderr);
+  await waitFor(async () => (readEvents(env.runsDir).some((e) => e.type === 'turn.started') ? true : undefined));
+  const steer = runBin(env.env, ['send', env.entry.id, '插句话', '--steer']);
+  assert.equal(steer.status, 0, steer.stderr);
+  await waitFor(async () => (readEvents(env.runsDir).some((e) => e.type === 'executor.steer_failed') ? true : undefined));
+  const marked = JSON.parse(await readFile(path.join(env.runsDir, 'state.json'), 'utf8'));
+  assert.match(marked.steerUnavailable, /already running/); // 第一回合内：标记在
+  // 第二回合开始后：回合起点的 writeState 带 steerUnavailable: null
+  await waitFor(async () => {
+    const state = JSON.parse(await readFile(path.join(env.runsDir, 'state.json'), 'utf8').catch(() => '{}'));
+    return state.steerUnavailable === null ? state : undefined;
+  });
+  trackRunnerPids(env.runsDir);
+});
+
+test('send --wait：剧本 completedResultType error_max_turns → last failed，reason 带 resultType', async (t) => {
+  // 2026-09-21 对照 ZCode 源码：非 success（如 error_max_turns）也走 turn.completed，不走 turn.failed
+  const env = await setupSend(t, { script: { completedResultType: 'error_max_turns' } });
+  const run = runBin(env.env, ['send', env.entry.id, '会超轮的活', '--wait', '--json']);
+  assert.equal(run.status, 4, `stdout: ${run.stdout} stderr: ${run.stderr}`);
+  const last = JSON.parse(await readFile(path.join(env.runsDir, 'last.json'), 'utf8'));
+  assert.equal(last.outcome, 'failed');
+  assert.match(last.reason, /error_max_turns/);
+  assert.equal(JSON.parse(run.stdout).outcome, 'failed');
+});
+
+test('回合中 steer 被拒 → events 有 executor.steer_failed，state.steerUnavailable 非空', async (t) => {
+  const env = await setupSend(t, {
+    script: {
+      turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: '慢慢来' }, delayMs: 2500 }] }],
+    },
+  });
+  const first = runBin(env.env, ['send', env.entry.id, '主投递']);
+  assert.equal(first.status, 0, first.stderr);
+  await waitFor(async () => (readEvents(env.runsDir).some((e) => e.type === 'executor.send') ? true : undefined));
+  // 等回合真的在跑（turn.started 落盘：mock 收到 send 就置了 activeTurn），不靠固定睡眠
+  await waitFor(async () => (readEvents(env.runsDir).some((e) => e.type === 'turn.started') ? true : undefined));
+  const steer = runBin(env.env, ['send', env.entry.id, '插句话', '--steer']);
+  assert.equal(steer.status, 0, steer.stderr); // steerUnavailable 还没置上：入队放行
+  // 2026-09-21 对照 ZCode 源码：3.12.2 起回合中 session/send 被拒 -32010，插话必失败且要可见
+  await waitFor(async () => (readEvents(env.runsDir).some((e) => e.type === 'executor.steer_failed') ? true : undefined));
+  const failed = readEvents(env.runsDir).find((e) => e.type === 'executor.steer_failed');
+  assert.match(failed.reason, /already running/);
+  const state = JSON.parse(await readFile(path.join(env.runsDir, 'state.json'), 'utf8'));
+  assert.match(state.steerUnavailable, /already running/);
+  // 回合本身不受插话被拒影响，照常结算
+  await waitFor(
+    async () => {
+      const last = JSON.parse(await readFile(path.join(env.runsDir, 'last.json'), 'utf8').catch(() => '{}'));
+      return last.outcome === 'done' ? last : undefined;
+    },
+    { timeoutMs: 15000 },
+  );
+  trackRunnerPids(env.runsDir);
+});
+
 test('send --wait：审批挂起 → 5 且 runner 活着；带 requestId 的 answer → 继续到 done', async (t) => {
   const env = await setupSend(t, {
     script: { turns: [{ permission: { toolName: 'Write', input: { file_path: 'hello.txt' }, reason: '有副作用' } }] },

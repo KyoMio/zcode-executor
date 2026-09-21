@@ -3,7 +3,7 @@
 // 不发 session/send，不花额度（3.12 起只有 doctor 握手：create deferred + close；models、new 纯本地）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, symlink, writeFile, readFile, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, symlink, writeFile, readFile, rm } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
@@ -590,4 +590,76 @@ test('普通 Error（非 ExecutorError）→ 退 1、一行 stderr；ZCODE_EXECU
   });
   assert.equal(debug.status, 1);
   assert.match(debug.stderr, / at /); // 排障时才给堆栈
+});
+
+// ---------- 插话路径可见性（2026-09-21 对照 ZCode 源码：3.12.2 起回合中 session/send 被拒 -32010） ----------
+
+// 造一条已登记会话 + runs/<id>/state.json：不做协议交互，send --steer 的前置检查与 status 只读文件
+async function setupSessionWithState(t, state) {
+  const env = await setupNew();
+  t.after(() => {
+    killAll(runnerPids);
+    killAll(mockPids);
+  });
+  const created = runNew(env, ['--cwd', env.cwd, '--json']);
+  assert.equal(created.status, 0, `stderr: ${created.stderr}`);
+  const entry = JSON.parse(created.stdout);
+  const runsDir = path.join(env.home, 'runs', entry.id);
+  await mkdir(runsDir, { recursive: true });
+  if (state !== null) await writeFile(path.join(runsDir, 'state.json'), JSON.stringify(state));
+  const spawnEnv = {
+    ...process.env,
+    ZCODE_BIN: env.mock.zcodePath,
+    ZCODE_EXECUTOR_HOME: env.home,
+    ZCODE_CONFIG_PATH: env.zcodeConfigPath,
+    ...env.mock.env,
+  };
+  return { ...env, entry, spawnEnv };
+}
+
+test('send --steer：state.steerUnavailable 非空且 phase running → 退出码 2，不入队', async (t) => {
+  const env = await setupSessionWithState(t, {
+    phase: 'running',
+    steerUnavailable: 'session/send 被拒绝：A prompt is already running for this session',
+  });
+  const run = spawnSync(process.execPath, [BIN, 'send', env.entry.id, '插句话', '--steer'], {
+    encoding: 'utf8',
+    env: env.spawnEnv,
+    timeout: 60_000,
+  });
+  assert.equal(run.status, 2, `stdout: ${run.stdout} stderr: ${run.stderr}`);
+  assert.match(run.stderr, /插话路径不可用/);
+  assert.match(run.stderr, /already running/);
+  // 拒绝就不入队：队列目录里没有待投递（runner 也没被拉起）
+  const queue = await readdir(path.join(env.home, 'runs', env.entry.id, 'queue')).catch(() => []);
+  assert.equal(queue.filter((f) => f.endsWith('.json')).length, 0);
+});
+
+test('status --json 带 steerUnavailable 字段（字符串或 null），文本模式给「插话: 不可用」一行', async (t) => {
+  const marked = await setupSessionWithState(t, {
+    phase: 'running',
+    steerUnavailable: 'session/send 被拒绝：A prompt is already running for this session',
+  });
+  const jsonRun = spawnSync(process.execPath, [BIN, 'status', marked.entry.id, '--json'], {
+    encoding: 'utf8',
+    env: marked.spawnEnv,
+    timeout: 60_000,
+  });
+  assert.equal(jsonRun.status, 0, `stderr: ${jsonRun.stderr}`);
+  assert.match(JSON.parse(jsonRun.stdout).steerUnavailable, /already running/);
+  const textRun = spawnSync(process.execPath, [BIN, 'status', marked.entry.id], {
+    encoding: 'utf8',
+    env: marked.spawnEnv,
+    timeout: 60_000,
+  });
+  assert.match(textRun.stdout, /插话: 不可用（.*already running/);
+
+  const clean = await setupSessionWithState(t, { phase: 'idle' });
+  const cleanRun = spawnSync(process.execPath, [BIN, 'status', clean.entry.id, '--json'], {
+    encoding: 'utf8',
+    env: clean.spawnEnv,
+    timeout: 60_000,
+  });
+  assert.equal(JSON.parse(cleanRun.stdout).steerUnavailable, null);
+  assert.doesNotMatch(cleanRun.stdout, /插话/);
 });

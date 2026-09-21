@@ -643,6 +643,10 @@ test('挂起卡住回归：回合超时结算后 pending.json 清掉、status �
 test('cancel 在挂起出现前被回合内观察点抢走 → 挂起轮询凭 cancelSeen 仍替人 decline（T2.6b 第 4 条真断言）', async (t) => {
   const env = await setupOps(t, {
     script: {
+      // stopIgnored：runner 的 stop 请求照常发出，但 mock 不叫停回合——这条用例考的是
+      // 「cancel 文件先被回合内观察点消费、提问随后才挂起、挂起轮询凭 cancelSeen 替人 decline」
+      // 的竞态；没有它回合当场被叫停，提问永远发不出来（真机里叫停与提问赛跑，这一步的提问已经在路上）
+      stopIgnored: true,
       turns: [
         {
           // 先拖 1.5 秒再发提问：给 cancel 文件留出「被回合内观察点先消费」的时间窗
