@@ -2,6 +2,16 @@
 
 写的是当时的情况。文件、版本、命令用之前先确认还在。
 
+## 检查点 6b：插话与叫停真机（2026-09-21，App 3.12.2，花额度两条短回合）
+
+`scripts/real-send.mjs --steer-after 8 --steer-text …` 与 `--stop-after 6`，模型 GLM-5.3-Flash，审批全放行：
+
+| 验的点 | 结果 |
+| --- | --- |
+| 回合中 `v4/command sendText`（`requestedDelivery:"guide"`） | ACK `{status:"accepted", result:{delivery:"queue"}}`——**ACK 里不会出现 guide**（源码一致）；事件流随后 `turn.steerQueued`（payload `delivery:"guide"`、`pendingInputId:"queue_<commandId>"`）→ `turn.steerDrained`（`injectedMessageIds`、`drainedInputs[].delivery:"guide"`），注入点在 b.txt 写完、c.txt 写之前（工具边界）；最终 c.txt 内容按插话要求写成 `hello-steer`，回合 `resultType:"success"` |
+| 回合中 `session/stop`（带 id 的请求） | 回 `{}`；同一秒收到 `turn.completed`，`payload.resultType:"cancelled"`；`Session.send()` 结算 outcome `cancelled`，reason「回合被叫停（resultType=cancelled）」；两个回合从投递到叫停生效约 6 秒，没有再写任何文件 |
+| 事件种类 | 两条回合各只有 `turn.started` 与 `turn.completed`（外加 steer 那条的 steerQueued/steerDrained）；没有 `turn.failed`、没有 `turn.terminal` |
+
 ## 本机环境
 
 | 东西 | 情况 |

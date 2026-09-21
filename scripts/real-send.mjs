@@ -5,6 +5,9 @@
 //   node scripts/real-send.mjs --yes [--cwd <目录>] [--text "<投递正文>"] [--resume <sess_>]
 //        [--provider <providerId>] [--model <modelId>]
 //        [--on-permission allow|deny] [--on-question "<文字>"]
+//        [--steer-after <秒> [--steer-text "<插话>"]] [--stop-after <秒>]
+// --steer-after：投递 N 秒后在回合进行中插话（v4/command sendText guide，T6-B 检查点）；
+// --stop-after：投递 N 秒后发 session/stop 请求，核回合以 resultType=cancelled 结束（T6-A 检查点）。
 // create 默认带 model + 顶层 thoughtLevel（D14：3.12 起 create 不再接受 runtimeModel，也不再推表，
 // app-server 自己从个人 provider 文件读 provider 表）：provider 按 D6 优先级选（--provider 指定则
 // 必须命中），模型取该 provider 里 id 含 flash/lite/mini/air 的第一个、没有就第一个（--model 指定则
@@ -37,7 +40,7 @@ import { redactSecrets, scrubValues } from '../lib/scrub.mjs';
 
 const EXIT_USAGE = 2;
 const EXIT_BLOCKED = 5;
-const VALUE_FLAGS = ['--cwd', '--text', '--resume', '--on-permission', '--on-question', '--provider', '--model'];
+const VALUE_FLAGS = ['--cwd', '--text', '--resume', '--on-permission', '--on-question', '--provider', '--model', '--steer-after', '--steer-text', '--stop-after'];
 // SPEC「模型等级」的 fast 档关键词，不分大小写；real-send 默认模型从这些里挑（任务单 T1.3）
 const FAST_MODEL_WORDS = ['flash', 'lite', 'mini', 'air'];
 
@@ -90,6 +93,15 @@ function parseArgs(argv) {
   if (args.onPermission !== undefined && !['allow', 'deny'].includes(args.onPermission)) {
     console.error('real-send: --on-permission 只能是 allow 或 deny');
     process.exit(EXIT_USAGE);
+  }
+  for (const key of ['steerAfter', 'stopAfter']) {
+    if (args[key] === undefined) continue;
+    const n = Number(args[key]);
+    if (!Number.isFinite(n) || n < 0) {
+      console.error(`real-send: --${key === 'steerAfter' ? 'steer-after' : 'stop-after'} 要非负秒数，收到：${args[key]}`);
+      process.exit(EXIT_USAGE);
+    }
+    args[key] = n;
   }
   return args;
 }
@@ -172,10 +184,37 @@ async function main() {
     emit({ step: 'attach', ok: true, result: { sessionId, eventsPath } });
 
     const text = args.text ?? '在当前目录新建 hello.txt，内容一行 hello，然后结束';
-    const settled = await Promise.race([
-      session.send(text).then((outcome) => ({ kind: 'outcome', outcome })),
-      aborted.then(({ kind }) => ({ kind })),
-    ]);
+    // 检查点用的定时动作：插话（v4 sendText guide）与叫停（session/stop 请求）；出错只记一行，不打断 send
+    const timers = [];
+    if (args.steerAfter !== undefined) {
+      timers.push(setTimeout(async () => {
+        try {
+          const ack = await session.steer(args.steerText ?? '补充：文件末尾再加一行 steered');
+          emit({ step: 'steer', ok: true, ...ack });
+        } catch (err) {
+          emit({ step: 'steer', ok: false, error: scrubValues(String(err?.message ?? err), secrets), details: err?.details ?? null });
+        }
+      }, args.steerAfter * 1000));
+    }
+    if (args.stopAfter !== undefined) {
+      timers.push(setTimeout(async () => {
+        try {
+          const result = await session.stop();
+          emit({ step: 'stop', ok: true, result });
+        } catch (err) {
+          emit({ step: 'stop', ok: false, error: scrubValues(String(err?.message ?? err), secrets) });
+        }
+      }, args.stopAfter * 1000));
+    }
+    let settled;
+    try {
+      settled = await Promise.race([
+        session.send(text).then((outcome) => ({ kind: 'outcome', outcome })),
+        aborted.then(({ kind }) => ({ kind })),
+      ]);
+    } finally {
+      for (const t of timers) clearTimeout(t);
+    }
 
     if (settled.kind === 'blocked') {
       // 挂起无法作答：pending.json 原样保留交人工，进程按 blocked 收场（关子进程）
@@ -186,7 +225,7 @@ async function main() {
       const outcome = settled.outcome;
       emit({ step: 'outcome', ok: true, sessionId, eventsPath, ...outcome });
       // RULES 退出码表：done 0；起不来 1；timeout 3；failed 4；blocked 5
-      process.exitCode = { done: 0, timeout: 3, failed: 4, exited: 1, blocked: EXIT_BLOCKED }[outcome.outcome] ?? 1;
+      process.exitCode = { done: 0, timeout: 3, failed: 4, cancelled: 4, exited: 1, blocked: EXIT_BLOCKED }[outcome.outcome] ?? 1;
       exitCodeSet = true;
       await session.close();
     }
