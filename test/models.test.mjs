@@ -60,15 +60,17 @@ async function withTmpdir(fn) {
   }
 }
 
-// 起 mock + 写 zcode 配置文件，跑一次 resolveModels；mock.env 走 env 透传（并发前提，不写 process.env）
-async function runResolve({ config, providerId, handshake, script, zcodeConfig } = {}) {
-  const mock = await startMock({ script });
+// 起 mock + 写 zcode 配置文件，跑一次 resolveModels；mock.env 走 env 透传（并发前提，不写 process.env）。
+// credentials 透传给 startMock 写账号型凭据夹具；configPath 显式给时不再写 legacy config.json
+// （T6-C：只有 credentials.json、没有 config.json 的用例）。
+async function runResolve({ config, providerId, handshake, script, zcodeConfig, credentials, configPath } = {}) {
+  const mock = await startMock({ script, credentials });
   dirs.push(mock.dir);
-  const configPath = await writeZcodeConfig(zcodeConfig);
+  const p = configPath ?? (await writeZcodeConfig(zcodeConfig));
   const { result: resolved, tmp } = await withTmpdir(() =>
-    resolveModels({ config, configPath, providerId, handshake, zcodePath: mock.zcodePath, env: mock.env }),
+    resolveModels({ config, configPath: p, providerId, handshake, zcodePath: mock.zcodePath, env: mock.env }),
   );
-  return { resolved, recordPath: mock.env.MOCK_APPSERVER_RECORD, tmp };
+  return { resolved, recordPath: mock.env.MOCK_APPSERVER_RECORD, tmp, mock };
 }
 
 test('resolveModels：形状齐全，providerId 优先于 config.preferredProvider，模型清单从 registry 本地换算', async () => {
@@ -93,7 +95,9 @@ test('resolveModels：形状齐全，providerId 优先于 config.preferredProvid
   assert.equal(resolved.fast.ref.modelId, 'GLM-5.3-Flash');
   assert.equal(resolved.strong.ref.modelId, 'GLM-5.3');
   assert.equal('current' in resolved, false); // 3.12 没有 readState 了，current 不再有
-  assert.deepEqual(resolved.warnings, []);
+  // T6-C：没写 credentials.json 夹具时账号型来源记一条「不存在」的提醒（未登录不是错误）
+  assert.equal(resolved.warnings.length, 1);
+  assert.match(resolved.warnings[0], /credentials\.json 不存在/);
   assert.equal(resolved.registry.providers.length, 2);
   assert.deepEqual(readRecord(recordPath), []); // 不握手：mock 根本没被起过
 });
@@ -125,7 +129,9 @@ test('resolveModels：handshake:true 零 token——只有 deferred 的 create �
   assert.equal(create.persistence, 'deferred'); // 探针会话不进 App 的任务列表（verified.md「3.12.2 直连探针实测」「mock 复刻依据」）
   assert.deepEqual(create.model, { providerId: 'zcode-executor', modelId: 'GLM-5.3-Flash', options: { reasoningLevel: 'high' } });
   assert.equal(create.thoughtLevel, 'high'); // 顶层也带（真机只给 options 时 thoughtLevel.current 是空的）
-  assert.deepEqual(resolved.warnings, []); // 个人文件里的两个模型 app-server 都认了
+  // 个人文件里的两个模型 app-server 都认了；剩下一条是账号型来源未登录的提醒
+  assert.equal(resolved.warnings.length, 1);
+  assert.match(resolved.warnings[0], /credentials\.json 不存在/);
   assert.deepEqual(await readdir(tmp), []); // 个人 provider 文件（含 apiKey）已随目录删掉
 });
 
@@ -175,8 +181,10 @@ test('zcodeInfo：返回路径、版本与内置 provider 文件；环境变量�
   assert.equal(viaEnv.version, '0.16.5');
   assert.equal(viaEnv.builtinConfigPath, mock.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE);
   assert.equal(viaEnv.builtinConfigError, null);
-  // mock 旁边没有 ../config/provider/zcode-builtin.json：这就是「App 低于 3.12」的样子
-  const missing = zcodeInfo({ zcodePath: mock.zcodePath, builtinFile: undefined });
+  // mock 旁边没有 ../config/provider/zcode-builtin.json：这就是「App 低于 3.12」的样子。
+  // builtinFile 传 null 而不是 undefined：undefined 会落到读 process.env 的默认值，而在 ZCode App
+  // 运行时派生的 shell 里（本插件自己的开发场景）环境变量带着真实内置文件路径，用例就不封闭了
+  const missing = zcodeInfo({ zcodePath: mock.zcodePath, builtinFile: null });
   assert.equal(missing.version, '0.16.5'); // 版本照样能拿到，版本号区分不了新旧
   assert.equal(missing.builtinConfigPath, null);
   assert.match(missing.builtinConfigError, /ZCODE_BUILTIN_PROVIDER_CONFIG_FILE/);
@@ -187,6 +195,8 @@ test('zcodeInfo：返回路径、版本与内置 provider 文件；环境变量�
 });
 
 test('resolveReviewSelection：fast 档 + review.thought（默认 low）→ selection 形状同 create 的 model', async () => {
+  // 显式指两个不存在的来源文件：本用例只关心 legacy，别去读真实机器（T6-C 起 readProviderRegistry 会解账号型来源）
+  const noSuch = (name) => path.join(os.tmpdir(), `zcode-models-no-${name}-${Date.now()}.json`);
   const registry = readProviderRegistry(await writeZcodeConfig({
     provider: {
       'builtin:bigmodel-coding-plan': {
@@ -198,7 +208,7 @@ test('resolveReviewSelection：fast 档 + review.thought（默认 low）→ sele
         },
       },
     },
-  }));
+  }), { credentialsPath: noSuch('credentials'), builtinConfigPath: noSuch('builtin') });
   const providerId = 'builtin:bigmodel-coding-plan';
   const byDefault = resolveReviewSelection({ registry, providerId, config: {} });
   assert.deepEqual(byDefault.selection, { providerId: 'zcode-executor', modelId: 'GLM-5.3-Flash', options: { reasoningLevel: 'low' } });
@@ -207,4 +217,43 @@ test('resolveReviewSelection：fast 档 + review.thought（默认 low）→ sele
   assert.deepEqual(overridden.selection, { providerId: 'zcode-executor', modelId: 'GLM-5.3', options: { reasoningLevel: 'max' } });
   assert.throws(() => resolveReviewSelection({ registry, providerId: 'no-such', config: {} }), /不在 provider 表里/);
   assert.throws(() => resolveReviewSelection({ registry, providerId, config: { review: { model: 'nope' } } }), /nope/);
+});
+
+// ---------- T6-C：账号型来源（credentials.json + 内置 provider 文件，2026-09-21） ----------
+
+test('resolveModels：只有 credentials.json、没有 config.json → 选中 account:bigmodel-individual-coding-plan，模型表带 contextWindow', async () => {
+  const mock = await startMock({ credentials: {} }); // 默认 bigmodel + 个人版/团队版两把 key
+  dirs.push(mock.dir);
+  const missingConfig = path.join(mock.dir, 'no-config.json');
+  const { result: resolved } = await withTmpdir(() =>
+    resolveModels({ config: {}, configPath: missingConfig, zcodePath: mock.zcodePath, env: mock.env }),
+  );
+  assert.equal(resolved.provider.providerId, 'account:bigmodel-individual-coding-plan'); // T6-C 优先级
+  assert.equal(resolved.providerCount, 2); // 个人版 + 团队版
+  assert.equal(resolved.configPath, missingConfig);
+  const strong = resolved.available.find((m) => m.ref.modelId === 'GLM-5.3');
+  assert.deepEqual(strong.ref, { providerId: 'account:bigmodel-individual-coding-plan', modelId: 'GLM-5.3' });
+  assert.equal(strong.contextWindow, 1000000); // 来自内置文件的 modelRules
+  assert.equal(strong.maxOutputTokens, 128000);
+  assert.deepEqual(strong.reasoning.levels.map((l) => l.value), ['low', 'high', 'max']);
+  assert.equal(strong.reasoning.defaultLevel, 'high');
+  assert.equal(resolved.fast.ref.modelId, 'GLM-5.3-Flash');
+  assert.equal(resolved.strong.ref.modelId, 'GLM-5.3');
+  // legacy config.json 不存在只提醒，不再拦着（账号型来源可用）
+  assert.equal(resolved.warnings.length, 1);
+  assert.match(resolved.warnings[0], /找不到 zcode 配置/);
+  // registry 里两把账号型 key 都进 secrets 抹除名单（resolveModels 内部收集，这里验表里有值）
+  assert.equal(resolved.registry.providers.filter((p) => p.apiKey?.value).length, 2);
+});
+
+test('resolveModels：账号型与 legacy 并存 → 账号型个人版赢过 legacy 的 coding-plan（pickProvider 优先级）', async () => {
+  const mock = await startMock({ credentials: { team: false } }); // 只有个人版
+  dirs.push(mock.dir);
+  const configPath = await writeZcodeConfig();
+  const { result: resolved } = await withTmpdir(() =>
+    resolveModels({ config: {}, configPath, zcodePath: mock.zcodePath, env: mock.env }),
+  );
+  assert.equal(resolved.provider.providerId, 'account:bigmodel-individual-coding-plan');
+  assert.deepEqual(resolved.registry.sources.account.plans, ['individual']);
+  assert.equal(resolved.all.length, 6); // 账号型 1 个 provider 2 个模型 + legacy 2 个 provider 各 2 个模型
 });

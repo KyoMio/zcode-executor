@@ -54,10 +54,11 @@ async function writeZcodeConfig(config = ZCODE_CONFIG) {
 }
 
 // 起 mock、准备家目录与 zcode 配置，spawnSync 跑 CLI；version 经 startMock 注入（T2.1b 第 11 条），
-// mock 环境变量整包用 ...mock.env；noBuiltin 拿掉内置 provider 文件的环境变量——mock 旁边没有
+// mock 环境变量整包用 ...mock.env（T6-C 起含 ZCODE_DATA_BASE_DIR / ZCODE_CREDENTIAL_SECRET，
+// credentials 选项写账号型凭据夹具）；noBuiltin 拿掉内置 provider 文件的环境变量——mock 旁边没有
 // ../config/provider/zcode-builtin.json，这就是「App 低于 3.12」在 doctor 眼里的样子
-async function runCli(args, { version, configPath, zcodeConfig, executorConfig, noBuiltin = false } = {}) {
-  const mock = await startMock({ version });
+async function runCli(args, { version, configPath, zcodeConfig, executorConfig, credentials, noBuiltin = false } = {}) {
+  const mock = await startMock({ version, credentials });
   dirs.push(mock.dir);
   const home = await mkdtemp(path.join(os.tmpdir(), 'zcode-cli-home-'));
   dirs.push(home);
@@ -272,7 +273,7 @@ test('doctor：找不到内置 provider 文件（App 低于 3.12）→ 退出码
   assert.match(run.stderr, /ZCODE_BUILTIN_PROVIDER_CONFIG_FILE/);
 });
 
-test('doctor：正常 → 退出码 0，--json 里有内置文件、apiKey 在场、provider 与 tiers', async () => {
+test('doctor：正常 → 退出码 0，--json 里有内置文件、apiKey 在场、provider 与 tiers、config.sources', async () => {
   const { run, mock, zcodeConfigPath } = await runCli(['doctor', '--json']);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
   const out = JSON.parse(run.stdout);
@@ -282,9 +283,14 @@ test('doctor：正常 → 退出码 0，--json 里有内置文件、apiKey 在�
   assert.equal(out.zcode.builtinConfigPath, mock.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE);
   assert.equal(out.zcode.minVersion, 'App ≥ 3.12.2'); // 字段保留（--json 只加不删），值改成说明性的
   assert.equal(out.config.ok, true);
-  assert.equal(out.config.providerCount, 2); // 禁用的 provider 被过滤
+  assert.equal(out.config.providerCount, 2); // 禁用的 provider 被过滤（夹具没写 credentials.json，账号型来源 0 个）
   assert.equal(out.config.path, zcodeConfigPath);
   assert.equal(out.config.apiKeyPresent, true);
+  // T6-C：sources 照 registry 报两个来源的状态（没写凭据夹具 = 未登录）
+  assert.equal(out.config.sources.account.missing, true);
+  assert.equal(out.config.sources.account.ok, false);
+  assert.equal(out.config.sources.legacy.ok, true);
+  assert.equal(out.config.sources.legacy.providerCount, 2);
   assert.equal(out.handshake.ok, true);
   assert.equal(out.handshake.providerId, 'builtin:bigmodel-coding-plan'); // D6 优先级选中 coding-plan
   assert.deepEqual(out.handshake.tiers.fast, {
@@ -293,7 +299,9 @@ test('doctor：正常 → 退出码 0，--json 里有内置文件、apiKey 在�
     label: 'GLM 5.3 Flash',
   });
   assert.equal(out.handshake.tiers.strong.modelId, 'GLM-5.3');
-  assert.deepEqual(out.handshake.warnings, []);
+  // registry.warnings 并进来了：只有一条「credentials.json 不存在」的未登录提醒
+  assert.equal(out.handshake.warnings.length, 1);
+  assert.match(out.handshake.warnings[0], /credentials\.json 不存在/);
 });
 
 test('doctor：配置 review.jev.apiKey 时只报告已配置与新 runner 使用 Jev，不泄漏密钥', async () => {
@@ -361,20 +369,18 @@ test('doctor：插件配置错误时审批链不可确定，不虚报 ZCode', as
   });
 });
 
-test('doctor：人读输出三步与模型审批状态各一行', async () => {
+test('doctor：人读输出——① 一行、② 账号型与 config.json 两行加选中一行、③④ 各一行', async () => {
   const { run, mock } = await runCli(['doctor']);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
   const lines = run.stdout.split('\n').filter((l) => l.trim());
-  assert.deepEqual(
-    lines.slice(0, 3).map((l) => l.slice(0, 9)),
-    ['doctor ① ', 'doctor ② ', 'doctor ③ '],
-  );
-  assert.equal(lines.length, 4);
-  assert.match(lines[0], /版本 0\.16\.5，内置 provider 文件 /);
+  assert.equal(lines.length, 6); // T6-C 起 ② 拆成账号型 + config.json 两行，选中单独一行
+  assert.match(lines[0], /doctor ① zcode：版本 0\.16\.5，内置 provider 文件 /);
   assert.ok(lines[0].includes(mock.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE), lines[0]);
-  assert.match(lines[1], /2 个可用 provider，选中 builtin:bigmodel-coding-plan，apiKey 在/);
-  assert.match(lines[2], /builtin:bigmodel-coding-plan/);
-  assert.match(lines[3], /doctor ④ 模型审批：开启，新启动 runner 将使用 ZCode 快筛/);
+  assert.match(lines[1], /doctor ② 账号型 coding plan：未登录（credentials\.json 不存在）/);
+  assert.match(lines[2], /doctor ② config\.json：2 个可用 provider（备用来源）/);
+  assert.match(lines[3], /doctor ② 选中 builtin:bigmodel-coding-plan（apiKey 在）/);
+  assert.match(lines[4], /doctor ③ 握手：选中 builtin:bigmodel-coding-plan/);
+  assert.match(lines[5], /doctor ④ 模型审批：开启，新启动 runner 将使用 ZCode 快筛/);
 });
 
 test('doctor：选中的 provider 没有明文 apiKey → ② 先报「apiKey 不在」，③ 失败，退出码 1（断粮预警）', async () => {
@@ -402,6 +408,61 @@ test('doctor：zcode config 读不到 → 退出码 1，stderr 报路径，第�
   assert.equal(out.config.ok, false);
   assert.equal(out.handshake.skipped, true);
   assert.match(run.stderr, /nonexistent/);
+});
+
+// ---------- T6-C：账号型 coding plan 来源（2026-09-21） ----------
+
+test('doctor：只有 credentials.json、没有 config.json → ② 报已登录、③ 握手成功，--json 有 config.sources，输出不含账号 key', async () => {
+  const missingConfig = path.join(os.tmpdir(), `zcode-no-config-${Date.now()}.json`);
+  const { run, mock } = await runCli(['doctor', '--json'], { configPath: missingConfig, credentials: {} });
+  assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+  const out = JSON.parse(run.stdout);
+  assert.equal(out.ok, true);
+  assert.equal(out.config.ok, true); // 账号型来源可用就够了，legacy 缺失不再拦
+  assert.equal(out.config.providerCount, 2); // 个人版 + 团队版
+  assert.equal(out.config.apiKeyPresent, true);
+  assert.deepEqual(out.config.sources.account, {
+    ok: true, providerCount: 2, error: null, missing: false, family: 'bigmodel', plans: ['individual', 'team'],
+  });
+  assert.equal(out.config.sources.legacy.ok, false);
+  assert.equal(out.handshake.ok, true);
+  assert.equal(out.handshake.providerId, 'account:bigmodel-individual-coding-plan'); // T6-C 优先级
+  assert.equal(out.handshake.tiers.fast.modelId, 'GLM-5.3-Flash');
+  assert.equal(out.handshake.tiers.strong.modelId, 'GLM-5.3');
+  // key 的值不进任何输出（RULES §8）
+  for (const key of Object.values(mock.accountKeys)) {
+    assert.equal(run.stdout.includes(key), false);
+    assert.equal(run.stderr.includes(key), false);
+  }
+
+  const plain = await runCli(['doctor'], { configPath: missingConfig, credentials: {} });
+  assert.equal(plain.run.status, 0, `stderr: ${plain.run.stderr}`);
+  const lines = plain.run.stdout.split('\n').filter((l) => l.trim());
+  assert.match(lines[1], /doctor ② 账号型 coding plan：已登录（bigmodel，个人版 key 在、团队版 key 在）/);
+  assert.match(lines[2], /doctor ② config\.json：读不到（/);
+  assert.match(lines[3], /doctor ② 选中 account:bigmodel-individual-coding-plan（apiKey 在）/);
+  for (const key of Object.values(plain.mock.accountKeys)) {
+    assert.equal(plain.run.stdout.includes(key), false);
+    assert.equal(plain.run.stderr.includes(key), false);
+  }
+});
+
+test('models：并列出 account:bigmodel-individual-coding-plan，账号型与 legacy 并存时选中账号型', async () => {
+  const { run } = await runCli(['models', '--json'], { credentials: {} });
+  assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+  const out = JSON.parse(run.stdout);
+  assert.equal(out.selectedProvider, 'account:bigmodel-individual-coding-plan');
+  const account = out.providers.find((p) => p.providerId === 'account:bigmodel-individual-coding-plan');
+  assert.ok(account, '账号型 provider 要列出来');
+  assert.equal(account.selected, true);
+  assert.deepEqual(account.models.map((m) => m.modelId).sort(), ['GLM-5.3', 'GLM-5.3-Flash']);
+  assert.deepEqual(account.models[0].thoughtLevels, ['low', 'high', 'max']);
+  assert.equal(out.providers.some((p) => p.providerId === 'builtin:bigmodel-coding-plan'), true); // legacy 也在
+  assert.equal(out.providers.some((p) => p.providerId === 'account:bigmodel-team-coding-plan'), true);
+
+  const plain = await runCli(['models'], { credentials: {} });
+  assert.equal(plain.run.status, 0, `stderr: ${plain.run.stderr}`);
+  assert.match(plain.run.stdout, /account:bigmodel-individual-coding-plan ✓/);
 });
 
 test('models：--json 含每个模型的 tier，coding-plan 的 provider 标 selected', async () => {

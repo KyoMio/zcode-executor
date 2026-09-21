@@ -2,7 +2,8 @@
 
 每条记「定了什么、为什么、什么情况下值得重开」。D1 到 D5 于 2026-09-07 定下，D6 到 D9 是同日需求对齐时补的，
 D10 是 T0.2 探针之后补的，D11 是检查点 1 撞出来的，D12 D13 是 2026-09-08 做阶段 2 时定的，
-D14 是 2026-09-18 适配 ZCode App 3.12.2 时补的，D15 是同日确定 Jev 可选快筛时补的；D16 记录本轮批准的 Jev 前筛修订，替代 D15 的路由与审计方案。
+D14 是 2026-09-18 适配 ZCode App 3.12.2 时补的，D15 是同日确定 Jev 可选快筛时补的；D16 记录本轮批准的 Jev 前筛修订，替代 D15 的路由与审计方案；
+D19 是 2026-09-21 接账号型 Coding Plan（credentials.json 来源）时补的。
 
 ## D1 定位：派单与验收层，协议是别人的事
 
@@ -203,6 +204,31 @@ provider，不能靠它临时插入。写用户自己的 `~/.zcode/v2/provider_c
 代价：Jev 未提前通过会增加串行等待；本地 skip 无这笔 HTTP 开销。省略正文的写操作不再享有 Jev 直通。必须用同批样本比较端到端耗时、提前通过率、回落与费用；旧真实 Write pass 和旧校准仅是历史证据，不改写成新路线已验。
 
 重开条件：配对测量无净收益，需缩小适用范围或调整预算；若要恢复正文省略动作的直通、让原快筛调用异常也进入慢判，须另行决策并验收，不能借本轮暗改。
+
+## D19 账号型 Coding Plan 从 credentials.json 解出平台 key，走 D14 同一条路
+
+定了什么（2026-09-21，T6-C）：provider 表加第二个来源。`~/.zcode/v2/credentials.json`（ZCode App 替
+OAuth 登录的用户领的平台 API key，值形如 `enc:v1:<iv>.<tag>.<密文>`，AES-256-GCM，密钥 =
+sha256(`ZCODE_CREDENTIAL_SECRET` 或 `zcode-credential-fallback:<platform>:<homedir>:<username>`)）里只读
+四个键：`oauth:active_provider`、`oauth:<family>:user_info`（取 id）、个人版与团队版两把
+`account-provider:coding-plan:...:api-key`。解出的 key 配内置 provider 文件里 `account:*-coding-plan` 条目的
+baseUrl 与模型表（`modelRules` 正则忽略大小写匹配 modelId，多条命中后面覆盖前面），拼成与 legacy config.json
+同形状的 registry 元素（`buildAccountProviders`）。之后写临时个人 provider 文件、建会话、模型审批全走 D14
+的现有路径，协议层零改动；个人文件里 `access.type` 仍写 `api-key`——解出来的 key 就是普通平台 key，
+App 自己也这么用。pickProvider 优先级插入账号型两档（`preferredProvider` > `account:*-individual-coding-plan`
+> `account:*-team-coding-plan` > `-coding-plan` > `-start-plan` > 其它）。任一来源缺失只记 warning，两个来源
+加起来一个 provider 都没有才报错（message 带两个原因，doctor ② 分行报两个来源的状态）。
+
+为什么不走 `provider/updateAccountConfig`：它只收 `access.type:"zhipu-account"` 的账号型条目，塞 `apiKey`
+直接被拒；应答账号型的 `interaction/requestProviderRuntimeHeaders` 要的也是同一把 key，白多一套 revision
+维护；start-plan 用的是会过期的 jwt；写用户的 `~/.zcode/v2/provider_config.json` 会和 App 打架（D14 已排除）。
+
+风险与边界：密钥派生依赖 platform/homedir/username（换机器、改用户名都解不开——解不开就明确报「不可用」，
+不静默）；App 登出会删掉 credentials.json 里的 key，来源消失后回落 legacy；键名是 App 的私有实现，改了
+同样读不到。credentials.json 只读、只解四个键，其余键（OAuth 令牌一类）一律不读不解；解出的 key 与
+config.json 的 apiKey 同一待遇（RULES §6、§8）。
+
+重开条件：zcode 提供不落盘的账号型 provider 推送方法；或 key 不再放 credentials.json / 不再这么加密。
 
 ## 补记：模型审批的模型从已推的 provider 表里选，不再多一次 readState
 
