@@ -773,6 +773,8 @@ test('结束摘要：inputOmitted 用 permission.requested 的 input 兜底（T2
   trackRunnerPids(env.runsDir);
   const lines = [
     // permission.requested 在 tool.updated 之后才到（verified.md「事件流」），兜底必须第二遍回填
+    // 真机 3.14.1：Read 也省略 input 但没有审批事件，不能让它借走 Write 的兜底（2026-09-22 冒烟发现）
+    { type: 'tool.updated', payload: { toolCallId: 't0', toolName: 'Read', kind: 'scheduled', inputOmitted: true } },
     { type: 'tool.updated', payload: { toolCallId: 't1', toolName: 'Write', kind: 'scheduled', inputOmitted: true } },
     { type: 'permission.requested', payload: { toolName: 'Write', input: { file_path: 'docs/fallback.md' } } },
     { type: 'tool.updated', payload: { toolCallId: 't2', toolName: 'Bash', kind: 'scheduled', inputOmitted: true } },

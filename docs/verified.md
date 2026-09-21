@@ -2,6 +2,13 @@
 
 写的是当时的情况。文件、版本、命令用之前先确认还在。
 
+## 3.14.1 冒烟（2026-09-22，App 3.14.1 / CLI 0.16.9，插件 0.3.1，花额度两条短回合）
+
+- 零 token：`doctor` 四步全过（选中账号型个人版）；`scripts/probe.mjs` 与 v4 探针的每一步结果和 3.12.2 完全一致（旧方法握手、`v4/command` 的 ACK 形状、无 id 的 stop 被忽略）。v4 `stop` 的 ACK 多了一个 `memoryEnabled:false` 字段，忽略即可。
+- 插件全链路：`new`（provider 自动选 `account:bigmodel-individual-coding-plan`）→ `send`（后台 runner）→ 回合中 `send --steer` → `follow`。插话 ACK `delivery:"queue"`，事件 `turn.steerQueued` → `steerDrained`，c.txt 按插话内容写出；三次 Write 快筛放行；`state.steerUnavailable` 为 null。
+- cancel：第二回合跑到第一个 Write 时 `cancel`，一秒内 `turn.completed resultType:"cancelled"`，`last.outcome` cancelled、退出码 4，六个文件一个没写，runner 退出、锁删除；事件与 runner.log 无 `enc:v1`，临时 provider 目录无残留，无孤儿 app-server。
+- 发现并修一处显示问题：结束摘要的「改动」少列了 a.txt——Read 也省略 input 但没有审批事件，兜底逻辑让它借走了第一条 Write 的审批输入。改成只借同名工具（`lib/cli/common.mjs`）。
+
 ## 检查点 6c：账号型 Coding Plan 真机（2026-09-21，App 3.12.2，花额度一条短回合）
 
 - `doctor`：② 账号型 coding plan 已登录（bigmodel，个人版 key 在、团队版 key 在）；config.json 3 个可用 provider（备用来源）；选中 `account:bigmodel-individual-coding-plan`（apiKey 在）；③ 握手成功，fast=GLM-5.3-Flash、strong=GLM-5.3。`--json` 的 `config.sources.account` = `{ok:true, providerCount:2, family:"bigmodel", plans:["individual","team"]}`。
