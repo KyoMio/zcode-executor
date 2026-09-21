@@ -3,9 +3,9 @@
 Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给本机 ZCode（GLM），
 在 worktree 里隔离执行，用 git diff 和测试客观验收。
 
-**状态（2026-09-08）**：第一版完成并已适配 ZCode App 3.12.2（2026-09-18，decisions D14），`npm test` 334 个用例，真机全流程走通。
-术语在 [docs/CONTEXT.md](docs/CONTEXT.md)。本地开发记录（`docs/handoff/`、`docs/tasks/`、`docs/PLAN.md`、`docs/archive/`）不进 GitHub，只在开发机上有；
-有它们就从 `docs/handoff/handoff-20260908.md` 接手，没有就从 README 与 docs/PRD.md 开始。
+**状态（2026-09-21）**：第一版完成并已适配 ZCode App 3.12.2（decisions D14）；对照 ZCode 开源源码 3.14.0 修正了 `session/stop`、回合结算与插话（插话改走 `v4/command`，D17），并接上账号型 Coding Plan（凭据文件来源，D19）；`npm test` 438 个用例，真机检查点 6b/6c 走通。
+术语在 [docs/CONTEXT.md](docs/CONTEXT.md)。本地开发记录（`docs/handoff/`、`docs/tasks/`、`docs/PLAN*.md`、`docs/archive/`）不进 GitHub，只在开发机上有；
+有它们就从 `docs/PLAN-v4.md` 与 `docs/handoff/handoff-20260908.md` 接手，没有就从 README 与 docs/PRD.md 开始。
 
 ## 分层
 
@@ -24,7 +24,7 @@ Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给�
 - 模型审批只产出放行或转人工；拒绝同样退回人工。人工由 Claude 用 AskUserQuestion 转交。
 - 用词照 `CONTEXT.md`：会话、任务单、投递、回合、审批请求、提问、红线、模型审批、挂起、模型等级、思考等级。
 - 纯 `.mjs`，零运行时依赖，不加构建。
-- `~/.zcode/v2/config.json` 只读：里面有 API key，App 会重写它。读到的 apiKey 只落 D14 的临时个人 provider 文件。
+- `~/.zcode/v2/config.json` 与 `~/.zcode/v2/credentials.json` 只读：前者有明文 API key、App 会重写它；后者是 App 的加密凭据，只解账号型 coding plan 要的四个键（D19）。两处读到的 key 只落 D14 的临时个人 provider 文件。
 - 从 zcode-acp 搬来的代码保留 Apache-2.0 版权声明，记入 `NOTICE`。
 - 排障看 `~/.zcode/cli/log/zcode-YYYY-MM-DD.jsonl`。JSON-RPC 错误的细节在 `error.data.details`，`message` 只有一句概括。
 

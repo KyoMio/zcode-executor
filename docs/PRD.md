@@ -54,11 +54,11 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 
 | 命令 | 作用 |
 | --- | --- |
-| `doctor [--json]` | 零 token 自检三步：`zcode.cjs` 旁边找得到 `config/provider/zcode-builtin.json`（3.12+ 判据，找不到提示升级 ZCode App）→ `~/.zcode/v2/config.json` 存在 → 真握手一次；顺带报模型等级、provider key 状态，以及新启动 runner 的审批链（可选 Jev 前筛 → ZCode 快筛 → 慢判）；不联网探测 Jev |
-| `models [--json]` | 从 `~/.zcode/v2/config.json` 本地换算可用模型（3.12 起 `workspace/readState` 已删，不握手），显示每个模型的思考等级、自动分到哪个等级 |
+| `doctor [--json]` | 零 token 自检三步：`zcode.cjs` 旁边找得到 `config/provider/zcode-builtin.json`（3.12+ 判据，找不到提示升级 ZCode App）→ provider 两个来源各报状态（账号型 `credentials.json` 是否登录、`config.json` 备用来源）并报选中的 provider → 真握手一次；顺带报模型等级、provider key 状态，以及新启动 runner 的审批链（可选 Jev 前筛 → ZCode 快筛 → 慢判）；不联网探测 Jev |
+| `models [--json]` | 从两个来源本地换算可用模型（账号型：`credentials.json` 解出的 key + 内置 provider 文件的模型表；legacy：`~/.zcode/v2/config.json`；3.12 起 `workspace/readState` 已删，不握手），显示每个模型的思考等级、自动分到哪个等级 |
 | `list [--project 关键字] [--json]` | 列登记簿里的会话：id、标题、cwd、等级、上次结果、是否挂起 |
 | `new --cwd <绝对路径> [--title T] [--tier fast\|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]` | 建会话。cwd 必须在白名单内；不是 worktree 只警告不拒 |
-| `send <id> <正文\|-> [--task 文件] [--wait] [--steer] [--timeout 秒] [--stream] [--json]` | 投递。默认排队；`--steer` 用 zcode 原生方式插进当前回合，不打断 |
+| `send <id> <正文\|-> [--task 文件] [--wait] [--steer] [--timeout 秒] [--stream] [--json]` | 投递。默认排队；`--steer` 走 `v4/command` 的 `sendText`（guide）插进当前回合，在下一个工具边界生效、没有边界时排到回合结束后执行，不打断 |
 | `follow <id> [--timeout 秒] [--stream] [--json]` | 跟看后台 runner，写出新结果就返回 |
 | `status <id> [--tools N] [--json]` | 只读快照：phase（`running` 在跑 / `idle` 队列空 / `pending` 挂起 / `exited` 正常收工 / `stale` runner 半路没了）、最近工具调用、队列长度、上次结果、挂起了多久 |
 | `cancel <id>` | 叫停：挂起的先答拒绝，再 `session/stop`，之后不再取队列 |
@@ -88,9 +88,9 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 ## 5. 模型等级与思考等级
 
 - **两个等级**：`fast`（Flash、lite、mini、air 这类）和 `strong`（旗舰）。
-- **对上具体模型**：从 `~/.zcode/v2/config.json` 本地换算列表（3.12 起 `workspace/readState` 已删），按模型名关键词自动分，同档多个取版本最新的。
+- **对上具体模型**：从两个来源本地换算列表（账号型来源用内置 provider 文件的 `builtinModelIds` 与 `modelRules`；legacy 来源用 `~/.zcode/v2/config.json`；3.12 起 `workspace/readState` 已删），按模型名关键词自动分，同档多个取版本最新的。
   `doctor` 握手时把返回的 `settings.model.available` 里 `zcode-executor` 名下的模型和本地清单比对，缺的进警告。`config.json` 的 `tiers` 可覆盖。不按模型名写死，模型换代不用改代码。
-- **provider 优先 coding plan**（配置 `preferredProvider` 可改），国内 `bigmodel` 与国际 `zai` 站点哪个启用用哪个。
+- **provider 优先账号型个人版 coding plan，其次账号型团队版，再次 `config.json` 里的 coding plan**（配置 `preferredProvider` 可改，如 `account:bigmodel-team-coding-plan`），国内 `bigmodel` 与国际 `zai` 站点哪个登录用哪个。
 - **不给 `--tier`** 用 `fast` 档，没有 `fast` 才用 `strong`。
 - **派活的思考等级默认 `high`**，模型没有 `high` 档就不传，跟模型默认。`--thought` 可覆盖。ZCode 模型审批默认 `low`，配置 `review.thought` 可改；若配置里有非空白 `review.jev.apiKey`，原快筛之前增加 Jev 前筛，ZCode 快筛与慢判仍用该思考等级。
 - **档位只有 `build`**。不开 `--mode`。
@@ -159,7 +159,7 @@ Flash 类模型思考等级不要往低调，效果差。
 ```
 
 只有一个审计源：`events.jsonl`。查一条会话的来龙去脉只看一处。
-`~/.zcode/v2/config.json` 只读，`doctor` 只查它存在。
+`~/.zcode/v2/config.json` 与 `~/.zcode/v2/credentials.json` 只读；`doctor` 只报它们在不在、key 在不在，不打内容。
 
 ## 8. runner
 
