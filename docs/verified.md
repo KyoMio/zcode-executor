@@ -153,6 +153,29 @@ e. session 对象键集合：createdAt, mode, traceId, sessionId, sessionKind, s
 f. `-32031` 的 message 是客户端应答里的 `errorMessage ?? "Provider runtime headers were not applied
    before model request attempt."`（从 zcode.cjs 源码读出）。
 
+## v4/command 探针（2026-09-21，App 3.12.2，零 token）
+
+插话改道的依据：ZCode 开源源码 3.14.0 读出的协议 + 本机 App 3.12.2 的零 token 探针
+（只发 v4/command 命令，不发模型请求）。v4 与旧 `session/*` 走同一条 NDJSON 流，方法名
+`v4/command`，请求 params 就是命令信封（`commandId` 用 `crypto.randomUUID()`、
+`clientId` 固定、`sessionId`、`type`、`issuedAt`、`payload`）；响应 result 是 ACK
+`{commandId, status, revisionAtDecision, reasonCode?, message?, result?}`，六态
+`accepted | rejected | stale | duplicate | noop | failed`。本机实测四条：
+
+| 验的点 | 结果 |
+| --- | --- |
+| `sendText` 指向不存在的 sessionId | `{status:"rejected", reasonCode:"proto.sessionNotFound"}` |
+| `sendText` 空正文 | `{status:"failed", reasonCode:"proto.invalidPayload", message:"input must not be empty"}` |
+| `type:"stop"`、`payload:{}` 指向空闲会话 | `{status:"accepted"}` |
+| 旧 `session/create` 建的会话直接 `sendText` | 可用——不需要先订阅 v4 主题、不需要握手，v4 网关只查会话是否存在 |
+
+源码补的两条（未真机）：`sendText` 被接受时 `result` 为
+`{type:"inputAccepted", delivery:"startNow"|"queue", inputId}`；`requestedDelivery:"guide"`
+在回合忙时于下一个工具批次之后、下一次模型请求之前注入，没有工具边界或带附件时 CLI 自己
+退回排队（`fallbackReasonCode`），回合结束后作为下一条输入执行。**空闲会话上 `sendText`
+直接起新回合（startNow）**，所以插话只在回合进行中发。插话被接受后旧事件流照推
+`turn.steerQueued` / `turn.steerDrained`（3.11 时代我们 events.jsonl 里就有过）。
+
 ## 第一次真机投递（2026-09-07，CLI 0.16.5，检查点 1）
 
 两次花额度：投递「新建 hello.txt」一回合，杀进程后 resume 再问一句。

@@ -10,6 +10,9 @@
 // （payload.resultType="cancelled"）结束；回合进行中再发 session/send 直接拒绝 -32010
 // （3.11 的排队插话已删）；turn.completed.payload.resultType 取值
 // success | cancelled | error_max_turns | error_max_budget | error_during_execution | error_max_tool_calls。
+// 2026-09-21 再补 v4/command（对照 ZCode 源码 3.14.0 + 本机探针 App 3.12.2）：插话改走它的
+// sendText 命令（requestedDelivery:"guide"），与旧 session/* 同一条流，ACK 六态、
+// 回合忙时排队并推 turn.steerQueued / turn.steerDrained，见 handleRequest 的 v4/command 分支。
 // 检查点 5 真机（2026-09-18，verified.md「3.12.2 直连探针实测」表第 5 行）：api-key 型 provider 的模型请求
 // **不会**先向客户端要 provider 运行时头（interaction/requestProviderRuntimeHeaders），回合与 generateText
 // 都直接用个人文件里的 key。这个反向请求只在剧本 runtimeHeaders:true 时发（测客户端的内置应答用）。
@@ -70,6 +73,10 @@
 //   stopIgnored: true                                       session/stop 照常回 {} 但不叫停回合：
 //                                                         模拟「叫停已发出，运行时这一步的提问已经在路上」
 //                                                         的真机竞态（cancel 与挂起赛跑的用例用）
+//   v4CommandStatus:   'rejected' | {status, reasonCode?, message?}
+//                                                         强制 v4/command 的 ACK status（对象可再带
+//                                                         reasonCode/message），测「ACK 被拒时客户端
+//                                                         抛错」；信封校验之后、其余分支之前生效
 import { createInterface } from 'node:readline';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -325,15 +332,25 @@ async function requestRuntimeHeaders({ sessionId, modelSelection }) {
 }
 
 // ---------- 回合（剧本 turns） ----------
+
+// session/event 通知的统一出口：runTurn 与 v4/command（插话排队）都从这推，seq 单调
+const pushEvent = (sessionId, type, payload) => {
+  state.seq += 1;
+  // docs/reference/zcode-app-server-protocol.md「Event Types」：session/event 通知形状
+  send({ method: 'session/event', params: { sessionId, seq: state.seq, type, payload: payload ?? {} } });
+};
+
+// 本回合里排队的插话（v4/command sendText 被接受、delivery:queue 的那些）：回合结束前逐条 drain
+// （2026-09-21 对照 ZCode 源码：steerDrained 在回合收尾处推）。回合启动时清空——上一回合
+// hang / fail 没走正常收尾的残留不该排进下一回合（权宜：mock 单会话假设，与 activeTurn 同）
+const pendingSteers = [];
+
 async function runTurn(sessionId) {
   const turn = script.turns?.[state.sendCount] ?? {};
   state.sendCount += 1;
   state.stopRequested = false; // 新回合重置：上一回合的叫停不波及这一回合
-  const ev = (type, payload) => {
-    state.seq += 1;
-    // docs/reference/zcode-app-server-protocol.md「Event Types」：session/event 通知形状
-    send({ method: 'session/event', params: { sessionId, seq: state.seq, type, payload: payload ?? {} } });
-  };
+  pendingSteers.splice(0); // 新回合重置：清掉上一回合没 drain 的残留
+  const ev = (type, payload) => pushEvent(sessionId, type, payload);
   // 2026-09-21 对照 ZCode 源码：叫停生效后回合以 turn.completed（payload.resultType="cancelled"）结束。
   // runTurn 每往前推一步前看一眼 stopRequested，看到就以 cancelled 提前收尾
   const stopped = () => {
@@ -416,6 +433,9 @@ async function runTurn(sessionId) {
     ev('turn.failed', { error: turn.fail });
     return;
   }
+  // 回合结束前 drain 排队的插话（v4 sendText guide：没有工具边界时排到回合结束后执行，
+  // steerDrained 就在这个边界上）
+  for (const s of pendingSteers.splice(0)) ev('turn.steerDrained', { queryId: s.queryId });
   // resultType 剧本可指定（completedResultType）；真机缺省 success（verified.md 有 resultType:"success" 实录）
   ev('turn.completed', { resultType: script.completedResultType ?? 'success', usage: { totalTokens: 0 } });
   for (const stray of script.strayEvents ?? []) {
@@ -610,6 +630,71 @@ function handleRequest(msg) {
       void runTurn(params.sessionId).then(() => {
         state.activeTurn = false;
       });
+      break;
+    }
+    case 'v4/command': {
+      // 2026-09-21 对照 ZCode 源码（3.14.0）+ 本机探针（App 3.12.2）：v4 与旧 session/* 走同一条
+      // NDJSON 流，请求 params 就是命令信封，响应 result 是 ACK
+      // {commandId, status, revisionAtDecision, reasonCode?, message?, result?}，
+      // status ∈ accepted | rejected | stale | duplicate | noop | failed。
+      // 不需要先订阅 v4 主题、不需要握手：网关只查会话是否存在，旧 session/create 建的会话同样可用
+      const missing = ['commandId', 'clientId', 'sessionId', 'type', 'issuedAt'].some((k) => params[k] === undefined);
+      if (missing) {
+        respondError(id, -32602, 'Invalid params');
+        break;
+      }
+      const { commandId, sessionId, type } = params;
+      // 剧本键 v4CommandStatus：强制 ACK 的 status/reasonCode（字符串当 status，对象可带
+      // reasonCode/message），测「ACK 被拒时客户端抛错」用；信封校验之后、其余分支之前生效
+      if (script.v4CommandStatus) {
+        const forced = typeof script.v4CommandStatus === 'string' ? { status: script.v4CommandStatus } : script.v4CommandStatus;
+        respond(id, {
+          commandId,
+          status: forced.status,
+          ...(forced.reasonCode !== undefined ? { reasonCode: forced.reasonCode } : {}),
+          ...(forced.message !== undefined ? { message: forced.message } : {}),
+          revisionAtDecision: 0,
+        });
+        break;
+      }
+      if (!state.sessions.some((s) => s.sessionId === sessionId)) {
+        // 本机探针：指向不存在的 sessionId → {status:"rejected", reasonCode:"proto.sessionNotFound"}
+        respond(id, { commandId, status: 'rejected', reasonCode: 'proto.sessionNotFound', revisionAtDecision: 0 });
+        break;
+      }
+      if (type === 'sendText') {
+        const text = params.payload?.text;
+        if (typeof text !== 'string' || text === '') {
+          // 本机探针：空正文 → {status:"failed", reasonCode:"proto.invalidPayload",
+          // message:"input must not be empty"}（原文）
+          respond(id, { commandId, status: 'failed', reasonCode: 'proto.invalidPayload', message: 'input must not be empty', revisionAtDecision: 0 });
+          break;
+        }
+        if (state.activeTurn) {
+          // 回合忙：guide 在下一个工具批次后注入；mock 直接按排队收（delivery:"queue"），
+          // 旧事件流推 steerQueued，回合结束前推 steerDrained（runTurn 收尾处 drain）
+          respond(id, { commandId, status: 'accepted', revisionAtDecision: 0, result: { type: 'inputAccepted', delivery: 'queue', inputId: commandId } });
+          pushEvent(sessionId, 'turn.steerQueued', { queryId: commandId, input: text });
+          pendingSteers.push({ queryId: commandId });
+          break;
+        }
+        // 空闲：sendText 直接起新回合（delivery:"startNow"，2026-09-21 对照 ZCode 源码——
+        // 所以客户端的 steer 只在回合进行中发，空闲时的插话项走普通投递）
+        respond(id, { commandId, status: 'accepted', revisionAtDecision: 0, result: { type: 'inputAccepted', delivery: 'startNow', inputId: commandId } });
+        state.activeTurn = true;
+        void runTurn(sessionId).then(() => {
+          state.activeTurn = false;
+        });
+        break;
+      }
+      if (type === 'stop') {
+        // 本机探针：type:"stop"、payload:{} 指向空闲会话 → {status:"accepted"}；叫停逻辑同 session/stop
+        log(`v4 stop 收到（sessionId=${sessionId}）`);
+        respond(id, { commandId, status: 'accepted', revisionAtDecision: 0 });
+        if (state.activeTurn && script.stopIgnored !== true) state.stopRequested = true;
+        break;
+      }
+      respond(id, { commandId, status: 'rejected', reasonCode: 'proto.unsupportedCommand', revisionAtDecision: 0 });
       break;
     }
     default: {

@@ -216,7 +216,7 @@ zcode-executor 自己就是这么开发出来的：
 | `doctor [--json]` | 零 token 自检：找到 `zcode.cjs` 与内置 provider 文件（ZCode App ≥ 3.12.2）、确认配置存在、真握手一次、报模型等级及新启动 runner 将使用的审批链；不调用 Jev |
 | `models [--json]` | 列可用模型：思考等级、分到哪个等级 |
 | `new --cwd <绝对路径> [--title T] [--tier fast\|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]` | 登记会话（返回本地 id `x_…`）；ZCode 会话在第一次 `send` 时才建 |
-| `send <id> <正文\|-> [--task 文件] [--wait] [--timeout 秒] [--steer] [--stream] [--json]` | 投递；`--wait` 跟到结束或挂起；`--task` 是模型审批拿来当授权依据的任务单 |
+| `send <id> <正文\|-> [--task 文件] [--wait] [--timeout 秒] [--steer] [--stream] [--json]` | 投递；`--wait` 跟到结束或挂起；`--task` 是模型审批拿来当授权依据的任务单；`--steer` 往正在跑的回合插话——插话在下一个工具边界生效，没有边界时排到回合结束后执行 |
 | `follow <id> [--timeout 秒] [--stream] [--json]` | 跟看后台 runner 直到有结果或挂起 |
 | `status <id> [--tools N] [--json]` | 只读快照：阶段、最近工具、队列、挂起、上次结果 |
 | `list [--project 关键字] [--json]` | 登记簿里的会话：阶段、等级、上次结果 |

@@ -205,9 +205,12 @@ test('send --wait：剧本 fail → 退出码 4，reason 带出来', async (t) =
   assert.equal(last.outcome, 'failed');
 });
 
-test('第一回合 steer 被拒置上标记，第二回合开始后 state.steerUnavailable 清回 null', async (t) => {
+test('第一回合 steer 被拒（剧本 v4CommandStatus）置上标记，第二回合开始后 state.steerUnavailable 清回 null', async (t) => {
   const env = await setupSend(t, {
     script: {
+      // 2026-09-21 对照 ZCode 源码 + 本机探针：ACK 被拒是 v4/command 的正常返回之一，
+      // 用剧本键强制 rejected 来制造「插话不可用」
+      v4CommandStatus: 'rejected',
       turns: [
         { events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: '慢慢来' }, delayMs: 2000 }] },
         {}, // 第二条投递的回合：回合起点的 writeState 要把标记清掉——「不可用」只描述当前回合
@@ -223,7 +226,7 @@ test('第一回合 steer 被拒置上标记，第二回合开始后 state.steerU
   assert.equal(steer.status, 0, steer.stderr);
   await waitFor(async () => (readEvents(env.runsDir).some((e) => e.type === 'executor.steer_failed') ? true : undefined));
   const marked = JSON.parse(await readFile(path.join(env.runsDir, 'state.json'), 'utf8'));
-  assert.match(marked.steerUnavailable, /already running/); // 第一回合内：标记在
+  assert.match(marked.steerUnavailable, /rejected/); // 第一回合内：标记在
   // 第二回合开始后：回合起点的 writeState 带 steerUnavailable: null
   await waitFor(async () => {
     const state = JSON.parse(await readFile(path.join(env.runsDir, 'state.json'), 'utf8').catch(() => '{}'));
@@ -243,7 +246,7 @@ test('send --wait：剧本 completedResultType error_max_turns → last failed�
   assert.equal(JSON.parse(run.stdout).outcome, 'failed');
 });
 
-test('回合中 steer 被拒 → events 有 executor.steer_failed，state.steerUnavailable 非空', async (t) => {
+test('回合中 steer 成功（v4/command sendText）：events 有 executor.steer 带 delivery，state.steerUnavailable 为 null', async (t) => {
   const env = await setupSend(t, {
     script: {
       turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: '慢慢来' }, delayMs: 2500 }] }],
@@ -255,13 +258,54 @@ test('回合中 steer 被拒 → events 有 executor.steer_failed，state.steerU
   // 等回合真的在跑（turn.started 落盘：mock 收到 send 就置了 activeTurn），不靠固定睡眠
   await waitFor(async () => (readEvents(env.runsDir).some((e) => e.type === 'turn.started') ? true : undefined));
   const steer = runBin(env.env, ['send', env.entry.id, '插句话', '--steer']);
+  assert.equal(steer.status, 0, steer.stderr);
+  // 2026-09-21 对照 ZCode 源码 + 本机探针：插话走 v4/command 的 sendText（requestedDelivery:"guide"），
+  // 回合忙时排队（delivery:"queue"），不再撞 session/send 的 -32010。
+  // 返工第 2 条：正文先记 executor.steer（带 text，不依赖 ACK），ACK 回来另记 executor.steer_accepted
+  await waitFor(async () => (readEvents(env.runsDir).some((e) => e.type === 'executor.steer_accepted') ? true : undefined));
+  const steerEvent = readEvents(env.runsDir).find((e) => e.type === 'executor.steer');
+  assert.equal(steerEvent.text, '插句话');
+  const acceptedEvent = readEvents(env.runsDir).find((e) => e.type === 'executor.steer_accepted');
+  assert.equal(acceptedEvent.delivery, 'queue');
+  assert.equal(acceptedEvent.status, 'accepted');
+  const state = JSON.parse(await readFile(path.join(env.runsDir, 'state.json'), 'utf8'));
+  assert.equal(state.steerUnavailable, null);
+  // mock 记录：v4/command 信封确实发出去了（type 与 requestedDelivery 对）
+  const envelope = readRecord(env.recordPath).filter((m) => m.method === 'v4/command').pop();
+  assert.equal(envelope.params.type, 'sendText');
+  assert.equal(envelope.params.payload.requestedDelivery, 'guide');
+  // 插话排队与 drain 都在旧事件流里（普通回合事件）
+  assert.ok(readEvents(env.runsDir).some((e) => e.type === 'turn.steerQueued'));
+  // 回合本身不受插话影响，照常结算
+  await waitFor(
+    async () => {
+      const last = JSON.parse(await readFile(path.join(env.runsDir, 'last.json'), 'utf8').catch(() => '{}'));
+      return last.outcome === 'done' ? last : undefined;
+    },
+    { timeoutMs: 15000 },
+  );
+  assert.ok(readEvents(env.runsDir).some((e) => e.type === 'turn.steerDrained'));
+  trackRunnerPids(env.runsDir);
+});
+
+test('剧本 v4CommandStatus: rejected → executor.steer_failed + steerUnavailable，回合照常结算', async (t) => {
+  const env = await setupSend(t, {
+    script: {
+      v4CommandStatus: 'rejected',
+      turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: '慢慢来' }, delayMs: 2500 }] }],
+    },
+  });
+  const first = runBin(env.env, ['send', env.entry.id, '主投递']);
+  assert.equal(first.status, 0, first.stderr);
+  await waitFor(async () => (readEvents(env.runsDir).some((e) => e.type === 'turn.started') ? true : undefined));
+  const steer = runBin(env.env, ['send', env.entry.id, '插句话', '--steer']);
   assert.equal(steer.status, 0, steer.stderr); // steerUnavailable 还没置上：入队放行
-  // 2026-09-21 对照 ZCode 源码：3.12.2 起回合中 session/send 被拒 -32010，插话必失败且要可见
   await waitFor(async () => (readEvents(env.runsDir).some((e) => e.type === 'executor.steer_failed') ? true : undefined));
   const failed = readEvents(env.runsDir).find((e) => e.type === 'executor.steer_failed');
-  assert.match(failed.reason, /already running/);
+  assert.match(failed.reason, /v4 命令 sendText 未被接受：rejected/);
+  assert.equal(failed.text, '插句话'); // 返工第 2 条：失败也留正文
   const state = JSON.parse(await readFile(path.join(env.runsDir, 'state.json'), 'utf8'));
-  assert.match(state.steerUnavailable, /already running/);
+  assert.match(state.steerUnavailable, /rejected/);
   // 回合本身不受插话被拒影响，照常结算
   await waitFor(
     async () => {

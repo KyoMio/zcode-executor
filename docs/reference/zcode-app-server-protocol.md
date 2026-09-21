@@ -304,6 +304,52 @@ app-server ignores any message without an `id`（2026-09-21 对照 ZCode 源码�
 `turn.completed`（`payload.resultType: "cancelled"`，见下）结束，而不是
 `turn.failed`。
 
+### `v4/command`（最小用法）
+
+2026-09-21 对照 ZCode 源码（3.14.0）并在本机 App 3.12.2 零 token 探针验过。v4 与旧
+`session/*` 方法走**同一条 NDJSON 流**，方法名 `v4/command`，请求 params 就是命令信封：
+
+```json
+{
+  "id": 9,
+  "method": "v4/command",
+  "params": {
+    "commandId": "<任意唯一字符串，客户端用 crypto.randomUUID()>",
+    "clientId": "zcode-executor",
+    "sessionId": "sess_abc123",
+    "type": "sendText",
+    "issuedAt": 1758412800000,
+    "payload": { "text": "方向改一下，先只改 A", "requestedDelivery": "guide" }
+  }
+}
+```
+
+响应 result 是 ACK：`{commandId, status, revisionAtDecision, reasonCode?, message?,
+result?}`，`status ∈ accepted | rejected | stale | duplicate | noop | failed`。
+`accepted | noop | duplicate` 视为成功，其余按失败处理。
+
+**`sendText` 的 `requestedDelivery`**：`"guide"` 表示回合忙时在下一个工具批次之后、
+下一次模型请求之前注入；没有工具边界或带附件时 CLI 自己退回排队
+（`fallbackReasonCode`），回合结束后作为下一条输入执行——两种 delivery 都算插话成功。
+被接受时 `result` 为 `{type: "inputAccepted", delivery: "startNow" | "queue", inputId}`
+（源码读出，未真机抓到实例）。**空闲会话上 `sendText` 会直接起新回合**
+（`delivery: "startNow"`），所以插话只在回合进行中发，空闲时的投递走 `session/send`。
+插话被接受后旧事件流照推 `turn.steerQueued` / `turn.steerDrained`（普通回合事件）。
+
+**`stop`**：`payload: {}`，空闲会话上也回 `{status: "accepted"}`（本机实测）。
+
+**不需要先订阅 v4 主题、不需要握手**：v4 网关只查会话是否存在，旧 `session/create`
+建的会话同样可用（不必走 v4 `createSession`——它没有 `toolDenylist`）。
+
+本机实测四条（App 3.12.2，2026-09-21）：
+
+| 命令 | ACK |
+| --- | --- |
+| `sendText` 指向不存在的 sessionId | `{status: "rejected", reasonCode: "proto.sessionNotFound"}` |
+| `sendText` 空正文 | `{status: "failed", reasonCode: "proto.invalidPayload", message: "input must not be empty"}` |
+| `type: "stop"`、`payload: {}` 指向空闲会话 | `{status: "accepted"}` |
+| 旧 `session/create` 建的会话直接 `sendText` | 可用（不订阅、不握手） |
+
 ### `session/read`
 
 Read the session state and projection.

@@ -321,6 +321,57 @@ test('create 只在 model.options 里给档位、不给顶层 thoughtLevel → c
   });
 });
 
+// ---------- v4/command（2026-09-21 对照 ZCode 源码 + 本机探针，App 3.12.2） ----------
+
+test('command()：stop 指向空闲会话 → ACK accepted，信封字段齐全（记录文件核对）', async () => {
+  await withMock({}, {}, async ({ client, recordPath }) => {
+    const created = await create(client);
+    const ack = await client.command(created.session.sessionId, 'stop', {});
+    // 本机探针（App 3.12.2，2026-09-21）：type:"stop"、payload:{} 指向空闲会话 → {status:"accepted"}
+    assert.equal(ack.status, 'accepted');
+    const envelope = readRecord(recordPath).filter((m) => m.method === 'v4/command').pop();
+    assert.equal(envelope.params.clientId, 'zcode-executor');
+    assert.equal(envelope.params.sessionId, created.session.sessionId);
+    assert.equal(envelope.params.type, 'stop');
+    assert.deepEqual(envelope.params.payload, {});
+    // commandId 是 crypto.randomUUID()，issuedAt 是毫秒时间戳
+    assert.match(envelope.params.commandId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    assert.equal(typeof envelope.params.issuedAt, 'number');
+  });
+});
+
+test('command()：sendText 指向不存在的会话 → 抛 ExecutorError，details 带 proto.sessionNotFound', async () => {
+  await withMock({}, {}, async ({ client }) => {
+    await assert.rejects(
+      client.command('sess_missing', 'sendText', { text: '插一句', requestedDelivery: 'guide' }),
+      (err) => {
+        assert.ok(err instanceof ExecutorError);
+        // 本机探针（App 3.12.2，2026-09-21）：不存在的 sessionId → {status:"rejected", reasonCode:"proto.sessionNotFound"}
+        assert.match(err.message, /v4 命令 sendText 未被接受：rejected（proto\.sessionNotFound）/);
+        assert.equal(err.details.reasonCode, 'proto.sessionNotFound');
+        assert.equal(err.details.type, 'sendText');
+        assert.equal(err.details.status, 'rejected');
+        assert.equal(typeof err.details.commandId, 'string');
+        return true;
+      },
+    );
+  });
+});
+
+test('command()：sendText 空正文 → 抛错，details 带 proto.invalidPayload 与真机 message', async () => {
+  await withMock({}, {}, async ({ client }) => {
+    const created = await create(client);
+    // 本机探针（App 3.12.2，2026-09-21）：空正文 →
+    // {status:"failed", reasonCode:"proto.invalidPayload", message:"input must not be empty"}
+    await assert.rejects(client.command(created.session.sessionId, 'sendText', { text: '' }), (err) => {
+      assert.match(err.message, /v4 命令 sendText 未被接受：failed（proto\.invalidPayload）：input must not be empty/);
+      assert.equal(err.details.reasonCode, 'proto.invalidPayload');
+      assert.equal(err.details.message, 'input must not be empty');
+      return true;
+    });
+  });
+});
+
 test('个人文件缺失 → 模型表为空，create 带 model 被拒，不带 model 建出来的 current 缺失', async () => {
   const mock = await startMock({});
   mockDirs.push(mock.dir);

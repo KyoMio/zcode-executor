@@ -254,20 +254,145 @@ test('两次 send 串行：第二回合 lastText 独立，两回合事件都在'
   });
 });
 
-test('回合中 steer（session/send）被拒 -32010，第一回合正常结束', async () => {
+test('回合中 steer 走 v4/command sendText（requestedDelivery guide）：delivery queue，events 有 turn.steerQueued', async () => {
+  // 会话得先 session/create 建（v4 网关只认建过的会话，2026-09-21 本机探针），attach 用建出来的 id
+  const script = {
+    turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: '慢慢来' }, delayMs: 400 }] }],
+  };
+  const mock = await startMock({ script });
+  mockDirs.push(mock.dir);
+  const client = await AppServerClient.spawn({
+    zcodePath: mock.zcodePath,
+    cwd: mock.dir,
+    env: mock.env,
+    providerAuth: () => mock.apiKey,
+    onStderr: () => {},
+  });
+  pids.push(client.pid);
+  try {
+    const created = await client.request(
+      'session/create',
+      { workspace: { workspacePath: mock.dir, workspaceKey: mock.dir }, mode: 'build', persistence: 'immediate', titleGenerationEnabled: false },
+      { timeoutMs: 2000 },
+    );
+    const eventsPath = path.join(mock.dir, 'nested', 'events.jsonl');
+    const session = await attachSession({ client, sessionId: created.session.sessionId, cwd: mock.dir, eventsPath, resume: false });
+    const sendPromise = session.send('慢慢跑');
+    // 等 turn.started 落盘再插话：mock 收到 send 就置了 activeTurn，此刻 v4 sendText 走排队的 guide 路径
+    await waitFor(async () => {
+      try {
+        return (await readFile(eventsPath, 'utf8')).includes('turn.started') ? true : undefined;
+      } catch {
+        return undefined;
+      }
+    });
+    const ack = await session.steer('插一句');
+    assert.equal(ack.accepted, true);
+    assert.equal(ack.delivery, 'queue');
+    assert.equal(ack.status, 'accepted');
+    const result = await sendPromise;
+    assert.equal(result.outcome, 'done');
+    assert.equal(result.lastText, '慢慢来'); // 插话不混进本回合的正文
+    // 记录文件：v4/command 的信封确实发出去了，type 与 requestedDelivery 都对
+    const envelope = readRecord(mock.recordPath).filter((m) => m.method === 'v4/command').pop();
+    assert.equal(envelope.params.type, 'sendText');
+    assert.equal(envelope.params.payload.text, '插一句');
+    assert.equal(envelope.params.payload.requestedDelivery, 'guide');
+    // 旧事件流照推 steer 生命周期事件（2026-09-21 对照 ZCode 源码：steerQueued/steerDrained 是普通回合事件）
+    const events = (await readFile(eventsPath, 'utf8')).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+    const queued = events.find((e) => e.type === 'turn.steerQueued');
+    assert.equal(queued.payload.input, '插一句');
+    assert.equal(typeof queued.payload.queryId, 'string');
+    assert.ok(events.some((e) => e.type === 'turn.steerDrained'));
+  } finally {
+    await client.close({ timeoutMs: 2000 }).catch(() => {});
+    await mock.cleanup();
+  }
+});
+
+test('空闲时 steer → 抛 ExecutorError（delivery=startNow），自动发 v4 stop 叫停计划外回合', async () => {
+  // 2026-09-21 对照 ZCode 源码：空闲会话收到 sendText 直接起新回合（startNow）；runner 的观察点
+  // 500ms 一轮，插话可能在回合收尾后才到——这已是计划外的回合，steer 要立刻叫停并按失败处理。
+  // 会话先 session/create（v4 网关只认建过的）；空闲时 sendText 会拿第 0 个 turn 直接起新回合，
+  // delayMs 300 让计划外回合跑得够久，v4 stop 才落在活动回合里（叫停以 cancelled 收尾）
+  const script = {
+    turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: '不该跑' }, delayMs: 300 }] }],
+  };
+  const mock = await startMock({ script });
+  mockDirs.push(mock.dir);
+  const client = await AppServerClient.spawn({
+    zcodePath: mock.zcodePath,
+    cwd: mock.dir,
+    env: mock.env,
+    providerAuth: () => mock.apiKey,
+    onStderr: () => {},
+  });
+  pids.push(client.pid);
+  try {
+    const created = await client.request(
+      'session/create',
+      { workspace: { workspacePath: mock.dir, workspaceKey: mock.dir }, mode: 'build', persistence: 'immediate', titleGenerationEnabled: false },
+      { timeoutMs: 2000 },
+    );
+    const eventsPath = path.join(mock.dir, 'nested', 'events.jsonl');
+    const session = await attachSession({ client, sessionId: created.session.sessionId, cwd: mock.dir, eventsPath, resume: false });
+    await assert.rejects(session.steer('插一句'), (err) => {
+      assert.match(err.message, /插话到达时回合已结束/);
+      assert.match(err.message, /v4 stop/);
+      assert.equal(err.details.delivery, 'startNow');
+      assert.equal(typeof err.details.commandId, 'string');
+      return true;
+    });
+    // 叫停真的发了：mock 记录里有 type:'stop' 的 v4/command
+    await waitFor(async () => (readRecord(mock.recordPath).some((m) => m.method === 'v4/command' && m.params?.type === 'stop') ? true : undefined));
+    // 计划外回合被叫停收尾：事件文件里随后有 resultType:'cancelled' 的 turn.completed
+    await waitFor(async () => {
+      try {
+        const events = (await readFile(eventsPath, 'utf8')).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+        return events.some((e) => e.type === 'turn.completed' && e.payload?.resultType === 'cancelled') ? true : undefined;
+      } catch {
+        return undefined;
+      }
+    });
+  } finally {
+    await client.close({ timeoutMs: 2000 }).catch(() => {});
+    await mock.cleanup();
+  }
+});
+
+test('steer 指向不存在的会话 → 抛 proto.sessionNotFound', async () => {
+  // SESSION_ID 从没在 mock 里 session/create 过：v4 网关只查会话存在与否（本机探针 2026-09-21）
+  await withSession({}, {}, async ({ session }) => {
+    await assert.rejects(session.steer('插不进'), (err) => {
+      assert.match(err.message, /proto\.sessionNotFound/);
+      assert.equal(err.details.reasonCode, 'proto.sessionNotFound');
+      assert.equal(err.details.type, 'sendText');
+      return true;
+    });
+  });
+});
+
+test('回合中再发 session/send 仍被拒 -32010（插话已改走 v4/command，不再发它）', async () => {
   const script = {
     turns: [
       {
-        events: [{ type: 'model.streaming', delayMs: 200, payload: { kind: 'text_delta', delta: '慢慢来' } }],
+        events: [{ type: 'model.streaming', delayMs: 300, payload: { kind: 'text_delta', delta: '慢慢来' } }],
       },
     ],
   };
-  await withSession(script, {}, async ({ session, recordPath }) => {
+  await withSession(script, {}, async ({ session, client, eventsPath, recordPath }) => {
     const sendPromise = session.send('慢慢跑');
-    await sleep(60); // turn.started 已到、回合进行中
-    // 2026-09-21 对照 ZCode 源码：3.12.2 起回合进行中再发 session/send 直接拒绝（3.11 是排队插话）
+    // 等 turn.started 落盘：它由 mock 在 activeTurn 置位之后推，此刻再发 session/send 必撞 -32010
+    await waitFor(async () => {
+      try {
+        return (await readFile(eventsPath, 'utf8')).includes('turn.started') ? true : undefined;
+      } catch {
+        return undefined;
+      }
+    });
+    // 2026-09-21 对照 ZCode 源码：3.12.2 起回合进行中再发 session/send 直接拒绝（3.11 的排队插话已删）
     await assert.rejects(
-      session.steer('插一句'),
+      client.request('session/send', { sessionId: SESSION_ID, content: '插一句' }),
       (err) => {
         assert.match(err.message, /A prompt is already running for this session/);
         assert.equal(err.details.code, -32010);
@@ -276,7 +401,7 @@ test('回合中 steer（session/send）被拒 -32010，第一回合正常结束'
     );
     const result = await sendPromise;
     assert.equal(result.outcome, 'done');
-    assert.equal(result.lastText, '慢慢来'); // 插话被拒，不影响本回合
+    assert.equal(result.lastText, '慢慢来'); // 被拒的投递不影响本回合
     const sends = readRecord(recordPath).filter((m) => m.method === 'session/send');
     assert.equal(sends.length, 2);
     assert.equal(sends[1].params.content, '插一句'); // 第二条确实发出去了，被 mock 拒的

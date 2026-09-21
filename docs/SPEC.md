@@ -112,7 +112,7 @@ Jev 快筛：
   verified.md「第一次真机投递」），可选 `thoughtLevel`、`toolDenylist`。resume 不带 `model`。
 - 会话事件经 `session/subscribe` 推送，原样追加到事件文件。回合的边界是投递之后第一个 `turn.started` 到 `turn.completed`、`turn.failed`；
   `turn.started.payload.inputSource` 为 `background_task` 的回合是后台工具自己触发的，整段不认（协议文档「Background Tasks」）。第一版不做无信号兜底。
-- 插话仍从 runner 的 steer 队列投递，3.12.2 上必然被拒（-32010），失败要可见；换通道是 T6-B 的事。
+- 插话走 `v4/command` 的 `sendText`（`requestedDelivery:"guide"`，下一个工具边界生效，无边界时排到回合结束后执行）；ACK 非 accepted/noop/duplicate、或 delivery 为 startNow（回合已结束）时按失败记录并可见。
 - 收场：`session/close` 后 stdin EOF。
 - 模型列表和等级分配从 `~/.zcode/v2/config.json` 本地换算（3.12 前是另调 `workspace/readState`，
   该方法已被删，见 decisions D14）；`doctor` 握手时把 `session/create` 返回的 `settings.model.available`

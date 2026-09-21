@@ -218,7 +218,7 @@ The split keeps the expensive model on judgment and the cheap one on typing.
 | `doctor [--json]` | Zero-token self-check: finds `zcode.cjs` and the bundled `zcode-builtin.json` (ZCode App ≥ 3.12.2), confirms the config exists, does one real handshake, reports model tiers and the review pipeline for a newly started runner; it does not call Jev |
 | `models [--json]` | Lists available models with thought levels and tier assignment |
 | `new --cwd <abs> [--title T] [--tier fast\|strong] [--thought L] [--deny "Tool…"] [--provider id] [--json]` | Registers a session (returns a local id `x_…`); the ZCode session is created on first `send` |
-| `send <id> <text\|-> [--task file] [--wait] [--timeout s] [--steer] [--stream] [--json]` | Queues a message; `--wait` follows until done or blocked; `--task` is the task file the review uses as your authorization |
+| `send <id> <text\|-> [--task file] [--wait] [--timeout s] [--steer] [--stream] [--json]` | Queues a message; `--wait` follows until done or blocked; `--task` is the task file the review uses as your authorization; `--steer` injects into a running turn — it takes effect at the next tool boundary, or after the turn ends if there is none |
 | `follow <id> [--timeout s] [--stream] [--json]` | Follows a background runner until a result or a pending request |
 | `status <id> [--tools N] [--json]` | Read-only snapshot: phase, recent tools, queue, pending, last result |
 | `list [--project kw] [--json]` | Registered sessions with phase, tier and last outcome |

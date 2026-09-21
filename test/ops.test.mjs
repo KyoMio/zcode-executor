@@ -387,7 +387,7 @@ const LONG_TURN = {
   ],
 };
 
-test('steer：回合进行中 --steer → 第二条 session/send 在第一回合结束之前', async (t) => {
+test('steer：回合进行中 --steer → v4/command sendText 在第一回合结束之前', async (t) => {
   const env = await setupOps(t, { script: LONG_TURN });
   const first = runBin(env.env, ['send', env.entry.id, '主投递']);
   assert.equal(first.status, 0, first.stderr);
@@ -398,9 +398,12 @@ test('steer：回合进行中 --steer → 第二条 session/send 在第一回合
     const events = readEvents(env.runsDir).filter((e) => e.type === 'executor.result');
     return events.length >= 1 ? events : undefined;
   });
+  // 2026-09-21 对照 ZCode 源码 + 本机探针：插话不再走 session/send（回合中被拒 -32010），
+  // 改走 v4/command 的 sendText——主投递是唯一一条 session/send，插话在 v4 信封里
   const sends = readRecord(env.recordPath).filter((m) => m.method === 'session/send');
-  assert.equal(sends.length, 2); // 主投递 + steer（都是 session/send）
-  assert.ok(sends.some((m) => m.params?.content === '插句话'));
+  assert.equal(sends.length, 1);
+  const commands = readRecord(env.recordPath).filter((m) => m.method === 'v4/command');
+  assert.ok(commands.some((m) => m.params?.type === 'sendText' && m.params?.payload?.text === '插句话'));
   // 评审 T2.4c 第 4 条：executor.steer 必须在该回合 executor.result 之前（steer 分支坏掉此断言即红）
   const types = readEvents(env.runsDir).map((e) => e.type);
   // T2.4d 第 3 条：先断言 steer 事件真的存在再比大小——否则两边 indexOf 都 -1 时比较假绿
