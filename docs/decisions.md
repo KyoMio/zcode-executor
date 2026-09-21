@@ -3,7 +3,7 @@
 每条记「定了什么、为什么、什么情况下值得重开」。D1 到 D5 于 2026-09-07 定下，D6 到 D9 是同日需求对齐时补的，
 D10 是 T0.2 探针之后补的，D11 是检查点 1 撞出来的，D12 D13 是 2026-09-08 做阶段 2 时定的，
 D14 是 2026-09-18 适配 ZCode App 3.12.2 时补的，D15 是同日确定 Jev 可选快筛时补的；D16 记录本轮批准的 Jev 前筛修订，替代 D15 的路由与审计方案；
-D19 是 2026-09-21 接账号型 Coding Plan（credentials.json 来源）时补的。
+D17、D18、D19 是 2026-09-21 对照 ZCode 开源源码（3.14.0）做线 A/B/C 时补的：D17 插话改走 v4 命令、D18 旧协议面退役风险、D19 账号型 Coding Plan 来源。
 
 ## D1 定位：派单与验收层，协议是别人的事
 
@@ -204,6 +204,31 @@ provider，不能靠它临时插入。写用户自己的 `~/.zcode/v2/provider_c
 代价：Jev 未提前通过会增加串行等待；本地 skip 无这笔 HTTP 开销。省略正文的写操作不再享有 Jev 直通。必须用同批样本比较端到端耗时、提前通过率、回落与费用；旧真实 Write pass 和旧校准仅是历史证据，不改写成新路线已验。
 
 重开条件：配对测量无净收益，需缩小适用范围或调整预算；若要恢复正文省略动作的直通、让原快筛调用异常也进入慢判，须另行决策并验收，不能借本轮暗改。
+
+## D17 插话改走 v4/command 的 sendText，会话与事件流仍走旧 session/* 方法
+
+定了什么（2026-09-21，T6-B）：回合进行中的插话不再发第二条 `session/send`（App 3.12.2 起被拒 -32010
+「A prompt is already running」），改发 `v4/command` 的 `sendText` 命令，`requestedDelivery:"guide"`：
+回合忙时在下一个工具批次之后、下一次模型请求之前注入；没有工具边界或带附件时 zcode 自己退回排队，
+回合结束后作为下一条输入执行——两种都算插话成功（真机检查点 6b：guide 在 b.txt 与 c.txt 之间注入生效）。
+ACK 回 `startNow` 说明插话到达时回合已结束、起了计划外的回合，立刻发 v4 `stop` 并按失败记录。
+会话仍用旧 `session/create` 建（要 `toolDenylist`，模型列表也只有它给），仍订旧 `session/subscribe`，
+审批与提问仍答旧反向请求。协议层只多一个 `AppServerClient.command()` 薄封装。
+
+为什么：源码里 `v4/command` 只查会话是否存在，不要求先订阅 v4 主题、不要求握手，旧 create 建的会话同样
+在表里（本机零 token 探针证实）；桌面 App 自己也是旧 create + v4 命令并用。v4 `createSession` 没有
+`toolDenylist`，模型目录只在旧 `session/create` 的结果里，所以不把 v4 当主路径。
+
+重开条件：旧 `session/create` / `session/subscribe` / `session/event` 任一返回 -32601（见 D18）。
+
+## D18 旧协议面在退役轨道上，v4 订阅与投影暂缓
+
+定了什么（2026-09-21）：ZCode 3.14 源码把 `session/send`（部分）、`session/stop`、`session/fork` 标了
+@deprecated，注释「旧 session/* 删除后 v4/ 是唯一协议面」。我们不现在迁：桌面自己仍用旧 `session/create`，
+迁移没有功能收益只有工作量（v4 下行帧是 snapshot + 五种 delta 的投影模型，≥1 MiB 分片，要写一套套用器）。
+触发条件写死：任一旧方法在新版 App 上返回 -32601，或发版说明宣布删除旧 `session/*`。路线已在
+`docs/PLAN-v4.md` 线 D 写清（`v4/conversation/subscribe` → 套用 snapshot/delta → 回合结束看
+`turnHeader.state` / `control.phase`），D17 的 `command()` 是起点；审批仍答反向请求，不必改成 `resolveInteraction`。
 
 ## D19 账号型 Coding Plan 从 credentials.json 解出平台 key，走 D14 同一条路
 
