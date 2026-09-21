@@ -198,7 +198,7 @@ Swap in your agent's directory from the table in the npm section above.
 
 - macOS or Linux. **Windows is not supported yet.** The ZCode app bundle is looked up where each platform puts it (`/Applications/…`, `/opt/ZCode/…`, `/usr/share/zcode/…`); installed anywhere else, point `ZCODE_BIN` at `zcode.cjs`.
 - Node ≥ 22 (ZCode's app-server needs `node:sqlite`).
-- ZCode desktop app **≥ 3.12.2** installed and logged in (3.11 and earlier are not supported). The CLI reads `~/.zcode/v2/config.json` read-only; nothing is ever written back.
+- ZCode desktop app **≥ 3.12.2** installed and logged in (3.11 and earlier are not supported). Both login styles work: an account (OAuth) Coding Plan — the CLI decrypts the platform key the App stores in `~/.zcode/v2/credentials.json` (individual and team plans; only the four keys it needs are ever read) — or an API-key provider in `~/.zcode/v2/config.json`. Both files are read-only; nothing is ever written back.
 
 ## Recommended workflow
 
@@ -236,7 +236,7 @@ Exit codes: `0` done · `1` usage / cannot start · `2` refused (whitelist, unkn
 | --- | --- | --- |
 | `allowedRoots` | `["~/.zcode-executor/worktrees"]` | Directories `new --cwd` may point into (symlinks resolved) |
 | `waitTimeoutSec` | `1800` | `send --wait` timeout; the turn is stopped when it fires |
-| `preferredProvider` | coding-plan providers first | Which provider to pick when the same model exists under several |
+| `preferredProvider` | account individual plan › account team plan › `config.json` coding plan | Which provider to pick when the same model exists under several, e.g. `account:bigmodel-team-coding-plan` |
 | `tiers` | auto by name | Override which model is `fast` / `strong` |
 | `review` | `{enabled, model, thought:"low", fastMaxTokens:300, slowMaxTokens:2000, timeoutMs:60000}` | Model review: on/off, ZCode model (default: the `fast` tier), thought level, token budgets, per-call timeout |
 | `review.jev.apiKey` | absent | A non-blank key enables Jev pre-screening ahead of ZCode `fast` + `review.thought` (default `low`); absent or all-whitespace keeps the original ZCode chain |

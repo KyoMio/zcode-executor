@@ -196,7 +196,7 @@ ln -s "$PWD/skills/zcode-executor" ~/.claude/skills/zcode-executor
 
 - macOS 或 Linux，**Windows 暂不支持**。ZCode App 的位置按各平台的惯例找（`/Applications/…`、`/opt/ZCode/…`、`/usr/share/zcode/…`），装在别处就用 `ZCODE_BIN` 指到 `zcode.cjs`。
 - Node ≥ 22（ZCode 的 app-server 要 `node:sqlite`）。
-- 装好并登录过 **3.12.2 及以上**的 ZCode 桌面 App（3.11 及以下不支持）。CLI 只读 `~/.zcode/v2/config.json`，从不写回。
+- 装好并登录过 **3.12.2 及以上**的 ZCode 桌面 App（3.11 及以下不支持）。两种登录方式都行：账号（OAuth）登录的 Coding Plan——CLI 解出 App 存在 `~/.zcode/v2/credentials.json` 里的平台 key（个人版、团队版都认；只读它需要的四个键）；或 `~/.zcode/v2/config.json` 里的 API-key 型 provider。两个文件都只读，从不写回。
 
 ## 推荐工作流
 
@@ -234,7 +234,7 @@ zcode-executor 自己就是这么开发出来的：
 | --- | --- | --- |
 | `allowedRoots` | `["~/.zcode-executor/worktrees"]` | `new --cwd` 允许指向的目录（解析符号链接后比对） |
 | `waitTimeoutSec` | `1800` | `send --wait` 超时，到点停掉回合 |
-| `preferredProvider` | 优先 coding plan | 同名模型在多个 provider 下时选哪个 |
+| `preferredProvider` | 账号型个人版 › 账号型团队版 › `config.json` 里的 coding plan | 同名模型在多个 provider 下时选哪个，例如 `account:bigmodel-team-coding-plan` |
 | `tiers` | 按名字自动分 | 手动指定 `fast` / `strong` 的模型 |
 | `review` | `{enabled, model, thought:"low", fastMaxTokens:300, slowMaxTokens:2000, timeoutMs:60000}` | 模型审批：开关、ZCode 模型（默认 `fast` 档）、思考等级、两段预算、单次超时 |
 | `review.jev.apiKey` | 未配置 | 非空白 key 在 ZCode `fast` + `review.thought`（默认 `low`）前启用 Jev 前筛；缺失或全空白时保留原 ZCode 链 |

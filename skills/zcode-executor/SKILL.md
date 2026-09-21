@@ -80,7 +80,7 @@ git -C "$WT" checkout -b task/T-yyy main              # 切新分支：在执行
 | 难活（要设计取舍、调试难复现、改陌生代码） | `--tier strong` |
 
 - **思考等级默认 `high`，都不用调。** Flash 类模型不要往低调，实测效果差。
-- provider 已优先 coding plan；同名模型在多个 provider 下并存时不用管，插件自己选对。
+- provider 优先账号型个人版 coding plan（App 账号登录后的 key），其次账号型团队版，再次 `config.json` 里的 coding plan；同名模型在多个 provider 下并存时不用管，插件自己选对，要换就在插件配置里写 `preferredProvider`（如 `account:bigmodel-team-coding-plan`）。
 - 模型和思考等级建会话时定，同一条会话后续投递沿用。难活别复用之前建的 fast 会话，新开一条。
 
 可选启用 Jev 前筛时，编辑 `~/.zcode-executor/config.json`；**不要**把真实 key 放进命令参数、环境变量、任务单、聊天消息或仓库文件：
