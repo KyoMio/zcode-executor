@@ -2,6 +2,13 @@
 
 写的是当时的情况。文件、版本、命令用之前先确认还在。
 
+## 检查点 6c：账号型 Coding Plan 真机（2026-09-21，App 3.12.2，花额度一条短回合）
+
+- `doctor`：② 账号型 coding plan 已登录（bigmodel，个人版 key 在、团队版 key 在）；config.json 3 个可用 provider（备用来源）；选中 `account:bigmodel-individual-coding-plan`（apiKey 在）；③ 握手成功，fast=GLM-5.3-Flash、strong=GLM-5.3。`--json` 的 `config.sources.account` = `{ok:true, providerCount:2, family:"bigmodel", plans:["individual","team"]}`。
+- `models`：账号型两条 provider 列在最前，思考档位 low/high/max（从内置文件 `modelRules` 的 `reasoningLevel.values` 算出，与 legacy 来源的 low/max/high 同集合、顺序不同）。
+- `scripts/real-send.mjs`（provider 按优先级自动选中账号型个人版）：create `providerId:"zcode-executor"`（个人文件）、GLM-5.3-Flash；一次 Write 审批放行，回合 15 秒 `done`，文件内容正确。事件文件里没有 `enc:v1` 与「32 位.16 位」形态的字符串；`os.tmpdir()` 下没有残留 `zcode-executor-provider-*` 目录。
+- 团队版那把 key 只验到「解得开、能进 provider 表」，没有真机投递过（默认选个人版；要用团队版在插件配置里写 `preferredProvider`）。
+
 ## 检查点 6b：插话与叫停真机（2026-09-21，App 3.12.2，花额度两条短回合）
 
 `scripts/real-send.mjs --steer-after 8 --steer-text …` 与 `--stop-after 6`，模型 GLM-5.3-Flash，审批全放行：
