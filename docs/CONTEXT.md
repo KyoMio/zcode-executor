@@ -100,3 +100,14 @@ _Avoid_: provider 表、registry
 **内置 provider 文件（builtin provider config file）**：
 ZCode App 自带的 `zcode-builtin.json`，路径经环境变量 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 告诉子进程；
 本项目只负责算出并传入这个路径，不生成也不改它的内容。
+
+**账号型 provider（account provider）**：
+内置 provider 文件里 `account:` 前缀的 coding plan 条目（个人版 / 团队版）。用户在 App 里用账号（OAuth）登录后，
+key 不写进 config.json，而在凭据文件里由 App 替用户领取；本项目解出后当普通平台 key 走 D14 的个人文件路径
+（decisions D19）。
+_Avoid_: OAuth provider、zhipu-account
+
+**凭据文件（credentials file）**：
+`~/.zcode/v2/credentials.json`，ZCode App 存登录凭据的平面 JSON，值多为 `enc:v1:` 加密（AES-256-GCM）。
+本项目只读、只解四个键（active provider、user_info、两把 coding plan api-key），其余键一律不读不解。
+_Avoid_: 密钥库、keychain

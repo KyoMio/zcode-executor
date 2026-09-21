@@ -62,6 +62,8 @@
 - `runs/`、`worktrees/` 不进仓库；测试用 `mkdtemp` 建临时目录并在 `after()` 里清掉。
 - `~/.zcode/v2/config.json` 只读不写；读到的 apiKey 只写进 mkdtemp 出来的 0600 临时个人 provider 文件
   （decisions D14），子进程收场即删，永不进 `runs/`、日志和任何输出。
+- `~/.zcode/v2/credentials.json` 同样只读不写；只解账号型 coding plan 要的那四个键，其余键一律不读不解；
+  解出的 key 与 config.json 的 apiKey 同一待遇（decisions D19）。
 
 ## 7. 协议层
 

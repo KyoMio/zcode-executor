@@ -178,6 +178,19 @@ f. `-32031` 的 message 是客户端应答里的 `errorMessage ?? "Provider runt
 | 检查点 2（2026-09-08，main ab6dfc8，第五次花额度） | 真 worktree + `--task`：`new` → `send --wait --task` 5（Write）→ `approve` → 模型继续读任务单后又发 **Bash `git -C …` 的审批请求**（build 档下 git 命令也要审批）→ 第二次 approve → done。`hello.txt` 只出现在 worktree，主检出零改动；`last.json` 记了任务单路径；一回合 usage 约 65k（两次模型请求 + 读任务单）。撞出 bug：`approve` 在应答生效后匹配 events 回执时遇到 `{method,params}` 行崩溃且退出码 0（T2.6 修） |
 | **没跑过回合的会话 resume 不了**（2026-09-08，T2.3b 真机） | `new` 建完立刻 `session/close` 并退出进程，runner 再 `session/resume` 报 `Session not found`。与 zcode-acp 时期的实测一致：跑过至少一回合的会话才能跨进程 resume。`session/create` 带自定义 `sessionId` 被拒：「sessionId is only supported for imported history creates」 |
 
+## 凭据文件探针（2026-09-21，App 3.12.2，scripts/probe-credentials.mjs，零 token）
+
+T6-C 的背景事实，用户本机跑探针核实；加密与键名细节从 ZCode 开源源码 3.14.0 读出、本机文件格式核对：
+
+- 密钥来源 fallback（`zcode-credential-fallback:<platform>:<homedir>:<username>` 的 sha256）能解开本机
+  credentials.json 里的值（未设 `ZCODE_CREDENTIAL_SECRET`）。
+- `oauth:active_provider` = `bigmodel`；`oauth:bigmodel:user_info` 解出 JSON，字段 id、username、displayName、rawProfile。
+- 个人版与团队版 coding plan 的 api-key 键都在，值长度 49、含点号（`apiKey.secretKey` 形态）。
+- 加密形状：`enc:v1:<iv>.<tag>.<密文>` 三段 base64url，AES-256-GCM，iv 12 字节、authTag 16 字节；
+  不带前缀的值按明文用。
+- 键名是 App 的私有实现：`account-provider:coding-plan:account:<family>-<plan>-coding-plan:account:<encodeURIComponent(id)>:api-key`。
+  哪天改了就读不到，读不到要明确报「不可用」，不静默（D19）。
+
 ## 一次性 CLI（备用路线）
 
 `zcode --prompt "<text>" --json --mode build --cwd <dir> --resume <sess_> --attach <file> --disallowed-tools "Write Edit Bash"`。
