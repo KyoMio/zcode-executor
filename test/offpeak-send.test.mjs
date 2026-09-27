@@ -76,7 +76,7 @@ test('send --offpeak：取号 3103 → 退出码 2，带本地时间「以后可
   const r = await runBin(s.env, ['send', s.entry.id, '活', '--offpeak']);
   assert.equal(r.status, 2, r.stderr);
   assert.match(r.stderr, /额度用完/);
-  assert.match(r.stderr, /\d{1,2}:\d{2}:\d{2}.*以后可再取/);
+  assert.match(r.stderr, /\d{4}\/\d{1,2}\/\d{1,2} \d{2}:\d{2} 以后可再取/);
   assert.equal(existsSync(path.join(s.runsDir, 'offpeak.json')), false);
   assert.equal(existsSync(path.join(s.runsDir, 'lock')), false);
   const queued = existsSync(path.join(s.runsDir, 'queue')) ? await readdir(path.join(s.runsDir, 'queue')) : [];

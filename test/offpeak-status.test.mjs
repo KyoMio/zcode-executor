@@ -72,7 +72,9 @@ test('status 运行中：多一行「闲时：运行中（号 …，最晚 <本�
   trackPids(s.runsDir);
   const human = await runBin(s.env, ['status', s.entry.id]);
   assert.equal(human.status, 0, human.stderr);
-  const deadline = new Date(offpeakJson(s).activeDeadline).toLocaleString();
+  // 本地时间，中文 24 小时制到分钟（如 2026/9/29 00:00）
+  const deadline = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .format(new Date(offpeakJson(s).activeDeadline));
   assert.ok(human.stdout.includes(`  闲时：运行中（号 mock-ticket-1，最晚 ${deadline} 截止）`), human.stdout);
   const cancel = await cancelAndWait(s);
   await assertNoSecrets(s, [r.stdout, r.stderr, human.stdout, human.stderr, cancel.stdout, cancel.stderr]);
