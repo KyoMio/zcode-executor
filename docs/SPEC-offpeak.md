@@ -161,11 +161,14 @@ macOS 上 runner 从等号到收尾挂 `caffeinate -i -w <runner pid>`；`ZCODE_
 - 服务器：调 `availability()`，得到能不能取号；不能取时带下次可取时间（换成本地时间）。
 - 本工具今天的取号次数：扫描 `runs/*/events.jsonl` 里本地今天（机器本地时区，0 点起）的 `executor.offpeak.taken` 与
   `executor.offpeak.retaken` 事件条数；doctor 自检不取号，不计。App 里或别的客户端用掉的次数看不到，输出里写明。
+  修改时间早于今天 0 点的文件跳过，其余逐行流式读、只解析含 `"executor.offpeak.` 的行；读不了的文件跳过并提示，不影响退出码。
+  取号成功但写 offpeak.json 或入队失败时没有 taken 事件，会少算（只少不多）。
 - 人读一行：`quota: 闲时取号今天本工具已用 N 次（每天约 3 次，App 里用的不计入）；服务器：现在可以取号` /
-  `…；服务器：今天额度已用完，<本地时间> 以后可再取`。
+  `…；服务器：今天额度已用完，<本地时间> 以后可再取` / `…；服务器：现在不能取号`（没给时间）/
+  `…；服务器：暂时不可用（原因）` / `不适用（原因）` / `接口变了（原因）`。本地时间用中文 24 小时制（如 `2026/9/29 00:00`）。
 - `--json`：`{usedToday, estimatedDailyLimit: 3, canTakeNumber, nextTakeAt(ISO 或 null), state, reason}`；
   `state` 照 doctor ⑤ 的四态口径：`ok`（查到了，不论能不能取）/ `unavailable` / `not-applicable` / `changed`。
-- 退出码：`changed` → 1；其余 0（这是给派单方看的信息，不因为额度用完就报错）。不起 app-server，1 秒内结束。
+- 退出码：`changed` → 1；其余 0（这是给派单方看的信息，不因为额度用完就报错）。不起 app-server；正常 1 秒内结束，网络不通最长 3 秒。
 - 权宜：「每天约 3 次」来自一天的观察（verified.md），写成常量 `OFFPEAK_ESTIMATED_DAILY_LIMIT`，观察到别的值再改；
   跨时区用机器本地日期，服务器的日界若不同会有偏差。
 
