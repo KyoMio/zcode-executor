@@ -276,6 +276,17 @@ test('闲时凭据：JWT 与个人版 key 都在 → 返回 family、jwt、planK
   });
 });
 
+test('闲时凭据：别的键是解不开的坏值也不影响——只比 D19 多读 zcodejwttoken 一个键', async () => {
+  const entries = offPeakEntries();
+  entries['oauth:bigmodel:access_token'] = 'enc:v1:garbage'; // 不加密写进去，谁去解谁就炸
+  const file = await writeCredentials(entries, {
+    encryptKeys: Object.keys(entries).filter((k) => k !== 'oauth:bigmodel:access_token'),
+  });
+  const out = readOffPeakAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  assert.equal(out.error, undefined);
+  assert.equal(out.jwt, TEST_JWT);
+});
+
 test('闲时凭据：凭据文件不存在 → not-applicable，说没用账号登录', () => {
   const file = path.join(os.tmpdir(), `zcode-cred-none-${Date.now()}.json`);
   const out = readOffPeakAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });

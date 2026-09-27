@@ -4,13 +4,23 @@
 //
 // 状态机照 ZCode App 3.14.1 自带的开发用模拟网关（app.asar host 进程的 mock gateway）写，
 // 响应形状与业务码对照真机（verified.md「闲时任务探针」，2026-09-27）：
-// - 取号后 queued，过 readyDelayMs 变 ready 并给 ready_deadline；ready 超过 readyTtlMs 未开跑 → expired；
-//   active 超过 activeMs → expired；settle 后 settled（已过期的号 settle 仍回 200、state 原样 expired，真机）；
-//   未知票号在 status 里是 not_found。同一个 task_id 再取号，旧号作废（expired）。
+// - 取号后 queued，过 readyDelayMs 变 ready；截止时间照真机随时间走、不看有没有人来查：
+//   ready_deadline = 取号时间 + readyDelayMs + readyTtlMs（真机约 queued_at + 310 秒），到点未开跑 → expired；
+//   active_deadline = 开跑时间 + activeMs（真机 3 小时整），到点 → expired。
+//   settle 后 settled（已过期的号 settle 仍回 200、state 原样 expired，真机）；未知票号在 status 里是 not_found。
+//   同一个 task_id 再取号，旧号作废（expired）。
+// - 结算不存在的号回 200、state settled：照 App mock 网关，真机未验。
 // - 成功包成 {code:0, msg:'success', data, logid}；失败 {code, msg, logid}：缺参数 400/3000，
 //   额度用完 429/3103 带 data.next_take_at（App mock 网关），没资格 3101（HTTP 状态真机没见过，这里用 400）。
 // - 鉴权头 authorization: Bearer <jwt> 与 x-coding-plan-api-key 缺一或不匹配 → 401。
 // 请求记录只存方法、路径、body 和鉴权是否正确的布尔值，不存凭据原值。
+//
+// 失败注入用法（路由名：availability / take / status / settle）：
+//   startMockOffPeak({ failRoute: { settle: { status: 500, times: 3 } } })   // 前 3 次结算回 500，之后正常
+//   startMockOffPeak({ failRoute: { status: { delayMs: 500 } } })            // 查排位先等 500 毫秒再正常答（测超时）
+//   startMockOffPeak({ failRoute: { take: { status: 302, headers: { location: '…' }, body: '' } } })
+//   mock.setFailRoute('take', { status: 429, body: { code: 3103, msg: 'limit' } })  // 运行中换上
+//   mock.setFailRoute('take', null)                                           // 撤掉，恢复正常
 import http from 'node:http';
 
 const PREFIX = '/api/v1/off-peak';
@@ -27,9 +37,11 @@ const PREFIX = '/api/v1/off-peak';
  * @param {number} [options.activeMs=10800000] active 最长时间（真机 3 小时）
  * @param {number} [options.nextPollS=1] 回给客户端的 next_poll_after（秒）
  * @param {object} [options.failRoute] 按路由（availability / take / status / settle）强制行为：
- *   { status?, body?, delayMs? }——delayMs 先等再答；给了 status 就回这个 HTTP 状态和 body
- *   （body 是字符串原样发，是对象就 JSON；缺省 {code:status, msg:'forced failure'}）。
- * @returns {Promise<{origin: string, requests: object[], activate: (ticketId: string) => boolean, close: () => Promise<void>}>}
+ *   { status?, body?, headers?, delayMs?, times? }——delayMs 先等再答；给了 status 就回这个 HTTP 状态、
+ *   响应头和 body（body 是字符串原样发，是对象就 JSON；缺省 {code:status, msg:'forced failure'}）；
+ *   times 给了就只作用前 N 次请求，之后这条路由恢复正常。
+ * @returns {Promise<{origin: string, requests: object[], activate: (ticketId: string) => boolean,
+ *   setFailRoute: (route: string, behavior: object|null) => void, close: () => Promise<void>}>}
  */
 export async function startMockOffPeak({
   jwt = 'mock-offpeak-jwt-value',
@@ -40,8 +52,10 @@ export async function startMockOffPeak({
   readyTtlMs = 300000,
   activeMs = 3 * 60 * 60 * 1000,
   nextPollS = 1,
-  failRoute = {},
+  failRoute: initialFailRoute = {},
 } = {}) {
+  // 逐条拷一份：times 计数与 setFailRoute 不改调用方的对象
+  const failRoute = Object.fromEntries(Object.entries(initialFailRoute).map(([k, v]) => [k, { ...v }]));
   const tickets = new Map(); // ticketId → { ticketId, taskId, state, takenAt, seq, readyDeadline?, activeDeadline? }
   const byTask = new Map(); // taskId → 最新 ticketId
   const requests = [];
@@ -53,7 +67,7 @@ export async function startMockOffPeak({
   function advance(t, now) {
     if (t.state === 'queued' && now - t.takenAt >= readyDelayMs) {
       t.state = 'ready';
-      t.readyDeadline = now + readyTtlMs;
+      t.readyDeadline = t.takenAt + readyDelayMs + readyTtlMs;
     }
     if (t.state === 'ready' && t.readyDeadline !== undefined && now > t.readyDeadline) t.state = 'expired';
     if (t.state === 'active' && t.activeDeadline !== undefined && now > t.activeDeadline) t.state = 'expired';
@@ -64,10 +78,10 @@ export async function startMockOffPeak({
     return ahead + 1;
   }
 
-  function send(res, status, payload) {
+  function send(res, status, payload, headers = {}) {
     const logid = `mock-log-${++logSeq}`;
     const body = typeof payload === 'string' ? payload : JSON.stringify({ logid, ...payload }); // failRoute 指定的 logid 优先
-    res.writeHead(status, { 'content-type': 'application/json' });
+    res.writeHead(status, { 'content-type': 'application/json', ...headers });
     res.end(body);
   }
   const ok = (res, data) => send(res, 200, { code: 0, msg: 'success', data });
@@ -106,9 +120,12 @@ export async function startMockOffPeak({
     if (!name) return send(res, 404, { code: 404, msg: 'not found' });
 
     const forced = failRoute[name];
+    if (forced?.times !== undefined && --forced.times <= 0) delete failRoute[name]; // 这次是最后一次
     if (forced?.delayMs) await new Promise((r) => setTimeout(r, forced.delayMs));
     if (res.destroyed) return; // 客户端超时先走了
-    if (forced?.status) return send(res, forced.status, forced.body ?? { code: forced.status, msg: 'forced failure' });
+    if (forced?.status) {
+      return send(res, forced.status, forced.body ?? { code: forced.status, msg: 'forced failure' }, forced.headers);
+    }
 
     if (!authOk) return send(res, 401, { code: 401, msg: 'unauthorized' });
     const now = Date.now();
@@ -187,6 +204,11 @@ export async function startMockOffPeak({
       t.state = 'active';
       t.activeDeadline = now + activeMs;
       return true;
+    },
+    /** 运行中设置或替换某条路由的失败行为（形状同 options.failRoute 的一项）；传 null 撤掉。 */
+    setFailRoute(route, behavior) {
+      if (behavior) failRoute[route] = { ...behavior };
+      else delete failRoute[route];
     },
     async close() {
       server.closeAllConnections();

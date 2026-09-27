@@ -92,13 +92,51 @@ test('闲时客户端：开跑后的号带 activeDeadline', async () => {
   assert.equal(typeof out.tickets[0].activeDeadline, 'number');
 });
 
-test('闲时客户端：查排位一次最多发 100 个号', async () => {
+test('闲时客户端：查排位一次最多 100 个号，正好 100 个照发', async () => {
   const m = await mock();
   const client = createOffPeakClient({ origin: m.origin, auth: AUTH });
-  const ids = Array.from({ length: 120 }, (_, i) => String(i));
+  const ids = Array.from({ length: 100 }, (_, i) => String(i));
   const out = await client.status(ids);
   assert.equal(m.requests.at(-1).body.ticket_ids.length, 100);
   assert.equal(out.tickets.length, 100);
+});
+
+test('闲时客户端：查排位超过 100 个号是用法错，不截断也不发请求', async () => {
+  const m = await mock();
+  const client = createOffPeakClient({ origin: m.origin, auth: AUTH });
+  const ids = Array.from({ length: 101 }, (_, i) => String(i));
+  const err = await rejection(client.status(ids));
+  assert.equal(err.exitCode, 1);
+  assert.match(err.message, /100/);
+  assert.equal(m.requests.length, 0);
+});
+
+test('闲时客户端：服务器给的轮询间隔是 0 或负数时按 1 秒', async () => {
+  for (const nextPoll of [0, -5]) {
+    const m = await mock({
+      failRoute: { take: { status: 200, body: { code: 0, msg: 'success', data: { ticket_id: 't-1', state: 'queued', next_poll_after: nextPoll } } } },
+    });
+    const client = createOffPeakClient({ origin: m.origin, auth: AUTH });
+    assert.equal((await client.take('offpeak-task-1')).nextPollMs, 1000, String(nextPoll));
+  }
+});
+
+test('闲时客户端：origin 只接受 https 或本机回环的 http，否则退出码 1 且不发请求', () => {
+  for (const origin of ['http://127.0.0.1:1234', 'http://localhost:8080', 'http://[::1]:9000', 'https://zcode.z.ai', 'https://example.test']) {
+    assert.doesNotThrow(() => createOffPeakClient({ origin, auth: AUTH }), origin);
+  }
+  for (const origin of ['http://zcode.z.ai', 'http://10.0.0.8:80', 'ftp://127.0.0.1', 'not a url']) {
+    assert.throws(() => createOffPeakClient({ origin, auth: AUTH }), (err) => {
+      assert.ok(err instanceof ExecutorError, origin);
+      assert.equal(err.exitCode, 1, origin);
+      assert.match(err.message, /https|本机/, origin);
+      return true;
+    }, origin);
+  }
+  assert.throws(
+    () => createOffPeakClient({ auth: AUTH, env: { ZCODE_EXECUTOR_OFFPEAK_ORIGIN: 'http://attacker.example' } }),
+    (err) => err instanceof ExecutorError && err.exitCode === 1,
+  );
 });
 
 test('闲时客户端：结算返回 settled 与结算时间；票号按 URL 编码', async () => {
@@ -195,6 +233,84 @@ test('闲时客户端：3103 的 next_take_at 在顶层也认', async () => {
   const client = createOffPeakClient({ origin: m.origin, auth: AUTH });
   const err = await rejection(client.take('offpeak-task-x'));
   assert.equal(err.details.nextTakeAt, 1790000000000);
+});
+
+test('闲时客户端：3103 的 next_take_at 像秒级时间戳时换算成毫秒', async () => {
+  const m = await mock({ failRoute: { take: { status: 429, body: { code: 3103, msg: 'limit', data: { next_take_at: 1790000000 } } } } });
+  const client = createOffPeakClient({ origin: m.origin, auth: AUTH });
+  const err = await rejection(client.take('offpeak-task-x'));
+  assert.equal(err.details.nextTakeAt, 1790000000000);
+});
+
+test('闲时客户端：HTTP 429（不是 3103）→ unavailable，纯文本与别的业务码都一样', async () => {
+  for (const body of ['Too Many Requests', { code: 1302, msg: 'rate limited' }]) {
+    const m = await mock({ failRoute: { take: { status: 429, body } } });
+    const client = createOffPeakClient({ origin: m.origin, auth: AUTH });
+    const err = await rejection(client.take('offpeak-task-x'));
+    assert.equal(err.details.kind, 'unavailable', JSON.stringify(body));
+    assert.equal(err.details.httpStatus, 429);
+  }
+});
+
+test('闲时客户端：服务器要求重定向时不跟随 → changed，另一端收不到任何请求', async () => {
+  const other = await mock();
+  const m = await mock({
+    failRoute: { availability: { status: 302, headers: { location: `${other.origin}/api/v1/off-peak/ticket/availability` }, body: '' } },
+  });
+  const client = createOffPeakClient({ origin: m.origin, auth: AUTH });
+  const err = await rejection(client.availability());
+  assert.equal(err.details.kind, 'changed');
+  assert.equal(err.details.httpStatus, 302);
+  assert.equal(other.requests.length, 0);
+});
+
+test('闲时客户端：服务器 msg 不是字符串时不进错误信息', async () => {
+  const m = await mock({ failRoute: { take: { status: 200, body: { code: 3999, msg: { detail: 'nested-detail' }, logid: 'log-obj' } } } });
+  const client = createOffPeakClient({ origin: m.origin, auth: AUTH });
+  const err = await rejection(client.take('offpeak-task-x'));
+  assert.equal(err.message.includes('object Object'), false);
+  assert.equal(err.message.includes('nested-detail'), false);
+  assert.match(err.message, /log-obj/);
+});
+
+// ---------- 模拟服务器本身（后续 runner 测试依赖这些行为） ----------
+
+test('模拟闲时服务器：就绪截止按取号时间算，到点没人查也算过期', async () => {
+  // 就绪在 20 毫秒、截止在 50 毫秒；100 毫秒后才第一次查，应已过期（而不是从「被查到就绪」那刻起算）
+  const m = await mock({ readyDelayMs: 20, readyTtlMs: 30 });
+  const client = createOffPeakClient({ origin: m.origin, auth: AUTH });
+  const taken = await client.take('offpeak-task-ttl');
+  await new Promise((r) => setTimeout(r, 100));
+  const out = await client.status([taken.ticketId]);
+  assert.equal(out.tickets[0].state, 'expired');
+});
+
+test('模拟闲时服务器：开跑超过 activeMs 算过期', async () => {
+  const m = await mock({ readyDelayMs: 0, activeMs: 30 });
+  const client = createOffPeakClient({ origin: m.origin, auth: AUTH });
+  const { ticketId } = await client.take('offpeak-task-active');
+  assert.equal(m.activate(ticketId), true);
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal((await client.status([ticketId])).tickets[0].state, 'expired');
+});
+
+test('模拟闲时服务器：failRoute 的 times 只让前 N 次失败，之后恢复', async () => {
+  const m = await mock({ failRoute: { settle: { status: 500, times: 2 } } });
+  const client = createOffPeakClient({ origin: m.origin, auth: AUTH });
+  await rejection(client.settle('t-1'));
+  await rejection(client.settle('t-1'));
+  assert.equal((await client.settle('t-1')).state, 'settled');
+});
+
+test('模拟闲时服务器：运行中可以设置与撤掉某条路由的失败行为', async () => {
+  const m = await mock();
+  const client = createOffPeakClient({ origin: m.origin, auth: AUTH });
+  await client.take('offpeak-task-7');
+  m.setFailRoute('take', { status: 429, body: { code: 3103, msg: 'limit', data: { next_take_at: Date.now() + 1000 } } });
+  const err = await rejection(client.take('offpeak-task-7'));
+  assert.equal(err.details.kind, 'quota');
+  m.setFailRoute('take', null);
+  assert.equal((await client.take('offpeak-task-7')).state, 'queued');
 });
 
 test('闲时客户端：JWT 失效（HTTP 401）→ not-applicable，提示在 ZCode App 里重新登录', async () => {
