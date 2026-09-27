@@ -20,12 +20,14 @@ Claude（工头）能把一件不急的开发任务交给 ZCode 的闲时算力�
 1. 前置条件，任一不满足退出码 2，stderr 写原因与怎么办：
    - 会话空闲：没有活着的 runner，队列为空（闲时投递独占空闲会话）；
    - 会话的模型在闲时模型表里（内置文件 `account:<family>-offpeak-idle-plan` 的 `builtinModelIds`）；
+   - 会话登记的 provider 仍在当前 provider 表里（免得号就绪了却起不来会话）；
    - 凭据文件可读，能解出 JWT 与个人版 Coding Plan key；登录的是团队版 → 「团队版暂不支持」；
    - 不和 `--steer` 同用（用法错，退出码 1）。
 2. 当场取号：`POST /ticket {task_id: offPeakId}`，`offPeakId` = `offpeak-<uuid>`，一次投递一个，重取号不换。
    - 3101 → 退出码 2「这个账号没有闲时资格（需要 Coding Plan 订阅）」；
    - 3103 → 退出码 2，带 `next_take_at` 换算成本地时间「额度用完，<时间> 以后可再取」；
-   - 网络错、5xx、超时 → 退出码 2「闲时服务暂时不可用」；
+   - 网络错、超时、5xx、HTTP 429 → 退出码 2，归「暂时不可用」（文字分别是「连不上闲时服务…」「请求超时…」「闲时服务暂时不可用…」）；
+   - HTTP 401/403 → 先重读一次凭据重试，仍失败退出码 2「鉴权被拒…在 ZCode App 里重新登录」；
    - 其余非 0 业务码或返回形状不对 → 退出码 2，报步骤名、服务器原话、logid，附「闲时接口可能变了，跑
      `zcode-executor doctor --offpeak` 确认」。
 3. 取号成功：写 `runs/<id>/offpeak.json`（见 E），入队一项 `{text, task, timeoutSec, offpeak: {offPeakId}}`，
@@ -128,14 +130,17 @@ macOS 上 runner 从等号到收尾挂 `caffeinate -i -w <runner pid>`；`ZCODE_
 - `ok`：四层都符合；
 - `changed`：形状、路由、业务码、条目、回执 revision、全链路错误码任一不符（HTTP 404 也算）；
 - `unavailable`：网络错、5xx、HTTP 429（限流，业务码不是 3103）、超时；凭据文件存在但读不了（权限等）；
-- `not-applicable`：没登录、团队版、3101 没资格、HTTP 401/403（JWT 失效，重新登录 App）。
+- `not-applicable`：没登录、团队版、3101 没资格、HTTP 401/403（JWT 失效，重新登录 App）、没装 ZCode App。
+- 凭据层也可能是 `changed`：凭据文件能读、但解不开或格式不对（App 的凭据格式可能变了）。
 
 客户端只接受 https 的 origin，或 http 的本机回环地址（测试用）；不跟随重定向（3xx 按 `changed`）。
 
 人读输出一行：`doctor ⑤ 闲时：正常` / `接口变了（<层>：期望 …，实际 …，logid …）` / `暂时不可用（…）` / `不适用（…）`。
 另外，App 版本不等于 `OFFPEAK_VERIFIED_APP`（当前 `3.14.1`）时 stderr 多一行提示：「闲时路径只在 App <值> 上真机验证过」，不影响结论。
 
-退出码：`changed` → 1，其余三态不因 ⑤ 变成非 0（不带参数的 doctor 仍按 ①–③ 决定）。`--json` 加
+退出码：`changed` → 1，其余三态不因 ⑤ 变成非 0（不带参数的 doctor 仍按 ①–③ 决定）。例外：测试用环境变量
+`ZCODE_EXECUTOR_OFFPEAK_ORIGIN` 不合法时，`doctor --offpeak` 直接报错退出码 1，不带参数的 doctor 把 ⑤ 报成 unavailable。
+`doctor --offpeak --json` 只输出 `{ok: state !== 'changed', offpeak}`。`--json` 加
 `offpeak: {state, layer, expected, actual, reason, logid, appVersion, verifiedAppVersion}`。不带参数的 doctor 的 `--json.ok`
 在 ⑤ 为 changed 时也是 false（与退出码一致）。
 
