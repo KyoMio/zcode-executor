@@ -92,7 +92,7 @@ readyDeadline, activeDeadline, settledAt, settleError, updatedAt}`。不含任�
 | 凭据 | 凭据文件能解出 JWT 与个人版 key | 都在 |
 | 内置条目 | 内置文件里 `account:<family>-offpeak-idle-plan` | 存在，`access.mode` 为 `off-peak`，`api.baseUrl` 为 `https://zcode.z.ai/api/v1/off-peak/anthropic`，有 `builtinModelIds` |
 | 服务器约定 | `GET /ticket/availability`；`POST /ticket/status` 带假号 `1000000000000000000` | `code:0` 且有 `can_take_number`；假号返回 `state:"not_found"` |
-| 全链路 | 起 app-server → 推授权 → 建 deferred 会话 → 用假号发一回合 | 回合失败、错误码 `3104`；然后 close |
+| 全链路 | 起 app-server → 推授权 → 建 deferred 会话 → 用假号发一回合（禁掉全部工具，提示词只要求回复 ok） | 回合失败、错误码 `3104`；然后 close。这一层期间 zcode 的 stderr 先收起来，结论不是 ok 才打印 |
 
 结论四态：
 - `ok`：四层都符合；
@@ -106,7 +106,17 @@ readyDeadline, activeDeadline, settledAt, settleError, updatedAt}`。不含任�
 另外，App 版本不等于 `OFFPEAK_VERIFIED_APP`（当前 `3.14.1`）时 stderr 多一行提示：「闲时路径只在 App <值> 上真机验证过」，不影响结论。
 
 退出码：`changed` → 1，其余三态不因 ⑤ 变成非 0（不带参数的 doctor 仍按 ①–③ 决定）。`--json` 加
-`offpeak: {state, layer, expected, actual, logid, appVersion, verifiedAppVersion}`。
+`offpeak: {state, layer, expected, actual, reason, logid, appVersion, verifiedAppVersion}`。不带参数的 doctor 的 `--json.ok`
+在 ⑤ 为 changed 时也是 false（与退出码一致）。
+
+补充分类：
+- zcode 找不到（没装 App）→ `not-applicable`；zcode 在、内置文件不在（App 换了目录布局）→ `changed`。
+- 全链路回合的失败：`provider_not_found`、推授权或 send 被 JSON-RPC 拒绝、3104/3105 以外的 31xx 业务码、回合反而成功
+  → `changed`；看起来是暂时性的（zcode 归为限流、过载、5xx、网络、超时这类重试原因，或 3105）→ `unavailable`；
+  其他没见过的失败 → 重跑一次全链路，仍不符才 `changed`。回合 60 秒不结束、app-server 起不来或中途退出、create 被拒
+  → `unavailable`；create 返回形状不对 → `changed`。
+- 权宜：每跑一次全链路，zcode 命令行自己的会话库里多一条自检会话（verified.md：deferred 会话发过回合就持久化，
+  `deleteSession` 不删库）；App 任务列表看不到。嫌多时改成复用同一条自检会话。
 
 ## 技术栈与命令
 
@@ -167,7 +177,8 @@ doctor ⑤ 四态。断言退出码、`--json`、落盘文件、mock 记录；�
 ## 完成标准
 
 1. `npm test` 全绿（现有 438 个用例不减），新增用例覆盖 A–F 每条行为；
-2. 真机 `doctor --offpeak` 报「正常」，退出码 0；把内置文件路径指错，报「接口变了」、退出码 1；
+2. 真机 `doctor --offpeak` 报「正常」，退出码 0，stderr 为空；`ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 指向一份删掉闲时条目的内置文件副本，
+   报「接口变了」、退出码 1（2026-09-27 已在 OP3 分支上真机验证）；
 3. 真机检查点 6a–6d（PLAN-offpeak.md）按表跑完，结果写进 verified.md；
 4. 全部落盘文件、事件、输出里 grep 不到 JWT 与 key。
 
