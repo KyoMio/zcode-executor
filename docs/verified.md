@@ -261,6 +261,10 @@ T6-C 的背景事实，用户本机跑探针核实；加密与键名细节从 ZC
 | 没推授权就选闲时 provider | 回合 `turn.failed`，`turn.terminal` 的 errorCode `provider_not_found`、`turnPhase: model_creation`、message「Provider Registry 中不存在 Provider: account:bigmodel-offpeak-idle-plan」 |
 | deferred 会话发过回合会留记录 | `persistence:"deferred"` 建的会话**一发回合就写进** `~/.zcode/cli/db/db.sqlite` 的 `session` 表（只 create + close 不发回合时不留，见上文 3.12.2 探针）。v4 命令 `deleteSession` 回 `accepted`，但源码里它只调宿主的 `closeSession`，CLI 库里的行不删。这些会话不在 App 的 `tasks-index.sqlite` 里，App 任务列表看不到。v4 `renameSession {title}` 真机可用（OP3 真机复跑后库里标题是「zcode-executor doctor 闲时自检」） |
 | doctor ⑤ 真机（OP3 合并前） | `doctor --offpeak --json`：ok、退出码 0、stderr 为空、约 4 秒；完整 doctor 七行全部正常；内置文件换成删掉闲时条目的副本 → 「接口变了（内置条目…）」、退出码 1；输出里查不到 JWT 与 key |
+| 检查点 6a（2026-09-28，offpeak 分支 42c0d63） | 新会话（GLM-5.3-Flash）`send --offpeak`：排第 9 位，约 1 分钟就绪，回合 46 秒 done，改动正确；taken/ready/started/settled 事件齐全，号已结算；回合的模型请求全走 `account:bigmodel-offpeak-idle-plan`，只有闸门快筛那一次走普通 provider；runs 目录 5 个文件查不到 JWT 与 key |
+| 检查点 6b | 同一会话先普通投递返工（done，offpeak.json 不受影响），再 `--offpeak` 返工：发的是原文、`runType:"init"`，done，号结算 |
+| 检查点 6c（部分） | 闲时回合里红线挂起（写 /tmp）**压 10 分钟**再放行：6 秒后模型发起下一步，号仍有效。40 分钟那档被我们自己的默认回合超时（`waitTimeoutSec` 1800 秒，从回合开跑算、挂起时间也算）在第 30 分钟截断，结局 timeout 并正常结算，**没测成**；要带 `--timeout 5400` 重测 |
+| 免费取号额度 | 2026-09-28 本地时间 02:07–02:11 成功取号 3 次后，第 4 次回 3103「take number limit exceeded」，`next_take_at` 为次日 00:00（本地，UTC+8）。前一天用了 2 次。推断**每天约 3 次、零点重置**；客户端把它换算成本地时间报出，退出码 2（真机走通）。一次闲时投递最多用 3 个号，可能一次吃光当天额度 |
 | requestAuth 落盘 | 探针后查 `~/.zcode/cli` 与 tasks-index.sqlite 最近 3 小时写过的文件，JWT 与 plan key 都查不到 |
 | 错误码（源码） | 建任务 3101 没资格、3103 额度用完（带 `next_take_at`）；运行中 3105 或 HTTP 429 = 还在排队（CLI 退避重试，最长 5 分钟一次），3102/3001 = 票过期（桌面端回队重新取号，续跑发固定提示「Continue the previous task from where it left off…」、`offPeakRunType:"resume"`） |
 
