@@ -59,14 +59,25 @@ Claude（工头）能把一件不急的开发任务交给 ZCode 的闲时算力�
      Do not start over; review what has already been done and complete the remaining work.」（照抄 App 原文），
      `offPeakRunType:"resume"`；
    - 其他结局（done / failed / timeout / cancelled / exited）照普通回合结算，写 last.json 与 `executor.result`。
-4. **结算**：投递的终局（含 cancel 与重取用尽）对当前号 `POST /ticket/<号>/settle`；失败退避重试 3 次，
-   仍失败在 offpeak.json 记 `settleError`，`status` 显示「号 … 未结算」。记事件 `executor.offpeak.settled`。
+4. **结算**：投递的终局（含 cancel 与重取用尽）对当前号 `POST /ticket/<号>/settle`；失败后退避重试 3 次（1、2、4 秒，
+   一共最多 4 次请求），仍失败就把这个号追加进 offpeak.json 的 `unsettledTickets`，`status` 显示「号 … 未结算」；
+   同一次投递里失败过的号不再重复整轮重试。只结算属于本次投递（`offPeakId` 一致）的号。记事件 `executor.offpeak.settled`。
 
 ### C. 重取号
 
 一次闲时投递最多重取 2 次（共 3 个号），就绪过期与运行中号失效共用这个上限。每次重取记 `executor.offpeak.retaken`
 （原因、第几个号）。用完 → 投递以 `failed` 结束（退出码 4），reason「闲时号用完了（共 3 个）」，执行副本里的改动保留。
 重取时服务器回 3103 等失败 → 同样以 `failed` 结束，reason 带服务器原因。
+
+细则（OP5 实现）：
+- 重取沿用同一个 `offPeakId`；就绪前状态为 `expired` 的旧号做一次不重试的结算，`not_found` 不结算；运行中失效先结算旧号再重取。
+- `retaken` 事件带 `{offPeakId, oldTicketId, ticketId, reason, ticketCount}`，reason 在就绪前是号的状态、运行中是错误码；
+  `started` 事件带 `runType`。
+- 续跑提示发给三种情况：运行中号失效重取之后；回合 exited 后重投且原文已发出过（`startedAt` 非空）；号已是 active。
+  每个续跑回合的 `--timeout` 重新计时，所以一次闲时投递的总运行时间最多约为 `--timeout` 的 3 倍。
+- 重取期间（结算旧号、取新号、写回队列三个时刻）发现队列项没了或有 cancel/stop 标记 → 不再重取，结算当前号，以 `cancelled` 结束。
+- 闲时服务器回 401/403 时重读一次凭据，JWT 变了就换新的重试一次；用过的新旧 JWT 都进抹密名单。
+- 已知限制（OP6 处理）：回合 exited 后 runner 退出，队列项留着，按正常用法起不来续跑，只能 cancel。
 
 ### D. `cancel <id>`
 
@@ -75,8 +86,9 @@ Claude（工头）能把一件不急的开发任务交给 ZCode 的闲时算力�
 
 ### E. 状态与显示
 
-`runs/<id>/offpeak.json`（原子写）：`{offPeakId, ticketId, ticketCount, phase: queued|ready|running|done, position,
-readyDeadline, activeDeadline, settledAt, settleError, updatedAt}`。不含任何凭据。
+`runs/<id>/offpeak.json`（原子写，每次新的闲时投递整份覆盖）：`{offPeakId, ticketId, ticketCount, phase: queued|ready|running|done, position,
+readyDeadline, activeDeadline, startedAt, settledAt, unsettledTickets: [{ticketId, error, at}], updatedAt}`。不含任何凭据。
+`startedAt` 是本次投递的 `session/send` 第一次被接受的时间（null 表示原文还没发出去过）；`settledAt` 是当前号结算成功的时间，重取时清空。
 
 `status` 与 `follow` 在闲时投递期间多一行：`闲时：排第 N 位（号 <ticketId>，第 k/3 个号）` / `闲时：运行中（号 …，最晚 <时间> 截止）`；
 `--json` 加 `offpeak` 对象（即 offpeak.json 的内容）。
