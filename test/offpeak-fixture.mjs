@@ -1,18 +1,18 @@
-// 闲时投递集成测试的公共夹具（闲时集成测试文件共用）：
+// 闲时投递集成测试的公共夹具（test/offpeak-send.test.mjs 与 test/offpeak-retake.test.mjs 共用）：
 // 造环境（mock app-server + mock 闲时服务器 + 家目录 + new 一条会话）、异步跑 bin、登记与清理后台进程、
 // 读落盘文件、泄密检查、用文件布置现场。只服务测试；不碰真网络、不读真实 ~/.zcode。
 // ZCODE_EXECUTOR_OFFPEAK_ORIGIN 指向本进程里的 mock 闲时服务器，ZCODE_EXECUTOR_OFFPEAK_POLL_MS 压短轮询，
-// ZCODE_DATA_BASE_DIR 指进夹具。
+// ZCODE_EXECUTOR_OFFPEAK_SETTLE_RETRY_MS 压短结算重试间隔，ZCODE_DATA_BASE_DIR 指进夹具。
 // CLI 必须异步起（spawn 而非 spawnSync）：send 当场取号，mock 闲时服务器跑在本进程的事件循环里，同步等子进程会卡死。
 // runner 是 detached 的：setup 给每个用例挂 t.after 杀进程，测试文件末尾 test.after(cleanupAll) 再统一收尾。
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { closeSync, existsSync, openSync, readFileSync } from 'node:fs';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { killAll, startMock, waitFor } from './helpers.mjs';
+import { encryptForTest, killAll, startMock, waitFor } from './helpers.mjs';
 import { startMockOffPeak } from './mock-offpeak.mjs';
 
 export const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -79,6 +79,7 @@ export async function setup(t, { script, offpeak = {}, credentials = { jwt: TEST
     ZCODE_CONFIG_PATH: zcodeConfigPath,
     ZCODE_EXECUTOR_OFFPEAK_ORIGIN: server.origin,
     ZCODE_EXECUTOR_OFFPEAK_POLL_MS: '100',
+    ZCODE_EXECUTOR_OFFPEAK_SETTLE_RETRY_MS: '20',
     ZCODE_EXECUTOR_NO_CAFFEINATE: '1',
     TMPDIR: tmp, // runner 的个人 provider 文件落这里，收场后应当是空的
     ...mock.env,
@@ -93,7 +94,7 @@ export async function setup(t, { script, offpeak = {}, credentials = { jwt: TEST
   assert.equal(created.status, 0, `new 失败：${created.stderr}`);
   const entry = JSON.parse(created.stdout);
   const runsDir = path.join(home, 'runs', entry.id);
-  return { mock, server, home, env, entry, tmp, runsDir, recordPath: mock.env.MOCK_APPSERVER_RECORD };
+  return { mock, server, home, env, entry, tmp, runsDir, zcodeConfigPath, recordPath: mock.env.MOCK_APPSERVER_RECORD };
 }
 
 /** 异步跑 bin，返回 {status, stdout, stderr}。 */
@@ -170,10 +171,10 @@ export async function waitRunnerGone(runsDir) {
 
 /**
  * 泄密检查：runs 目录全部文件（含 runner.log、events、offpeak.json、state、last、queue）、输出、mock 记录里
- * 都查不到 JWT 与 key。
+ * 都查不到 JWT 与 key。extraSecrets：用例中途换上的凭据（比如重新登录后的新 JWT）。
  */
-export async function assertNoSecrets(s, outputs = []) {
-  const secrets = [TEST_JWT, s.mock.accountKeys.individual, s.mock.accountKeys.team].filter(Boolean);
+export async function assertNoSecrets(s, outputs = [], extraSecrets = []) {
+  const secrets = [TEST_JWT, s.mock.accountKeys.individual, s.mock.accountKeys.team, ...extraSecrets].filter(Boolean);
   const texts = [...outputs, await allFileText(s.runsDir), existsSync(s.recordPath) ? readFileSync(s.recordPath, 'utf8') : ''];
   for (const secret of secrets) for (const text of texts) assert.equal(text.includes(secret), false, '不能有 JWT 或 key');
 }
@@ -214,5 +215,14 @@ export const offPeakJson = (offPeakId, ticketId, extra = {}) => ({
   settledAt: null, settleError: null, updatedAt: new Date().toISOString(), ...extra,
 });
 export const settleRequests = (s) => s.server.requests.filter((q) => q.path.endsWith('/settle'));
+export const takeRequests = (s) => s.server.requests.filter((q) => q.method === 'POST' && q.path === '/api/v1/off-peak/ticket');
 export const runnerLog = (s) => (existsSync(path.join(s.runsDir, 'runner.log')) ? readFileSync(path.join(s.runsDir, 'runner.log'), 'utf8') : '');
 
+/** 把夹具凭据文件里的 JWT 换成新值（模拟用户在 App 里重新登录）；先写临时文件再 rename，runner 读不到半截。 */
+export async function replaceJwt(s, jwt) {
+  const entries = JSON.parse(await readFile(s.mock.credentialsPath, 'utf8'));
+  entries.zcodejwttoken = encryptForTest(jwt);
+  const tmp = `${s.mock.credentialsPath}.tmp`;
+  await writeFile(tmp, JSON.stringify(entries), { mode: 0o600 });
+  await rename(tmp, s.mock.credentialsPath);
+}

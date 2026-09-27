@@ -21,6 +21,9 @@
 //   startMockOffPeak({ failRoute: { take: { status: 302, headers: { location: '…' }, body: '' } } })
 //   mock.setFailRoute('take', { status: 429, body: { code: 3103, msg: 'limit' } })  // 运行中换上
 //   mock.setFailRoute('take', null)                                           // 撤掉，恢复正常
+//   { status: { status: 200, body: (req) => ({ code: 0, data: … }) } }          // body 是函数：按请求 body 现算响应
+//   mock.setJwt('新 JWT')   // 之后只认新 JWT，旧的回 401（模拟用户在 App 里重新登录，旧 JWT 作废；
+//                           // 401 = JWT 失效出自 SPEC-offpeak F 的分类，重新登录后旧 JWT 是否立刻作废真机未验证）
 import http from 'node:http';
 
 const PREFIX = '/api/v1/off-peak';
@@ -39,9 +42,9 @@ const PREFIX = '/api/v1/off-peak';
  * @param {object} [options.failRoute] 按路由（availability / take / status / settle）强制行为：
  *   { status?, body?, headers?, delayMs?, times? }——delayMs 先等再答；给了 status 就回这个 HTTP 状态、
  *   响应头和 body（body 是字符串原样发，是对象就 JSON；缺省 {code:status, msg:'forced failure'}）；
- *   times 给了就只作用前 N 次请求，之后这条路由恢复正常。
+ *   times 给了就只作用前 N 次请求，之后这条路由恢复正常；body 也可以是函数 (请求 body) => 响应 body。
  * @returns {Promise<{origin: string, requests: object[], activate: (ticketId: string) => boolean,
- *   setFailRoute: (route: string, behavior: object|null) => void, close: () => Promise<void>}>}
+ *   setFailRoute: (route: string, behavior: object|null) => void, setJwt: (jwt: string) => void, close: () => Promise<void>}>}
  */
 export async function startMockOffPeak({
   jwt = 'mock-offpeak-jwt-value',
@@ -56,6 +59,7 @@ export async function startMockOffPeak({
 } = {}) {
   // 逐条拷一份：times 计数与 setFailRoute 不改调用方的对象
   const failRoute = Object.fromEntries(Object.entries(initialFailRoute).map(([k, v]) => [k, { ...v }]));
+  let expectedJwt = jwt; // setJwt 可换
   const tickets = new Map(); // ticketId → { ticketId, taskId, state, takenAt, seq, readyDeadline?, activeDeadline? }
   const byTask = new Map(); // taskId → 最新 ticketId
   const requests = [];
@@ -105,7 +109,7 @@ export async function startMockOffPeak({
       body = raw;
     }
     const url = new URL(req.url, 'http://mock');
-    const authOk = req.headers.authorization === `Bearer ${jwt}` && req.headers['x-coding-plan-api-key'] === planKey;
+    const authOk = req.headers.authorization === `Bearer ${expectedJwt}` && req.headers['x-coding-plan-api-key'] === planKey;
     requests.push({
       method: req.method,
       path: url.pathname,
@@ -124,7 +128,8 @@ export async function startMockOffPeak({
     if (forced?.delayMs) await new Promise((r) => setTimeout(r, forced.delayMs));
     if (res.destroyed) return; // 客户端超时先走了
     if (forced?.status) {
-      return send(res, forced.status, forced.body ?? { code: forced.status, msg: 'forced failure' }, forced.headers);
+      const payload = typeof forced.body === 'function' ? forced.body(body) : forced.body;
+      return send(res, forced.status, payload ?? { code: forced.status, msg: 'forced failure' }, forced.headers);
     }
 
     if (!authOk) return send(res, 401, { code: 401, msg: 'unauthorized' });
@@ -209,6 +214,10 @@ export async function startMockOffPeak({
     setFailRoute(route, behavior) {
       if (behavior) failRoute[route] = { ...behavior };
       else delete failRoute[route];
+    },
+    /** 之后只认这个 JWT（旧的回 401）。 */
+    setJwt(value) {
+      expectedJwt = value;
     },
     async close() {
       server.closeAllConnections();

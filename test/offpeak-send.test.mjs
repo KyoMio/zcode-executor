@@ -1,6 +1,6 @@
 // send --offpeak 与 runner 闲时部分的行为测试（SPEC-offpeak A、B、E 的正常路径，任务 OP4）：
 // 全部对 test/mock-appserver.mjs 与 test/mock-offpeak.mjs 跑，夹具与环境变量见 test/offpeak-fixture.mjs；
-// 不碰真网络、不读真实 ~/.zcode。号失效重取、续跑与结算重试留给后续任务 OP5。
+// 不碰真网络、不读真实 ~/.zcode。号失效重取、续跑与结算重试在 test/offpeak-retake.test.mjs（任务 OP5）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
@@ -9,7 +9,7 @@ import path from 'node:path';
 import { readRecord, waitFor } from './helpers.mjs';
 import {
   assertNoSecrets, cleanupAll, isAlive, lay, offPeakJson, readEvents, readJson, runBin, runnerLog, settleRequests, setup,
-  startRunner, takeTicket, TEST_JWT, trackPids, waitRunnerGone,
+  startRunner, takeTicket, TEST_JWT, trackPids, waitRunnerGone, ZCODE_CONFIG,
 } from './offpeak-fixture.mjs';
 
 test.after(cleanupAll);
@@ -88,6 +88,17 @@ test('send --offpeak：取号 3101 → 退出码 2「没有闲时资格」', asy
   const r = await runBin(s.env, ['send', s.entry.id, '活', '--offpeak']);
   assert.equal(r.status, 2, r.stderr);
   assert.match(r.stderr, /没有闲时资格/);
+});
+
+test('send --offpeak：会话的 provider 已不在 provider 表里 → 退出码 2，不取号', async (t) => {
+  const s = await setup(t);
+  const { 'builtin:bigmodel-coding-plan': _gone, ...rest } = ZCODE_CONFIG.provider;
+  await writeFile(s.zcodeConfigPath, JSON.stringify({ provider: rest }));
+  const r = await runBin(s.env, ['send', s.entry.id, '活', '--offpeak']);
+  assert.equal(r.status, 2, r.stderr);
+  assert.match(r.stderr, /builtin:bigmodel-coding-plan.*不在 provider 表里/);
+  assert.equal(s.server.requests.length, 0);
+  assert.equal(existsSync(path.join(s.runsDir, 'offpeak.json')), false);
 });
 
 // ---------- 正常路径 ----------
@@ -202,28 +213,6 @@ test('send --offpeak --wait：等到回合结果，退出码 0，普通 --wait �
   assert.equal(out.outcome, 'done');
   await waitRunnerGone(s.runsDir);
   assert.equal(readJson(path.join(s.runsDir, 'offpeak.json')).phase, 'done');
-});
-
-test('send --offpeak：号在就绪前过期 → 投递以 failed 结束，不起 app-server', async (t) => {
-  const s = await setup(t, {
-    offpeak: {
-      failRoute: { status: { status: 200, body: { code: 0, msg: 'success', data: { next_poll_after: 1, tickets: [{ ticket_id: 'mock-ticket-1', state: 'expired' }] } } } },
-    },
-  });
-  const r = await runBin(s.env, ['send', s.entry.id, '会过期的活', '--offpeak', '--wait', '--json']);
-  trackPids(s.runsDir);
-  assert.equal(r.status, 4, r.stderr);
-  const out = JSON.parse(r.stdout);
-  assert.equal(out.outcome, 'failed');
-  assert.match(out.reason, /过期/);
-  await waitRunnerGone(s.runsDir);
-  assert.deepEqual(readRecord(s.recordPath), [], '号没就绪不该起 app-server');
-  const result = readEvents(s.runsDir).find((e) => e.type === 'executor.result');
-  assert.equal(result.outcome, 'failed');
-  assert.equal(readJson(path.join(s.runsDir, 'offpeak.json')).phase, 'done');
-  const registry = readJson(path.join(s.home, 'sessions.json'));
-  assert.equal(registry.sessions[s.entry.id].lastOutcome, 'failed');
-  await assertNoSecrets(s, [r.stdout, r.stderr]);
 });
 
 test('闲时投递期间：排号时普通 send 与 --steer 都拒（2）；运行中 --steer 被接受，普通 send 仍拒', async (t) => {
@@ -397,7 +386,7 @@ test('updateAccountConfig 回执 revision 对不上：投递以 failed 结束', 
   await assertNoSecrets(s, [r.stdout, r.stderr]);
 });
 
-test('结算失败：回合照样 done，offpeak.json 记 settleError、phase 为 done，stderr 一行', async (t) => {
+test('结算一直失败：回合照样 done，退避重试 3 次后 offpeak.json 记 settleError、phase 为 done，stderr 一行', async (t) => {
   const s = await setup(t, { offpeak: { failRoute: { settle: { status: 500 } } } });
   const r = await runBin(s.env, ['send', s.entry.id, '闲时的活', '--offpeak', '--wait', '--json']);
   trackPids(s.runsDir);
@@ -408,7 +397,8 @@ test('结算失败：回合照样 done，offpeak.json 记 settleError、phase �
   assert.equal(op.phase, 'done');
   assert.match(op.settleError, /结算失败/);
   assert.equal(op.settledAt, null);
-  assert.match(runnerLog(s), /^runner: 闲时号 mock-ticket-1 结算失败/m);
+  assert.equal(settleRequests(s).length, 4, '首次 + 退避重试 3 次');
+  assert.equal([...runnerLog(s).matchAll(/^runner: 闲时号 mock-ticket-1 结算失败/gm)].length, 1, '重试用完才打一行');
   assert.equal(readEvents(s.runsDir).some((e) => e.type === 'executor.offpeak.settled'), false);
   await assertNoSecrets(s, [r.stdout, r.stderr]);
 });
