@@ -54,11 +54,13 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 
 | 命令 | 作用 |
 | --- | --- |
-| `doctor [--json]` | 零 token 自检三步：`zcode.cjs` 旁边找得到 `config/provider/zcode-builtin.json`（3.12+ 判据，找不到提示升级 ZCode App）→ provider 两个来源各报状态（账号型 `credentials.json` 是否登录、`config.json` 备用来源）并报选中的 provider → 真握手一次；顺带报模型等级、provider key 状态，以及新启动 runner 的审批链（可选 Jev 前筛 → ZCode 快筛 → 慢判）；不联网探测 Jev |
+| `doctor [--offpeak] [--json]` | 自检五步，都不花额度：① `zcode.cjs` 旁边找得到 `config/provider/zcode-builtin.json`（3.12+ 判据，找不到提示升级 ZCode App）→ ② provider 两个来源各报状态（账号型 `credentials.json` 是否登录、`config.json` 备用来源）并报选中的 provider → ③ 真握手一次（零 token），报模型等级、provider key 状态 → ④ 新启动 runner 的审批链（可选 Jev 前筛 → ZCode 快筛 → 慢判；只读配置，不联网探测 Jev）→ ⑤ 闲时接口自检：会联网，并起一个带假号的闲时回合（服务器直接拒掉，零额度），见下面「闲时投递」。`--offpeak` 只跑 ⑤ |
 | `models [--json]` | 从两个来源本地换算可用模型（账号型：`credentials.json` 解出的 key + 内置 provider 文件的模型表；legacy：`~/.zcode/v2/config.json`；3.12 起 `workspace/readState` 已删，不握手），显示每个模型的思考等级、自动分到哪个等级 |
 | `list [--project 关键字] [--json]` | 列登记簿里的会话：id、标题、cwd、等级、上次结果、是否挂起 |
 | `new --cwd <绝对路径> [--title T] [--tier fast\|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]` | 建会话。cwd 必须在白名单内；不是 worktree 只警告不拒 |
 | `send <id> <正文\|-> [--task 文件] [--wait] [--steer] [--timeout 秒] [--stream] [--json]` | 投递。默认排队；`--steer` 走 `v4/command` 的 `sendText`（guide）插进当前回合，在下一个工具边界生效、没有边界时排到回合结束后执行，不打断 |
+| `send <id> <正文\|-> --offpeak [--task 文件] [--wait] [--timeout 秒] [--stream] [--json]` | 闲时投递：当场取号，排到号才用免费闲时算力开跑，不占套餐额度（见下面「闲时投递」）。不和 `--steer` 同用 |
+| `send <id> --offpeak --resume [--wait] [--stream] [--json]` | 回合 exited 或 runner 崩了之后，只重新拉起 runner 接着跑队列里那次闲时投递，不入队、不取号 |
 | `follow <id> [--timeout 秒] [--stream] [--json]` | 跟看后台 runner，写出新结果就返回 |
 | `status <id> [--tools N] [--json]` | 只读快照：phase（`running` 在跑 / `idle` 队列空 / `pending` 挂起 / `exited` 正常收工 / `stale` runner 半路没了）、最近工具调用、队列长度、上次结果、挂起了多久 |
 | `cancel <id>` | 叫停：挂起的先答拒绝，再 `session/stop`，之后不再取队列 |
@@ -72,7 +74,7 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 | --- | --- |
 | 0 | 回合干完了，去验收 |
 | 1 | 用法错、zcode 起不来、版本过低 |
-| 2 | 被拒：白名单外、会话不在登记簿、等级或思考等级不合法 |
+| 2 | 被拒：白名单外、会话不在登记簿、等级或思考等级不合法；闲时投递取号前或取号时被拒（会话不空闲、模型不在闲时模型表、没登录或团队版、没有闲时资格、额度用完、取号时鉴权被拒（401/403，要在 App 里重新登录）、闲时服务暂时不可用、闲时接口可能变了）；闲时投递占着会话时的普通投递与排号中的 `--steer`；`--resume` 没有可恢复的闲时投递 |
 | 3 | `send --wait` 超时，当前回合已取消，会话还在可再投；`follow --timeout` 到点只是旁观者走了，不取消任何东西 |
 | 4 | 回合异常：`turn.failed`、被中止、撞输出上限 |
 | 5 | 挂起等人：审批请求或提问 |
@@ -84,6 +86,21 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 - 一条会话同一时刻最多一个挂起（审批在回合内串行）。`approve` / `deny` / `answer` 应答的就是那一个。
 - `--thought` 的值在建会话前对着该模型的合法档位校验，不合法退出码 2（`session/create` 遇到非法值会静默忽略，不能靠它报错）。
 - 正文写 `-` 从 stdin 读。`--json` 给机器可读结构。
+- `doctor` 的退出码与 `--json.ok`：①–③ 有一步失败，或 ⑤ 的结论是「接口变了」（changed），`ok` 为 false、退出码 1；⑤ 的另外三种结论（正常、暂时不可用、不适用）不影响两者。⑤ 加进来之前 `ok` 只看 ①–③（offpeak 分支、2026-09-27 起才看 ⑤）。`--json` 加 `offpeak: {state, layer, expected, actual, reason, logid, appVersion, verifiedAppVersion}`；`doctor --offpeak --json` 只输出 `{ok, offpeak}`（另外，测试用的闲时服务地址环境变量 `ZCODE_EXECUTOR_OFFPEAK_ORIGIN` 配错时，`doctor --offpeak` 也以 1 退出）。
+
+### 闲时投递（只在本地 `offpeak` 分支上）
+
+规格见 [SPEC-offpeak.md](SPEC-offpeak.md)，为什么这么定见 decisions D20。
+
+- **是什么**：投递的一个属性，会话没有类型。回合用 Coding Plan 订阅的免费闲时算力跑，不占套餐额度；开跑时间由服务器决定——先取号排队，号就绪才开跑。验收与普通投递相同。只支持个人版 Coding Plan，会话的模型要在闲时模型表里。
+- **独占空闲会话**：发闲时投递时会话要空闲（没有活着的 runner、队列为空），否则退出码 2。闲时投递排号或运行期间，同一会话的普通投递被拒；`--steer` 只在回合开跑后放行。约定另开一条会话专门发闲时投递，做完后可在同一会话接着发普通或闲时投递返工。
+- **当场取号**：`send --offpeak` 当场向闲时服务器取号，取号失败退出码 2，报错写明原因与怎么办。取号成功后不带 `--wait` 立刻以 0 返回，人读 `send: 已取号，排第 N 位（闲时投递 <offPeakId>）`，`--json` 在原有字段上加 `offpeak: {offPeakId, ticketId, position}`。
+- **排号不计入 `--timeout`**：`--wait` 的计时从回合开跑算起；回合结束后的退出码与普通投递相同。`--stream` 排号期间每次轮询在 stderr 打一行排位。
+- **号失效自动重取，最多 3 个号**：号在就绪前过期，或回合因号失效失败（错误码 3102 / 3104 / 3001），runner 自动重取（同一次投递，最多重取 2 次），就绪后在同一会话发续跑提示接着做；每个续跑回合的 `--timeout` 重新计时。3 个号用完或重取被服务器拒，投递以 `failed` 结束（退出码 4），执行副本里的改动保留。
+- **cancel 在任何阶段都结算号**：排号中、运行中、重取中、runner 已不在，`cancel` 都会结算当前号；还没结局的投递以 `cancelled` 结束，已有结局的不改写。runner 在时由 runner 结算，失败退避重试 3 次；runner 不在时由 CLI 结算一次。仍失败的号记进 `runs/<id>/offpeak.json` 的 `unsettledTickets`，`status` 显示「闲时：号 … 未结算」。
+- **exited 之后用 `--resume` 恢复**：回合 exited 或 runner 崩了，队列里那次闲时投递还在，这时普通 send 被拒并提示两条路：`send <id> --offpeak --resume` 接着跑（不带正文、`--task`、`--timeout`，带了算用法错，退出码 1；没有可恢复的投递退出码 2；不带 `--wait` 时 `--json` 加 `offpeak: {offPeakId, resumed: true}`），或 `cancel` 收掉。
+- **显示**：`status` 与 `follow` 在闲时投递期间多一行排位、就绪或运行中（带截止时间），另有「号 … 未结算」「投递 … 没收尾」；`status --json` 与 `follow --json` 一律带 `offpeak` 字段（offpeak.json 的内容，没有时为 null）。macOS 上从等号到收尾挂 `caffeinate` 防空闲睡眠。
+- **健康检查 `doctor --offpeak`**：只跑 doctor 的 ⑤，查凭据、内置条目、服务器约定、假号全链路四层，结论四种：正常 / 接口变了 / 暂时不可用 / 不适用。只有「接口变了」退出码 1，适合挂在用户自己的 cron 上；stdout 总会有一行结论，cron 里丢掉 stdout、只看退出码与 stderr。App 版本不是真机验证过的那个时 stderr 多一行提示，不影响结论。代价：每跑一次，zcode 命令行自己的会话库里多一条自检会话，App 的任务列表看不到。
 
 ## 5. 模型等级与思考等级
 
@@ -184,6 +201,7 @@ Flash 类模型思考等级不要往低调，效果差。
 - 退出码 5 的两种处理：审批请求用 AskUserQuestion 转给人再 `approve` / `deny`；提问自己先判断能不能答，能答就 `answer`。
 - `--steer` 是插话不是打断；要打断先 `cancel`。
 - `follow` 用后台任务起，别在前台 timeout 包着等。
+- 闲时投递（只在 `offpeak` 分支）：什么时候用、另开会话发、退出码 2 的几种原因怎么处理、`--resume` 与 `cancel`、`doctor --offpeak`。
 - 不要在 ZCode App 里打开正在跑的会话（共用 sqlite，没有跨进程锁）。
 - git 操作一律 `-C <绝对路径>`，主仓合并、执行副本切分支分清楚；切新分支前核对 main 已含上一单（踩过）。
 
