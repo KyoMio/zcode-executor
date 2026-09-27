@@ -99,7 +99,7 @@ test('status：runner 已死而闲时投递没收尾时提示用 --offpeak --res
   await waitRunnerGone(s.runsDir);
   trackPids(s.runsDir);
   const human = await runBin(s.env, ['status', s.entry.id]);
-  assert.match(human.stdout, new RegExp(`^ {2}闲时：闲时投递 offpeak-[0-9a-f-]{36} 没收尾，runner 已不在：用 send ${s.entry.id} --offpeak --resume 接着跑，或 cancel`, 'm'));
+  assert.match(human.stdout, new RegExp(`^ {2}闲时：投递 offpeak-[0-9a-f-]{36} 没收尾，runner 已不在：用 send ${s.entry.id} --offpeak --resume 接着跑，或 cancel`, 'm'));
   await assertNoSecrets(s, [r.stdout, r.stderr, human.stdout, human.stderr]);
 });
 
@@ -159,5 +159,22 @@ test('macOS：等号期间挂着 caffeinate -i -w <runner pid>，runner 被杀�
   await waitFor(() => pids.every((pid) => !isAlive(pid)));
   const cancel = await runBin(s.env, ['cancel', s.entry.id]); // runner 不在了，由 CLI 结算号
   assert.equal(cancel.status, 0, cancel.stderr);
+  await assertNoSecrets(s, [r.stdout, r.stderr, cancel.stdout, cancel.stderr]);
+});
+
+test('macOS：ZCODE_EXECUTOR_NO_CAFFEINATE=1 时等号期间不起 caffeinate', { skip: process.platform !== 'darwin' && '只在 macOS 上跑' }, async (t) => {
+  const s = await setup(t, { offpeak: { readyDelayMs: 60000 } }); // 夹具默认就设了 ZCODE_EXECUTOR_NO_CAFFEINATE=1
+  assert.equal(s.env.ZCODE_EXECUTOR_NO_CAFFEINATE, '1');
+  const r = await queuedOffPeak(s);
+  const { runnerPid } = trackPids(s.runsDir);
+  await waitFor(() => statusPolls(s) >= 3); // 多等几轮轮询，给 caffeinate 足够的机会冒出来
+  let found = '';
+  try {
+    found = execFileSync('pgrep', ['-f', `caffeinate -i -w ${runnerPid}$`], { encoding: 'utf8' });
+  } catch {
+    // pgrep 找不到时退 1：正是期望的结果
+  }
+  assert.equal(found.trim(), '');
+  const cancel = await cancelAndWait(s);
   await assertNoSecrets(s, [r.stdout, r.stderr, cancel.stdout, cancel.stderr]);
 });

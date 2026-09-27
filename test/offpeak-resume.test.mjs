@@ -87,6 +87,8 @@ test('send --offpeak --resume：队列头不是这次闲时投递的项 → 退�
 for (const [name, args] of [
   ['带了正文', ['正文', '--offpeak', '--resume']],
   ['没带 --offpeak', ['--resume']],
+  ['带了 --timeout', ['--offpeak', '--resume', '--timeout', '60']],
+  ['带了 --task', ['--offpeak', '--resume', '--task', 'README.md']],
 ]) {
   test(`send --resume ${name}：用法错，退出码 1，不起 runner`, async (t) => {
     const s = await setup(t);

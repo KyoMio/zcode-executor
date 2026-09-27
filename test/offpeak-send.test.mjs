@@ -296,7 +296,7 @@ test('队列里普通项之后跟着闲时项：闲时项回外层重新等号�
   await assertNoSecrets(s);
 });
 
-test('offpeak.json 属于另一次闲时投递：这条按 failed 结束，不结算、不碰 offpeak.json', async (t) => {
+test('offpeak.json 属于另一次闲时投递：这条按 failed 结束，不拿那个号当自己的结算；runner 收场时把那个孤儿号结算一次（OP6 评审 I1）', async (t) => {
   const s = await setup(t);
   const other = offPeakJson('offpeak-00000000-0000-4000-8000-00000000000a', 'mock-ticket-99');
   await lay(s, { offpeak: other, queue: [{ text: '闲时的活', offpeak: { offPeakId: 'offpeak-00000000-0000-4000-8000-00000000000b' } }] });
@@ -304,8 +304,10 @@ test('offpeak.json 属于另一次闲时投递：这条按 failed 结束，不�
   await waitRunnerGone(s.runsDir);
   trackPids(s.runsDir);
   assert.equal(readJson(path.join(s.runsDir, 'last.json')).outcome, 'failed');
-  assert.deepEqual(settleRequests(s), []);
-  assert.deepEqual(readJson(path.join(s.runsDir, 'offpeak.json')), other);
+  assert.deepEqual(settleRequests(s).map((q) => q.path), ['/api/v1/off-peak/ticket/mock-ticket-99/settle']);
+  const op = readJson(path.join(s.runsDir, 'offpeak.json'));
+  assert.equal(op.offPeakId, other.offPeakId, '不换成这条投递的记录');
+  assert.equal(op.phase, 'done');
   await assertNoSecrets(s);
 });
 
