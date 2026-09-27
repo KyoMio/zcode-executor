@@ -1,6 +1,6 @@
 ---
 name: zcode-executor
-description: 把一件已经想清楚的开发任务交给本机 ZCode（GLM）执行，在隔离的执行副本里改代码，用 git diff 和测试验收。当用户说「让 zcode 去做」「派给 zcode」「派给执行端」，或者当前会话负责规划、实际改代码要交给 zcode 时使用。也用于查看 zcode 会话状态、给正在跑的回合插话、应答挂起的审批请求或提问。
+description: 把一件已经想清楚的开发任务交给本机 ZCode（GLM）执行，在隔离的执行副本里改代码，用 git diff 和测试验收。当用户说「让 zcode 去做」「派给 zcode」「派给执行端」，或者当前会话负责规划、实际改代码要交给 zcode 时使用。也用于闲时投递（省额度、不急的任务）、查看 zcode 会话状态、给正在跑的回合插话、应答挂起的审批请求或提问。
 ---
 
 # 把任务派给 zcode 执行
@@ -108,8 +108,8 @@ chmod 600 ~/.zcode-executor/config.json
 | 码 | 含义 | 你该做什么 |
 | --- | --- | --- |
 | 0 | 回合干完了 | 去验收，别直接信它说完成了 |
-| 1 | 用法错、zcode 起不来、版本过低 | 看报错；环境问题跑 `zcode-executor doctor`（零 token 自检） |
-| 2 | 被拒：白名单外、会话不在登记簿、等级或思考等级不合法 | 报错里写了原因，按原因处理，别原样重试 |
+| 1 | 用法错、zcode 起不来、版本过低 | 看报错；环境问题跑 `zcode-executor doctor`（不花额度的自检） |
+| 2 | 被拒：白名单外、会话不在登记簿、等级或思考等级不合法；闲时投递被拒 | 报错里写了原因，按原因处理，别原样重试；闲时的见「闲时投递」一节 |
 | 3 | `send --wait` 超时（默认 1800 秒，`--timeout` 可改），**当前回合已取消**，会话还在 | 直接再投一次接着做；`follow` 的超时不取消任何东西，只是旁观者到点走了 |
 | 4 | 回合异常：报错、被中止、撞输出上限 | 读 reason；撞上限就把任务拆小再投 |
 | 5 | 挂起等人：审批请求或提问 | 见下一节，别想办法绕过去 |
@@ -149,6 +149,50 @@ zcode-executor cancel <id>                                # 叫停：挂起的�
   `list` 每行的 `[phase]` 同一套词，没有 running / pending 就是没有在跑的会话。
 - 要边跑边看，`send` / `follow` 加 `--stream`：工具调用摘要和成型回答打到 stderr。
 
+## 闲时投递
+
+闲时投递用 Coding Plan 订阅的免费闲时算力跑回合，不占套餐额度；代价是先取号排队，开跑时间由服务器决定，可能等几十分钟到几小时。
+验收、返工、挂起照普通投递。这个功能只在 `offpeak` 分支构建的版本里有：`send` 报「不认识的参数 --offpeak」就改用普通投递。
+
+**什么时候用**：用户明确要闲时或要省额度；或者任务不急，能等几十分钟到几小时。预计超过 20 分钟的返工也可以走闲时。
+
+**怎么用**：闲时投递独占一条空闲会话。另开一条会话专门发（配一个自己的执行副本），正在跑普通投递的会话留给普通投递。
+
+```bash
+WT2=~/.zcode-executor/worktrees/<仓库名>-offpeak
+git -C <主仓绝对路径> worktree add "$WT2" -b task/T-xxx     # 任务单放进 $WT2
+zcode-executor new --cwd "$WT2" --title T-xxx-offpeak --tier fast --json
+zcode-executor send <id> "执行 tasks/T-xxx.md" --task "$WT2/tasks/T-xxx.md" --offpeak   # 取号后立刻返回「已取号，排第 N 位」
+zcode-executor status <id>    # 看排位、运行中还是已结束；要等结果就后台起 follow（见「插话、跟看、叫停」）
+```
+
+- 不带 `--wait`：取号成功立刻以 0 返回排位，之后用 `status` / `follow` 看进度。带 `--wait` 时排号不算进 `--timeout`，会在前台一直等到开跑再跑完。
+- 号过期或失效由 runner 自动重取，最多 3 个号；用完以退出码 4 结束，改动留在执行副本里，照普通回合异常处理。
+- 挂起：和普通投递一样由你及时应答（见「退出码 5」一节），闲时回合同样可能要审批。
+- `--steer` 只在回合开跑后能用；排号期间要改方向就 `cancel` 再重投。
+
+**退出码 2：取号前或取号时被拒**，按报错原因处理：
+
+| 报错说的 | 你该做什么 |
+| --- | --- |
+| 会话不空闲（有 runner 在跑或队列不空） | 换一条空闲会话（`new` 一条） |
+| 模型不在闲时模型表里（报错列出了表） | 换一条用表里模型的会话，或改普通投递 |
+| 没登录、团队版暂不支持、没有闲时资格 | 告诉用户：闲时要在 ZCode App 里登录个人版 Coding Plan 订阅账号 |
+| 额度用完，<时间> 以后可再取 | 把这个时间告诉用户；急的活改普通投递 |
+| 闲时服务暂时不可用、连不上闲时服务 | 过一会儿再投，或改普通投递 |
+| 闲时接口可能变了 | 跑 `zcode-executor doctor --offpeak`，把结论转告用户，这次改普通投递 |
+| 投递 … 没收尾，runner 已不在 | 见下面「出事了怎么办」 |
+
+**出事了怎么办**：
+
+- 回合 exited 或 runner 没了（`status` 显示「闲时：投递 … 没收尾，runner 已不在」）→ `zcode-executor send <id> --offpeak --resume`。
+  它只重新拉起 runner 接着跑那次投递，不重新取号，不带正文和 `--task`。
+- 不想要了 → `zcode-executor cancel <id>`，任何阶段都会自动结算号。
+- `status` 里出现「闲时：号 … 未结算」→ 把号告诉用户，说明服务器那边这几个号没结算成功。
+
+**健康检查**：`zcode-executor doctor --offpeak` 只查闲时接口，不花额度（会联网，起一个假号回合，每跑一次在 zcode 命令行的会话库里留一条 App 看不到的自检会话）。
+只有退出码 1「接口变了」要处理：告诉用户闲时这条路暂时断了，派活改普通投递。「暂时不可用」「不适用」退出码 0，把那一行转告用户即可。
+
 ## 两种会话 id
 
 - 命令一律用**本地 id**（`x_` 开头，`new` 返回的那个）。
@@ -167,11 +211,14 @@ zcode-executor cancel <id>                                # 叫停：挂起的�
 ## 命令速查
 
 ```bash
-zcode-executor doctor [--json]                  # 零 token 自检：zcode、配置、握手、等级及新 runner 的审批链
+zcode-executor doctor [--json]                  # 不花额度的自检：zcode、配置、握手、等级、新 runner 的审批链、闲时接口（⑤ 会联网）
+zcode-executor doctor --offpeak [--json]        # 只查闲时接口；只有退出码 1（接口变了）要处理
 zcode-executor models [--json]                  # 可用模型、思考等级、禁用原因、自动分到哪个等级
 zcode-executor list [--project 关键字] [--json]  # 登记簿里的会话：本地 id、sess_、上次结果、是否挂起
 zcode-executor new --cwd <绝对路径> [--title T] [--tier fast|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]
 zcode-executor send <id> <正文|-> [--task 文件] [--wait] [--steer] [--timeout 秒] [--stream] [--json]
+zcode-executor send <id> <正文|-> --offpeak [--task 文件] [--wait] [--timeout 秒] [--stream] [--json]  # 闲时投递：当场取号
+zcode-executor send <id> --offpeak --resume [--wait] [--stream] [--json]  # 接着跑没收尾的闲时投递
 zcode-executor follow <id> [--timeout 秒] [--stream] [--json]
 zcode-executor status <id> [--tools N] [--json]  # 在跑/空闲/挂起/异常结束、最近工具调用、队列长度
 zcode-executor cancel <id>                       # 叫停：挂起的先答拒绝，之后不再取队列
