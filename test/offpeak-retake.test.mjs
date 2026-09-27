@@ -184,7 +184,7 @@ test('重取号时服务器回 3103：failed，reason 带「几点以后可再�
   const last = lastJson(s);
   assert.equal(last.outcome, 'failed');
   assert.match(last.reason, /额度用完/);
-  assert.match(last.reason, /\d{1,2}:\d{2}:\d{2}.*以后可再取/);
+  assert.match(last.reason, /\d{4}\/\d{1,2}\/\d{1,2} \d{2}:\d{2} 以后可再取/);
   assert.deepEqual(settledTickets(s), ['mock-ticket-1']);
   assert.equal(eventsOf(s, 'executor.offpeak.retaken').length, 0);
   const op = offpeakJson(s);

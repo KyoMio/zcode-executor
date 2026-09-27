@@ -1,15 +1,19 @@
 // quota 命令（今天的闲时取号情况，零额度，SPEC-offpeak G）的行为测试。
 // 对 test/mock-offpeak.mjs 跑：ZCODE_EXECUTOR_OFFPEAK_ORIGIN 指向本进程里的 mock 闲时服务器，凭据夹具来自 startMock，
 // 不碰真网络、不读真实 ~/.zcode、不起 app-server。CLI 异步起（runBin）：mock 闲时服务器跑在本进程的事件循环里。
+// 时区钉死（子进程经 env 继承）：默认 UTC+8，「只数本地今天」另跑一组 UTC−7，任何机器上都能抓出按 UTC 日期比较的错。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { startMock } from './helpers.mjs';
 import { startMockOffPeak } from './mock-offpeak.mjs';
 import { runBin } from './offpeak-fixture.mjs';
+
+const DEFAULT_TZ = 'Asia/Shanghai';
+process.env.TZ = DEFAULT_TZ;
 
 const dirs = [];
 const servers = [];
@@ -58,6 +62,10 @@ async function assertZeroCostAndSecretFree(s, r) {
   assert.equal(s.server.requests.some((q) => q.method === 'POST'), false, '不取号、不查排位、不结算');
 }
 
+// 中文本地时间，24 小时制到分钟（如 2026/9/29 00:00）
+const localText = (ms) =>
+  new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+
 // 本地时间的某天某时（day 0 = 今天，-1 = 昨天），转成事件里的 ISO UTC 字符串
 function localAt(day, hour, minute = 0) {
   const d = new Date();
@@ -89,34 +97,91 @@ test('quota：额度用完时报服务器给的可再取时间（本地时间）
   assert.equal(human.status, 0, human.stderr);
   const m = /^quota: 闲时取号今天本工具已用 0 次（每天约 3 次，App 里用的不计入）；服务器：今天额度已用完，(.+) 以后可再取\n$/.exec(human.stdout);
   assert.ok(m, human.stdout);
-  // 人读行用本地时间（toLocaleString，子进程与本进程同一套时区与语言环境）：mock 给的是请求时刻 + 60 秒，逐秒列出候选
+  // 人读行用中文本地时间（子进程与本进程同一时区）：mock 给的是请求时刻 + 60 秒，逐分钟列出候选
   const candidates = [];
-  for (let t = Math.floor((humanBefore + 60000) / 1000) * 1000; t <= humanAfter + 60000; t += 1000) candidates.push(new Date(t).toLocaleString());
+  for (let t = Math.floor((humanBefore + 60000) / 60000) * 60000; t <= humanAfter + 60000; t += 60000) candidates.push(localText(t));
   assert.ok(candidates.includes(m[1]), `${m[1]} 应是本地时间，候选 ${candidates.join(' / ')}`);
   await assertZeroCostAndSecretFree(s, human);
 });
 
-test('quota：只数本地今天的 taken 与 retaken，昨天的与别的事件不算（与机器时区无关）', async () => {
+for (const tz of [DEFAULT_TZ, 'America/Phoenix']) {
+  test(`quota：只数本地今天的 taken 与 retaken，昨天的与别的事件不算（${tz}）`, async (t) => {
+    process.env.TZ = tz; // localAt 与子进程都按这个时区
+    t.after(() => { process.env.TZ = DEFAULT_TZ; });
+    const s = await setup({
+      events: {
+        x_a: [
+          { type: 'executor.offpeak.taken', at: localAt(0, 0, 30), offPeakId: 'offpeak-a' }, // 今天 00:30（UTC+8 下 UTC 日期是昨天）
+          { type: 'executor.offpeak.ready', at: localAt(0, 0, 31), offPeakId: 'offpeak-a' },
+          { type: 'executor.offpeak.retaken', at: localAt(0, 0, 40), offPeakId: 'offpeak-a' },
+          { type: 'executor.offpeak.settled', at: localAt(0, 0, 50), offPeakId: 'offpeak-a' },
+        ],
+        x_b: [
+          { type: 'executor.offpeak.taken', at: localAt(-1, 23, 30), offPeakId: 'offpeak-b' }, // 昨天 23:30（UTC−7 下 UTC 日期是今天）
+          { type: 'executor.send', at: localAt(0, 0, 10) },
+        ],
+      },
+    });
+    // runs 下混一个不是目录的文件、一个没有 events.jsonl 的会话目录：都跳过
+    await writeFile(path.join(s.home, 'runs', 'stray.txt'), 'x');
+    await mkdir(path.join(s.home, 'runs', 'x_empty'));
+    const r = await runBin(s.env, ['quota', '--json']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(JSON.parse(r.stdout).usedToday, 2);
+  });
+}
+
+test('quota：修改时间早于本地今天 0 点的 events.jsonl 整个跳过；坏行与 null 行不崩', async () => {
   const s = await setup({
     events: {
-      x_a: [
-        { type: 'executor.offpeak.taken', at: localAt(0, 0, 30), offPeakId: 'offpeak-a' }, // 今天 00:30（UTC+8 下 UTC 日期是昨天）
-        { type: 'executor.offpeak.ready', at: localAt(0, 0, 31), offPeakId: 'offpeak-a' },
-        { type: 'executor.offpeak.retaken', at: localAt(0, 0, 40), offPeakId: 'offpeak-a' },
-        { type: 'executor.offpeak.settled', at: localAt(0, 0, 50), offPeakId: 'offpeak-a' },
-      ],
-      x_b: [
-        { type: 'executor.offpeak.taken', at: localAt(-1, 23, 30), offPeakId: 'offpeak-b' }, // 昨天 23:30（UTC-x 下 UTC 日期是今天）
-        { type: 'executor.send', at: localAt(0, 0, 10) },
-      ],
+      x_old: [{ type: 'executor.offpeak.taken', at: new Date().toISOString(), offPeakId: 'offpeak-old' }],
+      x_new: [{ type: 'executor.offpeak.taken', at: new Date().toISOString(), offPeakId: 'offpeak-new' }],
     },
   });
-  // runs 下混一个不是目录的文件、一个没有 events.jsonl 的会话目录：都跳过
-  await writeFile(path.join(s.home, 'runs', 'stray.txt'), 'x');
-  await mkdir(path.join(s.home, 'runs', 'x_empty'));
+  // 事件只追加：文件最后改在昨天，里面不可能有今天的事件（这里故意放了一条，用来证明确实没读）
+  const yesterday = new Date(Date.now() - 36 * 3600 * 1000);
+  await utimes(path.join(s.home, 'runs', 'x_old', 'events.jsonl'), yesterday, yesterday);
+  const noisy = ['null', '{"type":"executor.offpeak.taken", 坏', '"executor.offpeak.taken"', '[]', '{"type":"executor.offpeak.retaken"}'].join('\n');
+  await writeFile(path.join(s.home, 'runs', 'x_new', 'events.jsonl'), `${noisy}\n`, { flag: 'a' });
   const r = await runBin(s.env, ['quota', '--json']);
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(JSON.parse(r.stdout).usedToday, 2);
+  assert.equal(JSON.parse(r.stdout).usedToday, 1);
+});
+
+test('quota：某个 events.jsonl 读不了只跳过它，stderr 打一行，退出码 0', { skip: process.getuid?.() === 0 && 'root 读得了 000 权限的文件' }, async () => {
+  const now = new Date().toISOString();
+  const s = await setup({
+    events: {
+      x_locked: [{ type: 'executor.offpeak.taken', at: now, offPeakId: 'offpeak-locked' }],
+      x_ok: [{ type: 'executor.offpeak.taken', at: now, offPeakId: 'offpeak-ok' }],
+    },
+  });
+  const locked = path.join(s.home, 'runs', 'x_locked', 'events.jsonl');
+  await chmod(locked, 0o000);
+  try {
+    const r = await runBin(s.env, ['quota', '--json']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(JSON.parse(r.stdout).usedToday, 1);
+    assert.match(r.stderr, /^quota: .*x_locked.*\n$/);
+  } finally {
+    await chmod(locked, 0o600);
+  }
+});
+
+test('quota：服务器说不能取但没给时间 → 「现在不能取号」', async () => {
+  const s = await setup({ offpeak: { failRoute: { availability: { status: 200, body: { code: 0, msg: 'success', data: { can_take_number: false } } } } } });
+  const r = await runBin(s.env, ['quota']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, 'quota: 闲时取号今天本工具已用 0 次（每天约 3 次，App 里用的不计入）；服务器：现在不能取号\n');
+});
+
+test('quota：闲时服务地址配错 → 报错退出码 1，不发请求', async () => {
+  const s = await setup();
+  const r = await runBin({ ...s.env, ZCODE_EXECUTOR_OFFPEAK_ORIGIN: 'http://example.com' }, ['quota']);
+  assert.equal(r.status, 1);
+  assert.equal(r.stdout, '');
+  assert.match(r.stderr, /^quota: 闲时服务地址必须是 https/);
+  assert.deepEqual(s.server.requests, []);
 });
 
 test('quota --json：形状 {usedToday, estimatedDailyLimit, canTakeNumber, nextTakeAt, state, reason}', async () => {
