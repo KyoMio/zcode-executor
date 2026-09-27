@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync } from 'node:fs';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -50,7 +50,7 @@ const ZCODE_CONFIG = {
 };
 
 // 造环境：mock app-server（带账号凭据夹具与 JWT）+ mock 闲时服务器 + 家目录（白名单指到 git 仓库）+ new 一条会话
-async function setup(t, { script, offpeak = {}, credentials = { jwt: TEST_JWT }, provider = 'builtin:bigmodel-coding-plan' } = {}) {
+async function setup(t, { script, offpeak = {}, credentials = { jwt: TEST_JWT }, provider = 'builtin:bigmodel-coding-plan', envExtra = {} } = {}) {
   t.after(() => {
     killAll(runnerPids);
     killAll(mockPids);
@@ -79,6 +79,7 @@ async function setup(t, { script, offpeak = {}, credentials = { jwt: TEST_JWT },
     ZCODE_EXECUTOR_NO_CAFFEINATE: '1',
     TMPDIR: tmp, // runner 的个人 provider 文件落这里，收场后应当是空的
     ...mock.env,
+    ...envExtra,
   };
   // new 不碰闲时服务器，可以同步跑
   const created = spawnSync(process.execPath, [BIN, 'new', '--cwd', repo, '--provider', provider, '--tier', 'strong', '--json'], {
@@ -155,10 +156,59 @@ async function allFileText(dir) {
   return text;
 }
 
-/** 等 runner 收场：锁没了、state 是 exited。 */
+/** 等 runner 收场：锁没了、state 是 exited，而且进程真的退了（删锁到进程退出之间还有一小段）。 */
 async function waitRunnerGone(runsDir) {
-  await waitFor(() => !existsSync(path.join(runsDir, 'lock')) && readJson(path.join(runsDir, 'state.json')).phase === 'exited');
+  // state.json 可能还没写（runner 刚起）：读不到就接着等
+  const state = () => (existsSync(path.join(runsDir, 'state.json')) ? readJson(path.join(runsDir, 'state.json')) : null);
+  await waitFor(() => !existsSync(path.join(runsDir, 'lock')) && state()?.phase === 'exited');
+  const { pid } = state();
+  await waitFor(() => !isAlive(pid));
 }
+
+/** 泄密检查：runs 目录全部文件（含 runner.log、events、offpeak.json、state、last、queue）、输出、mock 记录里都查不到 JWT 与 key。 */
+async function assertNoSecrets(s, outputs = []) {
+  const secrets = [TEST_JWT, s.mock.accountKeys.individual, s.mock.accountKeys.team].filter(Boolean);
+  const texts = [...outputs, await allFileText(s.runsDir), existsSync(s.recordPath) ? readFileSync(s.recordPath, 'utf8') : ''];
+  for (const secret of secrets) for (const text of texts) assert.equal(text.includes(secret), false, '不能有 JWT 或 key');
+}
+
+/** 直接向 mock 闲时服务器取一个号（布置现场用，不经过 send）；返回 data。 */
+async function takeTicket(s, offPeakId) {
+  const res = await fetch(`${s.server.origin}/api/v1/off-peak/ticket`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${TEST_JWT}`, 'x-coding-plan-api-key': s.mock.accountKeys.individual, 'content-type': 'application/json' },
+    body: JSON.stringify({ task_id: offPeakId }),
+  });
+  return (await res.json()).data;
+}
+
+/** 用文件布置现场：offpeak.json（给了才写）与按顺序排好的队列项。 */
+async function lay(s, { offpeak, queue }) {
+  await mkdir(path.join(s.runsDir, 'queue'), { recursive: true });
+  if (offpeak) await writeFile(path.join(s.runsDir, 'offpeak.json'), JSON.stringify(offpeak));
+  for (const [i, item] of queue.entries()) {
+    const file = path.join(s.runsDir, 'queue', `2026-01-01T00-00-00.000Z-${i + 1}-lay${i}.json`);
+    await writeFile(file, JSON.stringify({ task: null, timeoutSec: null, steer: false, queuedAt: new Date().toISOString(), ...item }));
+  }
+}
+
+/** 像 send 那样后台起 runner（stdout/stderr 进 runner.log），pid 登记给 after() 杀。 */
+async function startRunner(s) {
+  await mkdir(s.runsDir, { recursive: true });
+  const fd = openSync(path.join(s.runsDir, 'runner.log'), 'a');
+  const child = spawn(process.execPath, [BIN, '_runner', s.entry.id], { env: s.env, detached: true, stdio: ['ignore', fd, fd] });
+  closeSync(fd);
+  child.unref();
+  runnerPids.push(child.pid);
+  return child.pid;
+}
+
+const offPeakJson = (offPeakId, ticketId, extra = {}) => ({
+  offPeakId, ticketId, ticketCount: 1, phase: 'queued', position: 1, readyDeadline: null, activeDeadline: null,
+  settledAt: null, settleError: null, updatedAt: new Date().toISOString(), ...extra,
+});
+const settleRequests = (s) => s.server.requests.filter((q) => q.path.endsWith('/settle'));
+const runnerLog = (s) => (existsSync(path.join(s.runsDir, 'runner.log')) ? readFileSync(path.join(s.runsDir, 'runner.log'), 'utf8') : '');
 
 // ---------- 前置条件 ----------
 
@@ -268,9 +318,10 @@ test('send --offpeak --json：取号入队、等号就绪才起 app-server，推
   assert.deepEqual(item.offpeak, { offPeakId: out.offpeak.offPeakId });
 
   // 排号期间 runner 在轮询，app-server 还没起：记录文件里一条消息都没有
-  await waitFor(() => s.server.requests.filter((q) => q.path.endsWith('/ticket/status')).length >= 2);
+  await waitFor(() => s.server.requests.filter((q) => q.path.endsWith('/ticket/status')).length >= 4);
   trackPids(s.runsDir);
   assert.deepEqual(readRecord(s.recordPath), [], '号没就绪前不该起 app-server');
+  assert.doesNotMatch(runnerLog(s), /mock: started/, '号没就绪前 runner.log 里不该有 mock 的启动行');
 
   await waitFor(() => existsSync(path.join(s.runsDir, 'last.json')), { timeoutMs: 30000 });
   trackPids(s.runsDir);
@@ -317,15 +368,23 @@ test('send --offpeak --json：取号入队、等号就绪才起 app-server，推
   assert.deepEqual({ offPeakId: taken.offPeakId, ticketId: taken.ticketId, position: taken.position }, out.offpeak);
 
   // 泄密检查：runs 目录全部文件、输出、mock 记录里都查不到 JWT 与 key
-  const secrets = [TEST_JWT, s.mock.accountKeys.individual, s.mock.accountKeys.team];
-  const texts = [r.stdout, r.stderr, await allFileText(s.runsDir), readFileSync(s.recordPath, 'utf8')];
-  for (const secret of secrets) for (const text of texts) assert.equal(text.includes(secret), false, '不能有 JWT 或 key');
+  await assertNoSecrets(s, [r.stdout, r.stderr]);
 
   // 不残留子进程，个人 provider 文件删干净
-  assert.equal(isAlive(found.runnerPid), false, 'runner 应已退出');
+  await waitFor(() => !isAlive(found.runnerPid));
   assert.ok(found.mockPids.length >= 1);
   await waitFor(() => found.mockPids.every((pid) => !isAlive(pid)));
   assert.deepEqual(await readdir(s.tmp), []);
+
+  // 闲时投递结束后普通 send 真的放行：实际跑一回合
+  const plain = await runBin(s.env, ['send', s.entry.id, '普通的活', '--wait', '--json']);
+  trackPids(s.runsDir);
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.equal(JSON.parse(plain.stdout).outcome, 'done');
+  const plainSend = readRecord(s.recordPath).filter((m) => m.method === 'session/send').at(-1).params;
+  assert.equal(plainSend.content, '普通的活');
+  assert.equal(plainSend.modelSelection, undefined, '普通投递不带闲时参数');
+  await waitRunnerGone(s.runsDir);
 });
 
 test('send --offpeak --wait：等到回合结果，退出码 0，普通 --wait 输出', async (t) => {
@@ -359,6 +418,7 @@ test('send --offpeak：号在就绪前过期 → 投递以 failed 结束，不�
   assert.equal(readJson(path.join(s.runsDir, 'offpeak.json')).phase, 'done');
   const registry = readJson(path.join(s.home, 'sessions.json'));
   assert.equal(registry.sessions[s.entry.id].lastOutcome, 'failed');
+  await assertNoSecrets(s, [r.stdout, r.stderr]);
 });
 
 test('闲时投递期间：排号时普通 send 与 --steer 都拒（2）；运行中 --steer 被接受，普通 send 仍拒', async (t) => {
@@ -393,4 +453,171 @@ test('闲时投递期间：排号时普通 send 与 --steer 都拒（2）；运�
   assert.equal(readJson(path.join(s.runsDir, 'last.json')).outcome, 'done');
   // 闲时投递结束后普通 send 放行
   assert.equal(readJson(path.join(s.runsDir, 'offpeak.json')).phase, 'done');
+});
+
+// ---------- 评审返工：陈旧记录、竞争、暂时性失败、失败路径 ----------
+
+test('排号中 cancel 之后，runner 收摊，普通 send 能正常投递（offpeak.json 是陈旧记录）', async (t) => {
+  const s = await setup(t, { offpeak: { readyDelayMs: 60000 } });
+  const r = await runBin(s.env, ['send', s.entry.id, '闲时的活', '--offpeak']);
+  assert.equal(r.status, 0, r.stderr);
+  await waitFor(() => s.server.requests.some((q) => q.path.endsWith('/ticket/status')));
+  trackPids(s.runsDir);
+  const cancel = await runBin(s.env, ['cancel', s.entry.id]);
+  assert.equal(cancel.status, 0, cancel.stderr);
+  await waitRunnerGone(s.runsDir);
+  assert.equal(readJson(path.join(s.runsDir, 'offpeak.json')).phase, 'queued'); // 孤儿号的结算留给 OP6
+  const plain = await runBin(s.env, ['send', s.entry.id, '普通的活', '--wait', '--json']);
+  trackPids(s.runsDir);
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.equal(JSON.parse(plain.stdout).outcome, 'done');
+  await waitRunnerGone(s.runsDir);
+  await assertNoSecrets(s, [r.stdout, r.stderr, plain.stdout, plain.stderr]);
+});
+
+test('队列里普通项之后跟着闲时项：闲时项回外层重新等号，另起一条连接开跑', async (t) => {
+  const s = await setup(t);
+  const offPeakId = 'offpeak-00000000-0000-4000-8000-000000000001';
+  const ticket = await takeTicket(s, offPeakId);
+  await lay(s, {
+    offpeak: offPeakJson(offPeakId, ticket.ticket_id),
+    queue: [{ text: '先来的普通活' }, { text: '闲时的活', offpeak: { offPeakId } }],
+  });
+  await startRunner(s);
+  await waitFor(() => existsSync(path.join(s.runsDir, 'last.json')) && readJson(path.join(s.runsDir, 'last.json')).text === '闲时的活', { timeoutMs: 30000 });
+  trackPids(s.runsDir);
+  await waitRunnerGone(s.runsDir);
+  trackPids(s.runsDir);
+  assert.equal(readJson(path.join(s.runsDir, 'last.json')).outcome, 'done');
+  assert.equal([...runnerLog(s).matchAll(/mock: started/g)].length, 2, '闲时项要另起一条连接');
+  const types = readEvents(s.runsDir).map((e) => e.type);
+  const firstResult = types.indexOf('executor.result');
+  assert.ok(firstResult >= 0 && firstResult < types.indexOf('executor.offpeak.ready'), types.join(','));
+  assert.ok(types.indexOf('executor.offpeak.ready') < types.indexOf('executor.offpeak.started'), types.join(','));
+  const sends = readRecord(s.recordPath).filter((m) => m.method === 'session/send').map((m) => m.params);
+  assert.equal(sends.length, 2);
+  assert.equal(sends[0].modelSelection, undefined);
+  assert.equal(sends[1].offPeakTaskId, offPeakId);
+  assert.equal(readJson(path.join(s.runsDir, 'offpeak.json')).phase, 'done');
+  await assertNoSecrets(s);
+});
+
+test('offpeak.json 属于另一次闲时投递：这条按 failed 结束，不结算、不碰 offpeak.json', async (t) => {
+  const s = await setup(t);
+  const other = offPeakJson('offpeak-00000000-0000-4000-8000-00000000000a', 'mock-ticket-99');
+  await lay(s, { offpeak: other, queue: [{ text: '闲时的活', offpeak: { offPeakId: 'offpeak-00000000-0000-4000-8000-00000000000b' } }] });
+  await startRunner(s);
+  await waitRunnerGone(s.runsDir);
+  trackPids(s.runsDir);
+  assert.equal(readJson(path.join(s.runsDir, 'last.json')).outcome, 'failed');
+  assert.deepEqual(settleRequests(s), []);
+  assert.deepEqual(readJson(path.join(s.runsDir, 'offpeak.json')), other);
+  await assertNoSecrets(s);
+});
+
+test('闲时项重投次数用完：按 failed 结束，结算号，offpeak.json 收成 done', async (t) => {
+  const s = await setup(t);
+  const offPeakId = 'offpeak-00000000-0000-4000-8000-000000000002';
+  const ticket = await takeTicket(s, offPeakId);
+  await lay(s, { offpeak: offPeakJson(offPeakId, ticket.ticket_id), queue: [{ text: '闲时的活', offpeak: { offPeakId }, attempts: 2 }] });
+  await startRunner(s);
+  await waitRunnerGone(s.runsDir);
+  trackPids(s.runsDir);
+  const last = readJson(path.join(s.runsDir, 'last.json'));
+  assert.equal(last.outcome, 'failed');
+  assert.match(last.reason, /重投/);
+  assert.deepEqual(settleRequests(s).map((q) => q.path), [`/api/v1/off-peak/ticket/${ticket.ticket_id}/settle`]);
+  const op = readJson(path.join(s.runsDir, 'offpeak.json'));
+  assert.equal(op.phase, 'done');
+  assert.match(op.settledAt, /Z$/);
+  await assertNoSecrets(s);
+});
+
+test('等号时查排位暂时不可用（5xx）：stderr 每次一行，按封顶间隔继续轮询，最后照常开跑', async (t) => {
+  const s = await setup(t, { offpeak: { failRoute: { status: { status: 503, times: 3 } } } });
+  const r = await runBin(s.env, ['send', s.entry.id, '闲时的活', '--offpeak', '--wait', '--json']);
+  trackPids(s.runsDir);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).outcome, 'done');
+  await waitRunnerGone(s.runsDir);
+  assert.equal([...runnerLog(s).matchAll(/^runner: 等号时查排位暂时失败/gm)].length, 3);
+  await assertNoSecrets(s, [r.stdout, r.stderr]);
+});
+
+test('等号时查排位连续不可用超过上限：投递以 failed 结束', async (t) => {
+  const s = await setup(t, { offpeak: { failRoute: { status: { status: 503 } } }, envExtra: { ZCODE_EXECUTOR_OFFPEAK_STATUS_GIVEUP_MS: '500' } });
+  const r = await runBin(s.env, ['send', s.entry.id, '闲时的活', '--offpeak', '--wait', '--json']);
+  trackPids(s.runsDir);
+  assert.equal(r.status, 4, r.stderr);
+  assert.match(JSON.parse(r.stdout).reason, /连续失败/);
+  await waitRunnerGone(s.runsDir);
+  assert.deepEqual(readRecord(s.recordPath), []);
+  await assertNoSecrets(s, [r.stdout, r.stderr]);
+});
+
+test('等号时查排位返回接口变了（404）：投递立刻以 failed 结束', async (t) => {
+  const s = await setup(t, { offpeak: { failRoute: { status: { status: 404 } } } });
+  const r = await runBin(s.env, ['send', s.entry.id, '闲时的活', '--offpeak', '--wait', '--json']);
+  trackPids(s.runsDir);
+  assert.equal(r.status, 4, r.stderr);
+  assert.match(JSON.parse(r.stdout).reason, /查排位失败/);
+  await waitRunnerGone(s.runsDir);
+  assert.deepEqual(readRecord(s.recordPath), []);
+  await assertNoSecrets(s, [r.stdout, r.stderr]);
+});
+
+test('updateAccountConfig 被拒：投递以 failed 结束，不发 session/send，号照样结算', async (t) => {
+  const s = await setup(t, { script: { errors: { 'provider/updateAccountConfig': { code: -32602, message: 'invalid account config' } } } });
+  const r = await runBin(s.env, ['send', s.entry.id, '闲时的活', '--offpeak', '--wait', '--json']);
+  trackPids(s.runsDir);
+  assert.equal(r.status, 4, r.stderr);
+  assert.match(JSON.parse(r.stdout).reason, /闲时授权没推成/);
+  await waitRunnerGone(s.runsDir);
+  trackPids(s.runsDir);
+  assert.equal(readRecord(s.recordPath).some((m) => m.method === 'session/send'), false);
+  assert.equal(settleRequests(s).length, 1);
+  assert.equal(readJson(path.join(s.runsDir, 'offpeak.json')).phase, 'done');
+  await assertNoSecrets(s, [r.stdout, r.stderr]);
+});
+
+test('updateAccountConfig 回执 revision 对不上：投递以 failed 结束', async (t) => {
+  const s = await setup(t, { script: { accountConfigReply: { receivedRevision: 'zcode-executor-offpeak:0' } } });
+  const r = await runBin(s.env, ['send', s.entry.id, '闲时的活', '--offpeak', '--wait', '--json']);
+  trackPids(s.runsDir);
+  assert.equal(r.status, 4, r.stderr);
+  assert.match(JSON.parse(r.stdout).reason, /回执对不上/);
+  await waitRunnerGone(s.runsDir);
+  trackPids(s.runsDir);
+  assert.equal(readRecord(s.recordPath).some((m) => m.method === 'session/send'), false);
+  await assertNoSecrets(s, [r.stdout, r.stderr]);
+});
+
+test('结算失败：回合照样 done，offpeak.json 记 settleError、phase 为 done，stderr 一行', async (t) => {
+  const s = await setup(t, { offpeak: { failRoute: { settle: { status: 500 } } } });
+  const r = await runBin(s.env, ['send', s.entry.id, '闲时的活', '--offpeak', '--wait', '--json']);
+  trackPids(s.runsDir);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).outcome, 'done');
+  await waitRunnerGone(s.runsDir);
+  const op = readJson(path.join(s.runsDir, 'offpeak.json'));
+  assert.equal(op.phase, 'done');
+  assert.match(op.settleError, /结算失败/);
+  assert.equal(op.settledAt, null);
+  assert.match(runnerLog(s), /^runner: 闲时号 mock-ticket-1 结算失败/m);
+  assert.equal(readEvents(s.runsDir).some((e) => e.type === 'executor.offpeak.settled'), false);
+  await assertNoSecrets(s, [r.stdout, r.stderr]);
+});
+
+test('回合 exited：队列项保留给下个 runner，号不结算', async (t) => {
+  const s = await setup(t, { script: { exitAfter: 'session/send' } });
+  const r = await runBin(s.env, ['send', s.entry.id, '闲时的活', '--offpeak', '--wait', '--json']);
+  trackPids(s.runsDir);
+  assert.equal(r.status, 4, r.stderr);
+  await waitRunnerGone(s.runsDir);
+  trackPids(s.runsDir);
+  assert.equal(readJson(path.join(s.runsDir, 'last.json')).outcome, 'exited');
+  assert.equal((await readdir(path.join(s.runsDir, 'queue'))).length, 1);
+  assert.deepEqual(settleRequests(s), []);
+  assert.equal(readJson(path.join(s.runsDir, 'offpeak.json')).phase, 'running');
+  await assertNoSecrets(s, [r.stdout, r.stderr]);
 });
