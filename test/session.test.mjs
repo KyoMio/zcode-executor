@@ -71,7 +71,7 @@ test('settleTurn：completed → done，lastText 拼接 text_delta，usage 透�
     { type: 'model.streaming', payload: { kind: 'text_delta', delta: '，世界' } },
     { type: 'turn.completed', payload: { resultType: 'success', usage: { totalTokens: 42 } } },
   ]);
-  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '你好，世界', usage: { totalTokens: 42 }, errorCode: null });
+  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '你好，世界', usage: { totalTokens: 42 }, errorCode: null, errorReason: null });
 });
 
 test('settleTurn：failed 的 error.code 统一成字符串放进 errorCode，没有 code 为 null', () => {
@@ -93,17 +93,17 @@ test('settleTurn：failed 带 error.message', () => {
 // 结束事件只有这两个）
 test('settleTurn：resultType 缺省 → done', () => {
   const settled = settleTurn([{ type: 'turn.completed', payload: { usage: { totalTokens: 3 } } }]);
-  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 3 }, errorCode: null });
+  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 3 }, errorCode: null, errorReason: null });
 });
 
 test('settleTurn：resultType null 也算缺省 → done', () => {
   const settled = settleTurn([{ type: 'turn.completed', payload: { resultType: null, usage: { totalTokens: 3 } } }]);
-  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 3 }, errorCode: null });
+  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 3 }, errorCode: null, errorReason: null });
 });
 
 test('settleTurn：resultType success → done', () => {
   const settled = settleTurn([{ type: 'turn.completed', payload: { resultType: 'success', usage: { totalTokens: 4 } } }]);
-  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 4 }, errorCode: null });
+  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 4 }, errorCode: null, errorReason: null });
 });
 
 test('settleTurn：resultType cancelled → outcome cancelled，reason 说明被叫停', () => {
@@ -114,6 +114,7 @@ test('settleTurn：resultType cancelled → outcome cancelled，reason 说明被
     lastText: '',
     usage: { totalTokens: 0 },
     errorCode: null,
+    errorReason: null,
   });
 });
 
@@ -772,7 +773,7 @@ test('闲时号无效的回合 → outcome failed，errorCode 为字符串 3104'
 });
 
 test('闲时回合没推授权 → failed，errorCode provider_not_found（mock 照真机）', async () => {
-  // verified.md「闲时任务探针」2026-09-27：没推授权或版本号算错，选闲时 provider 的回合报 provider 找不到
+  // verified.md 闲时任务探针（2026-09-27）：没推授权或版本号算错，选闲时 provider 的回合报 provider_not_found
   await withSession({}, {}, async ({ session }) => {
     const result = await session.send('hi', { extraParams: OFFPEAK_EXTRA });
     assert.equal(result.outcome, 'failed');
@@ -790,6 +791,33 @@ test('闲时回合授权对得上、票号是假号 → failed，errorCode 3104�
     const result = await session.send('hi', { extraParams: fake });
     assert.equal(result.outcome, 'failed');
     assert.equal(result.errorCode, '3104');
+  });
+});
+
+test('settleTurn：turn.failed 带 attribution.reason 时 errorReason 取它，没有为 null', () => {
+  // turn.failed 的 payload.error.attribution 形状出自 zcode.cjs 3.14.1 源码，未验证
+  const withReason = settleTurn([
+    { type: 'turn.started', payload: {} },
+    { type: 'turn.failed', payload: { error: { code: 'model_rate_limited', message: 'slow down', attribution: { source: 'provider', reason: 'rate_limited' } } } },
+  ]);
+  assert.equal(withReason.errorCode, 'model_rate_limited');
+  assert.equal(withReason.errorReason, 'rate_limited');
+  const without = settleTurn([
+    { type: 'turn.started', payload: {} },
+    { type: 'turn.failed', payload: { error: { code: '3104', message: 'x' } } },
+  ]);
+  assert.equal(without.errorReason, null);
+});
+
+test('send 的结果带 errorReason（只有 failed 才有值）', async () => {
+  const script = { turns: [{ fail: { code: 'model_request_failed', message: 'boom', attribution: { reason: 'server_error' } } }] };
+  await withSession(script, {}, async ({ session }) => {
+    const failed = await session.send('hi');
+    assert.equal(failed.outcome, 'failed');
+    assert.equal(failed.errorReason, 'server_error');
+  });
+  await withSession({}, {}, async ({ session }) => {
+    assert.equal((await session.send('hi')).errorReason, null);
   });
 });
 

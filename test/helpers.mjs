@@ -67,7 +67,7 @@ export const BUILTIN_PROVIDER_FIXTURE = {
             api: { type: 'anthropic-messages', baseUrl: 'https://api.z.ai/api/anthropic' },
           },
         },
-        // 闲时隐藏条目（形状照真机 zcode-builtin.json，verified.md「闲时任务探针」2026-09-27，App 3.14.1）：
+        // 闲时隐藏条目（形状照真机 zcode-builtin.json，verified.md 闲时任务探针（2026-09-27），App 3.14.1）：
         // CLI 里一直都有、默认 entitled:false，推 provider/updateAccountConfig 之后才可用
         {
           providerId: 'account:bigmodel-offpeak-idle-plan',
@@ -182,7 +182,8 @@ export async function startMock({ script, record, version, credentials, appVersi
   }
   let zcodePath = MOCK_PATH;
   if (appVersion) {
-    // 真机布局 <App>.app/Contents/Resources/glm/zcode.cjs 与 <App>.app/Contents/Info.plist（App 3.14.1 本机核对）。
+    // 权宜：布局 <App>.app/Contents/Resources/glm/zcode.cjs 与 <App>.app/Contents/Info.plist 是 2026-09-27 本机 App 3.14.1
+    // 看到的，未记进 verified.md，未验证；别的平台或版本布局不同时改这里和 lib/offpeak-check.mjs 的 appVersionOf。
     // mock 是 ESM，链接名用 .mjs：叫 .cjs 会被当成 CommonJS 加载
     const glm = path.join(dir, 'ZCode.app', 'Contents', 'Resources', 'glm');
     await mkdir(glm, { recursive: true });
