@@ -153,6 +153,22 @@ macOS 上 runner 从等号到收尾挂 `caffeinate -i -w <runner pid>`；`ZCODE_
 - 权宜：每跑一次全链路，zcode 命令行自己的会话库里多一条自检会话（verified.md：deferred 会话发过回合就持久化，
   `deleteSession` 不删库）；App 任务列表看不到。嫌多时改成复用同一条自检会话。
 
+### G. `quota [--json]`：今天的闲时取号情况（零额度）
+
+2026-09-28 查过 App 3.14.1 源码与真机：服务器不提供「剩余次数」，资格接口只回 `can_take_number` 与 `next_take_at`
+（verified.md「闲时任务探针」）。所以次数由本工具自己数，服务器只回答「现在能不能取」。
+
+- 服务器：调 `availability()`，得到能不能取号；不能取时带下次可取时间（换成本地时间）。
+- 本工具今天的取号次数：扫描 `runs/*/events.jsonl` 里本地今天（机器本地时区，0 点起）的 `executor.offpeak.taken` 与
+  `executor.offpeak.retaken` 事件条数；doctor 自检不取号，不计。App 里或别的客户端用掉的次数看不到，输出里写明。
+- 人读一行：`quota: 闲时取号今天本工具已用 N 次（每天约 3 次，App 里用的不计入）；服务器：现在可以取号` /
+  `…；服务器：今天额度已用完，<本地时间> 以后可再取`。
+- `--json`：`{usedToday, estimatedDailyLimit: 3, canTakeNumber, nextTakeAt(ISO 或 null), state, reason}`；
+  `state` 照 doctor ⑤ 的四态口径：`ok`（查到了，不论能不能取）/ `unavailable` / `not-applicable` / `changed`。
+- 退出码：`changed` → 1；其余 0（这是给派单方看的信息，不因为额度用完就报错）。不起 app-server，1 秒内结束。
+- 权宜：「每天约 3 次」来自一天的观察（verified.md），写成常量 `OFFPEAK_ESTIMATED_DAILY_LIMIT`，观察到别的值再改；
+  跨时区用机器本地日期，服务器的日界若不同会有偏差。
+
 ## 技术栈与命令
 
 Node ≥ 22，ESM `.mjs`，零运行时依赖（HTTP 用全局 `fetch`）。
