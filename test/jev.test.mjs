@@ -599,9 +599,12 @@ test('AbortController 的总 deadline 会真实取消挂起 fetch', async () => 
 
 test('默认总 deadline 为 10 秒，覆盖真实 Jev 常见响应耗时', async () => {
   let delay;
+  // 固定时钟：真实 Date.now 在算 deadline 与算定时器剩余之间可能跨过 1 毫秒，读出 9999。
+  const clock = fakeClock(5_000);
   const screen = createJevFastScreen({
     apiKey: 'jev_default_deadline_secret',
     fetchImpl: async () => response(validBody()),
+    now: clock.now,
     setTimeoutImpl: (_callback, ms) => {
       delay = ms;
       return { fake: true };
