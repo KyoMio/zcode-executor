@@ -4,6 +4,7 @@
 D10 是 T0.2 探针之后补的，D11 是检查点 1 撞出来的，D12 D13 是 2026-09-08 做阶段 2 时定的，
 D14 是 2026-09-18 适配 ZCode App 3.12.2 时补的，D15 是同日确定 Jev 可选快筛时补的；D16 记录本轮批准的 Jev 前筛修订，替代 D15 的路由与审计方案；
 D17、D18、D19 是 2026-09-21 对照 ZCode 开源源码（3.14.0）做线 A/B/C 时补的：D17 插话改走 v4 命令、D18 旧协议面退役风险、D19 账号型 Coding Plan 来源。
+D20 是 2026-09-27 实现闲时任务前，端到端真机跑通后补的，并修订 D19 的读取范围。
 
 ## D1 定位：派单与验收层，协议是别人的事
 
@@ -254,6 +255,41 @@ App 自己也这么用。pickProvider 优先级插入账号型两档（`preferre
 config.json 的 apiKey 同一待遇（RULES §6、§8）。
 
 重开条件：zcode 提供不落盘的账号型 provider 推送方法；或 key 不再放 credentials.json / 不再这么加密。
+
+## D20 闲时任务：自己取号排队，回合走官方闲时 provider；credentials.json 多读 `zcodejwttoken`
+
+定了什么（2026-09-27）：闲时任务（off-peak，Coding Plan 订阅免费、不占套餐额度）由我们自己实现桌面宿主那一半：
+直连 `https://zcode.z.ai/api/v1/off-peak` 的取号、轮询、结算接口；票就绪后在 app-server 里先推
+`provider/updateAccountConfig` 把内置 `account:<family>-offpeak-idle-plan` 标成已授权
+（`basedOnZCodeBuiltinRevision` = `zcode-builtin:<内置文件 revision>:<sha256(内置文件绝对路径)>`），
+再 `session/send` 带 `modelSelection`、`modelExecution.requestAuth`（JWT、Coding Plan key、票号）、
+`offPeakTaskId`、`offPeakRunType`。为此 credentials.json 在 D19 的四个键之外多解一个 `zcodejwttoken`，
+修订 D19「OAuth 令牌一类一律不读不解」——只放开这一个键，其余照旧不读。
+
+为什么：闲时服务器只认这个 JWT，没有别的来源。回合不自己发 HTTP、改走 CLI 的官方闲时 provider：CLI 对
+z.ai 域名强制客户端签名，只有账号型 off-peak 免签；而且 CLI 自带「3105/429 还在排队就退避重试」「3102
+票过期」的判定。真机端到端跑通（verified.md「闲时任务探针」）。不做成 CLI 反向请求 `offPeak/create` 的唯一
+入口：那条只在执行端自己的模型要求闲时时才来，工头派单用的是我们自己的入口；反向请求可以后补，走同一套核心。
+
+风险与边界：接口与键名都是 App 私有实现，改了闲时这条路就断，普通派单不受影响；JWT 没有过期时间、权限大，
+与 plan key 同一待遇——只进内存、secrets 抹除名单和 JSON-RPC 参数，不落盘、不进 runs/ 和日志（探针已确认 CLI
+不把 requestAuth 写进 ~/.zcode/cli）；免费取号次数有限，票过期重取要设上限；就绪只有约 5 分钟，运行最长 3 小时。
+
+规则（2026-09-27 grill 定下，细节见 docs/SPEC-offpeak.md）：
+- 入口是 `send <id> <正文> --offpeak`；会话没有类型，闲时是投递的属性。闲时投递独占空闲会话：会话有活 runner 或
+  队列非空就拒绝（退出码 2）；排号期间同一会话的其他投递也拒绝。约定另开会话专门发闲时投递，完成后可在同一会话
+  发普通或闲时投递返工。
+- 当场取号，取号失败（没资格、额度用完、接口变了）退出码 2；不带 `--wait` 取号成功即以 0 返回；`--wait` 的超时只从
+  回合开跑算起。
+- 模型与思考等级沿用会话，模型须在闲时列表里；只支持两个系列的个人版。
+- 闸门不变：挂起由派单方应答；模型审批仍走普通 provider。
+- 号过期或失效自动重取，一次投递最多重取 2 次，用完以回合异常结束（退出码 4）；任何终局都结算号，结算失败重试 3 次后
+  只在 status 里挂提示。macOS 上等号与运行期间用 caffeinate 防空闲睡眠。
+- doctor 第 ⑤ 项 / `doctor --offpeak` 零额度查四层（凭据、内置条目、服务器约定、假号全链路），结论
+  ok / changed / unavailable / not-applicable，只有 changed 让退出码为 1；记录验证过的 App 版本，不一致只提示。
+- 不做：send 前自动跑自检、定时自检（用户自己配 cron）；接 CLI 的反向请求 `offPeak/create`；团队版。
+
+重开条件：ZCode 把闲时队列放进 app-server（CLI 自己排队）或提供正式 API；或服务器开始要求客户端签名。
 
 ## 补记：模型审批的模型从已推的 provider 表里选，不再多一次 readState
 
