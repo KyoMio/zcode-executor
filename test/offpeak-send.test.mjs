@@ -260,7 +260,7 @@ test('排号中 cancel 之后，runner 收摊，普通 send 能正常投递（of
   const cancel = await runBin(s.env, ['cancel', s.entry.id]);
   assert.equal(cancel.status, 0, cancel.stderr);
   await waitRunnerGone(s.runsDir);
-  assert.equal(readJson(path.join(s.runsDir, 'offpeak.json')).phase, 'queued'); // 孤儿号的结算留给 OP6
+  assert.equal(readJson(path.join(s.runsDir, 'offpeak.json')).phase, 'done'); // 排号中 cancel 结算号并收尾（OP6）
   const plain = await runBin(s.env, ['send', s.entry.id, '普通的活', '--wait', '--json']);
   trackPids(s.runsDir);
   assert.equal(plain.status, 0, plain.stderr);
