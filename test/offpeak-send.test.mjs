@@ -234,3 +234,163 @@ test('send --offpeak：取号 3101 → 退出码 2「没有闲时资格」', asy
   assert.equal(r.status, 2, r.stderr);
   assert.match(r.stderr, /没有闲时资格/);
 });
+
+// ---------- 正常路径 ----------
+
+test('send --offpeak --json：取号入队、等号就绪才起 app-server，推授权后带闲时参数开跑，回合 done 后结算', async (t) => {
+  const s = await setup(t, { offpeak: { readyDelayMs: 1500 } });
+  const r = await runBin(s.env, ['send', s.entry.id, '闲时的活', '--offpeak', '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  // 原有字段照旧，另加 offpeak
+  for (const k of ['id', 'sessionId', 'queued', 'spawned', 'pid']) assert.ok(k in out, k);
+  assert.equal(out.queued, 1);
+  assert.equal(out.spawned, true);
+  assert.match(out.offpeak.offPeakId, /^offpeak-[0-9a-f-]{36}$/);
+  assert.equal(out.offpeak.ticketId, 'mock-ticket-1');
+  assert.equal(out.offpeak.position, 1);
+  // 取号时 task_id 就是 offPeakId
+  assert.deepEqual(s.server.requests[0].body, { task_id: out.offpeak.offPeakId });
+
+  // offpeak.json 起始形状（SPEC-offpeak E）：不含凭据，时间是 ISO 字符串
+  const initial = readJson(path.join(s.runsDir, 'offpeak.json'));
+  assert.equal(initial.offPeakId, out.offpeak.offPeakId);
+  assert.equal(initial.ticketId, 'mock-ticket-1');
+  assert.equal(initial.ticketCount, 1);
+  assert.equal(initial.phase, 'queued');
+  assert.equal(initial.position, 1);
+  assert.match(initial.updatedAt, /^\d{4}-\d{2}-\d{2}T.*Z$/);
+  // 队列项带 offpeak
+  const queueFiles = await readdir(path.join(s.runsDir, 'queue'));
+  assert.equal(queueFiles.length, 1);
+  const item = readJson(path.join(s.runsDir, 'queue', queueFiles[0]));
+  assert.equal(item.text, '闲时的活');
+  assert.deepEqual(item.offpeak, { offPeakId: out.offpeak.offPeakId });
+
+  // 排号期间 runner 在轮询，app-server 还没起：记录文件里一条消息都没有
+  await waitFor(() => s.server.requests.filter((q) => q.path.endsWith('/ticket/status')).length >= 2);
+  trackPids(s.runsDir);
+  assert.deepEqual(readRecord(s.recordPath), [], '号没就绪前不该起 app-server');
+
+  await waitFor(() => existsSync(path.join(s.runsDir, 'last.json')), { timeoutMs: 30000 });
+  trackPids(s.runsDir);
+  await waitRunnerGone(s.runsDir);
+  const found = trackPids(s.runsDir);
+
+  const last = readJson(path.join(s.runsDir, 'last.json'));
+  assert.equal(last.outcome, 'done', JSON.stringify(last));
+  assert.equal(last.text, '闲时的活');
+
+  // 推授权在 send 之前，send 带全部闲时参数
+  const record = readRecord(s.recordPath);
+  const methods = record.map((m) => m.method).filter(Boolean);
+  const pushAt = methods.indexOf('provider/updateAccountConfig');
+  const sendAt = methods.indexOf('session/send');
+  assert.ok(pushAt >= 0 && sendAt > pushAt, methods.join(','));
+  const push = record.find((m) => m.method === 'provider/updateAccountConfig').params;
+  assert.equal(push.providers['account:bigmodel-offpeak-idle-plan'].access.entitled, true);
+  const sent = record.find((m) => m.method === 'session/send').params;
+  assert.equal(sent.content, '闲时的活');
+  assert.equal(sent.modelSelection.providerId, 'account:bigmodel-offpeak-idle-plan');
+  assert.equal(sent.modelSelection.modelId, 'GLM-5.3');
+  assert.equal(sent.modelSelection.options.reasoningLevel, 'high');
+  assert.equal(sent.modelExecution.requestAuth.headers['X-Off-Peak-Ticket-ID'], 'mock-ticket-1');
+  assert.equal(sent.offPeakTaskId, out.offpeak.offPeakId);
+  assert.equal(sent.offPeakRunType, 'init');
+  assert.ok(sent.toolDenylist.includes('CronCreate'));
+  assert.ok(sent.toolDenylist.includes('OffPeakCreate'));
+
+  // 号结算过
+  assert.ok(s.server.requests.some((q) => q.path === '/api/v1/off-peak/ticket/mock-ticket-1/settle'));
+  const final = readJson(path.join(s.runsDir, 'offpeak.json'));
+  assert.equal(final.phase, 'done');
+  assert.match(final.settledAt, /^\d{4}-\d{2}-\d{2}T.*Z$/);
+  assert.equal(final.settleError ?? null, null);
+
+  // 事件齐全、顺序对：taken → ready → started → result → settled
+  const types = readEvents(s.runsDir).map((e) => e.type);
+  const order = ['executor.offpeak.taken', 'executor.offpeak.ready', 'executor.offpeak.started', 'executor.result', 'executor.offpeak.settled'];
+  const at = order.map((type) => types.indexOf(type));
+  assert.ok(at.every((i) => i >= 0), types.join(','));
+  assert.deepEqual([...at].sort((a, b) => a - b), at, types.join(','));
+  const taken = readEvents(s.runsDir).find((e) => e.type === 'executor.offpeak.taken');
+  assert.deepEqual({ offPeakId: taken.offPeakId, ticketId: taken.ticketId, position: taken.position }, out.offpeak);
+
+  // 泄密检查：runs 目录全部文件、输出、mock 记录里都查不到 JWT 与 key
+  const secrets = [TEST_JWT, s.mock.accountKeys.individual, s.mock.accountKeys.team];
+  const texts = [r.stdout, r.stderr, await allFileText(s.runsDir), readFileSync(s.recordPath, 'utf8')];
+  for (const secret of secrets) for (const text of texts) assert.equal(text.includes(secret), false, '不能有 JWT 或 key');
+
+  // 不残留子进程，个人 provider 文件删干净
+  assert.equal(isAlive(found.runnerPid), false, 'runner 应已退出');
+  assert.ok(found.mockPids.length >= 1);
+  await waitFor(() => found.mockPids.every((pid) => !isAlive(pid)));
+  assert.deepEqual(await readdir(s.tmp), []);
+});
+
+test('send --offpeak --wait：等到回合结果，退出码 0，普通 --wait 输出', async (t) => {
+  const s = await setup(t);
+  const r = await runBin(s.env, ['send', s.entry.id, '等结果的活', '--offpeak', '--wait', '--json']);
+  trackPids(s.runsDir);
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.kind, 'last');
+  assert.equal(out.outcome, 'done');
+  await waitRunnerGone(s.runsDir);
+  assert.equal(readJson(path.join(s.runsDir, 'offpeak.json')).phase, 'done');
+});
+
+test('send --offpeak：号在就绪前过期 → 投递以 failed 结束，不起 app-server', async (t) => {
+  const s = await setup(t, {
+    offpeak: {
+      failRoute: { status: { status: 200, body: { code: 0, msg: 'success', data: { next_poll_after: 1, tickets: [{ ticket_id: 'mock-ticket-1', state: 'expired' }] } } } },
+    },
+  });
+  const r = await runBin(s.env, ['send', s.entry.id, '会过期的活', '--offpeak', '--wait', '--json']);
+  trackPids(s.runsDir);
+  assert.equal(r.status, 4, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.outcome, 'failed');
+  assert.match(out.reason, /过期/);
+  await waitRunnerGone(s.runsDir);
+  assert.deepEqual(readRecord(s.recordPath), [], '号没就绪不该起 app-server');
+  const result = readEvents(s.runsDir).find((e) => e.type === 'executor.result');
+  assert.equal(result.outcome, 'failed');
+  assert.equal(readJson(path.join(s.runsDir, 'offpeak.json')).phase, 'done');
+  const registry = readJson(path.join(s.home, 'sessions.json'));
+  assert.equal(registry.sessions[s.entry.id].lastOutcome, 'failed');
+});
+
+test('闲时投递期间：排号时普通 send 与 --steer 都拒（2）；运行中 --steer 被接受，普通 send 仍拒', async (t) => {
+  const s = await setup(t, {
+    offpeak: { readyDelayMs: 1500 },
+    // 回合拖 4 秒，留出运行中插话的窗口
+    script: { turns: [{ events: [
+      { type: 'model.streaming', payload: { kind: 'text_delta', delta: 'a' }, delayMs: 2000 },
+      { type: 'model.streaming', payload: { kind: 'text_delta', delta: 'b' }, delayMs: 2000 },
+    ] }] },
+  });
+  const r = await runBin(s.env, ['send', s.entry.id, '闲时的活', '--offpeak']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^send: 已取号，排第 1 位（闲时投递 offpeak-[0-9a-f-]{36}）\n$/);
+  trackPids(s.runsDir);
+
+  const plain = await runBin(s.env, ['send', s.entry.id, '插队的活']);
+  assert.equal(plain.status, 2, plain.stderr);
+  assert.match(plain.stderr, /这条会话有闲时投递在排号或运行，先 cancel 或另开会话/);
+  const steerQueued = await runBin(s.env, ['send', s.entry.id, '插话', '--steer']);
+  assert.equal(steerQueued.status, 2, steerQueued.stderr);
+
+  await waitFor(() => readJson(path.join(s.runsDir, 'offpeak.json')).phase === 'running', { timeoutMs: 30000 });
+  trackPids(s.runsDir);
+  const plainRunning = await runBin(s.env, ['send', s.entry.id, '插队的活']);
+  assert.equal(plainRunning.status, 2, plainRunning.stderr);
+  const steer = await runBin(s.env, ['send', s.entry.id, '顺便补个测试', '--steer']);
+  assert.equal(steer.status, 0, steer.stderr);
+  await waitFor(() => readEvents(s.runsDir).some((e) => e.type === 'executor.steer' && e.text === '顺便补个测试'));
+  await waitFor(() => existsSync(path.join(s.runsDir, 'last.json')), { timeoutMs: 30000 });
+  await waitRunnerGone(s.runsDir);
+  assert.equal(readJson(path.join(s.runsDir, 'last.json')).outcome, 'done');
+  // 闲时投递结束后普通 send 放行
+  assert.equal(readJson(path.join(s.runsDir, 'offpeak.json')).phase, 'done');
+});
