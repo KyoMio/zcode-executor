@@ -34,6 +34,14 @@ Claude（工头）能把一件不急的开发任务交给 ZCode 的闲时算力�
    `--json` 在原有字段上加 `offpeak: {offPeakId, ticketId, position}`。
 5. 带 `--wait`：排号时间不计入 `--timeout`，计时从回合开跑算起；`--stream` 每次轮询在 stderr 打一行排位；
    回合结束后的退出码与普通 send 相同（0/3/4/5）。
+6. 取号前先收孤儿：旧 offpeak.json 没收尾、又没有活 runner 与它的队列项时，先结算旧号（best effort）。普通 send（含 `--steer`）
+   入队前做同样的收尾。
+7. **恢复**：`send <id> --offpeak --resume`（不带正文；与 `--task`、`--timeout` 同用是用法错，退出码 1；可带 `--wait`、`--stream`、`--json`）。
+   条件：没有活 runner，且队列头是本会话 offpeak.json 对应的闲时项；满足则只重新拉起 runner，不入队、不取号，退出码 0，
+   人读 `send: 已重新拉起 runner，继续闲时投递 <offPeakId>`，`--json` 加 `offpeak: {offPeakId, resumed: true}`；不满足退出码 2。
+   用于回合 exited 或 runner 崩溃之后；普通 send 被这种状态挡住时，错误信息提示 `--offpeak --resume` 或 cancel。
+8. **占用判据**：只有队列里有这次闲时投递的项，或者活着的 runner 正是 offpeak.json 里 `runnerPid` 记下的那个，才算闲时投递占着会话；
+   普通投递的 runner 活着不算。
 
 ### B. runner 处理闲时队列项
 
@@ -77,21 +85,31 @@ Claude（工头）能把一件不急的开发任务交给 ZCode 的闲时算力�
   每个续跑回合的 `--timeout` 重新计时，所以一次闲时投递的总运行时间最多约为 `--timeout` 的 3 倍。
 - 重取期间（结算旧号、取新号、写回队列三个时刻）发现队列项没了或有 cancel/stop 标记 → 不再重取，结算当前号，以 `cancelled` 结束。
 - 闲时服务器回 401/403 时重读一次凭据，JWT 变了就换新的重试一次；用过的新旧 JWT 都进抹密名单。
-- 已知限制（OP6 处理）：回合 exited 后 runner 退出，队列项留着，按正常用法起不来续跑，只能 cancel。
+- 回合 exited 后 runner 退出、队列项留着：用 `send <id> --offpeak --resume` 恢复（A.7），或 cancel。
+- 结算或重取窗口里的插话：队列项带 `offPeakSteer`（本次 offPeakId）。回合已结束才排到队头的，runner 丢弃并记
+  `executor.steer_failed`，不转成普通投递；重取窗口里投的，插进续跑回合。孤儿状态下的插话不打这个标记。
 
 ### D. `cancel <id>`
 
-- 排号中：runner 停止轮询、结算当前号，投递以 `cancelled` 结束；
-- 运行中：照现有做法停回合，然后结算。
+- 排号中：runner 每 200 毫秒看一眼 stop/cancel 标记与队列项，停止轮询、结算当前号，投递以 `cancelled` 结束；
+- 运行中：照现有做法停回合，然后结算；
+- 就绪到开跑之间、重取窗口、runner 刚拉起就发现队列空了：runner 在收场（删锁之前）统一收尾——offpeak.json 没收尾且队列里
+  没有它的项，就结算当前号并收成 done；本 runner 见过 stop/cancel 且手上那次投递没有结局，再写 cancelled 的 last.json；
+- runner 已死：`cancel` 由 CLI 直接结算（只请求一次，失败记进 unsettledTickets），offpeak.json 收成 done；只有被清掉的队列项里
+  有这次投递时才写 cancelled 的 last.json，已有结局的不改写；回写前重读 offpeak.json，offPeakId 对不上就放弃回写。
 
 ### E. 状态与显示
 
 `runs/<id>/offpeak.json`（原子写，每次新的闲时投递整份覆盖）：`{offPeakId, ticketId, ticketCount, phase: queued|ready|running|done, position,
-readyDeadline, activeDeadline, startedAt, settledAt, unsettledTickets: [{ticketId, error, at}], updatedAt}`。不含任何凭据。
+readyDeadline, activeDeadline, startedAt, settledAt, unsettledTickets: [{ticketId, error, at}], runnerPid, updatedAt}`。不含任何凭据。
+`activeDeadline` 是估算值（`session/send` 被接受时间 + 3 小时），开跑后服务器不再被查询。
 `startedAt` 是本次投递的 `session/send` 第一次被接受的时间（null 表示原文还没发出去过）；`settledAt` 是当前号结算成功的时间，重取时清空。
 
-`status` 与 `follow` 在闲时投递期间多一行：`闲时：排第 N 位（号 <ticketId>，第 k/3 个号）` / `闲时：运行中（号 …，最晚 <时间> 截止）`；
-`--json` 加 `offpeak` 对象（即 offpeak.json 的内容）。
+`status` 与 `follow` 在闲时投递期间多一行：`闲时：排第 N 位（号 <ticketId>，第 k/3 个号）` / `闲时：号已就绪，等开跑` /
+`闲时：运行中（号 …，最晚 <时间> 截止）`；另有 `闲时：号 … 未结算`（unsettledTickets 非空）、`闲时：投递 X 没收尾…`（runner 已不在，
+附恢复办法）。status 的闲时行在 stdout，follow 的闲时行在 stderr、变化时才重打。
+`status --json` 与 `follow --json` 一律带 `offpeak` 字段（offpeak.json 的内容，没有时为 null）。
+macOS 上 runner 从等号到收尾挂 `caffeinate -i -w <runner pid>`；`ZCODE_EXECUTOR_NO_CAFFEINATE=1` 时不起。
 
 事件：`executor.offpeak.taken|ready|started|retaken|settled`，都不含凭据。
 
@@ -150,8 +168,9 @@ bin/zcode-executor doctor --offpeak --json   # 真机零额度自检
 | `lib/offpeak-provider.mjs`（新） | 协议 | 闲时 provider id、模型表、内置版本号、授权配置与 send 额外参数（纯函数为主） |
 | `lib/session.mjs` | 协议 | `send(text, {timeoutMs, extraParams})` 合并额外参数；outcome 加 `errorCode`（只在 failed 时有值）；落盘事件与上抛的错误按值抹 `secrets`（同一份名单也交给 `AppServerClient.spawn`，stderr 转发靠它） |
 | `lib/offpeak-check.mjs`（新） | 工作流 | doctor ⑤ 的四层自检（起 app-server，外壳只排版） |
-| `lib/offpeak-run.mjs`（新） | 工作流 | runner 的闲时部分：等号就绪、caffeinate、重取、结算、offpeak.json 读写 |
-| `lib/run.mjs` | 工作流 | 只加调用点，不把闲时逻辑写进来（文件已 510 行） |
+| `lib/offpeak-send.mjs`（新） | 工作流 | CLI 侧：取号、offpeak.json 读写、占用判据、`--resume` 判据、孤儿号与 runner 已死时的结算 |
+| `lib/offpeak-run.mjs`（新） | 工作流 | runner 侧：等号就绪、caffeinate、推授权与 send 参数、重取与续跑、结算、收场收尾 |
+| `lib/run.mjs` | 工作流 | 只加调用点，不把闲时逻辑写进来（上限 500 行，现在 500） |
 | `lib/cli/send.mjs` `status.mjs` `follow.mjs` `doctor.mjs` | 外壳 | 见 A、E、F |
 | `test/mock-offpeak.mjs`（新） | 测试 | 照 App 自带 mock 网关的状态机写的闲时 HTTP 服务（node:http） |
 | `test/mock-appserver.mjs` | 测试 | 记录 updateAccountConfig 与 send 的新参数；剧本可让闲时回合以指定错误码失败 |
