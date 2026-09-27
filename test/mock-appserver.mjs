@@ -1,6 +1,6 @@
 // test/mock-appserver.mjs —— stdio 上说 app-server 协议的假进程（整个项目的测试接缝）。
 // 由剧本 JSON 驱动，收到的每条消息追加到记录文件（MOCK_APPSERVER_RECORD，一行一条 JSON），
-// apiKey 值写盘前抹成 "[REDACTED]"（T1.3b 第 6 条，RULES §8 永不落盘）。
+// apiKey 值（含闲时 send 的 requestAuth.apiKey 与 headers 值）写盘前抹成 "[REDACTED]"（T1.3b 第 6 条，RULES §8 永不落盘）。
 // 日志一律 stderr（`mock: ` 前缀）。stdin EOF 后退出码 0。信封无 jsonrpc 字段；未知方法回 -32601。
 // 目标是「真机行为的复刻」：每个默认返回形状旁注明出处（verified.md / verified.md / 探针实测日期）。
 // 复刻的是 ZCode App 3.12.2 的 app-server（verified.md「3.12.2 直连探针实测」与 docs/reference/zcode-app-server-protocol.md「3.12.2 变化」，2026-09-18）：provider 表不再由
@@ -57,7 +57,11 @@
 //                                                         schema/toolCallId 透传，可造 ExitPlanMode 形状
 //     completeDelayMs: 800                                    应答之后到 completed 之间睡多少毫秒（T2.8）
 //     hang:       true                                    不再推任何事件
-//     fail:       {code, message}                         推 turn.failed（payload.error）
+//     fail:       {code, message}                         推 turn.failed（payload.error）。闲时号失效用
+//                                                         {code:'3104', message:…}（号无效）或 {code:'3102',
+//                                                         message:'off-peak-ticket-expired: …'}（号过期）——
+//                                                         verified.md「闲时任务探针」2026-09-27 App 3.14.1：
+//                                                         code 是字符串，3102 的 message 以 off-peak-ticket-expired: 开头
 //     都没有                                              最后推 turn.completed
 //   generateText:      { replies: [文本…] }                workspace/generateText 按调用顺序回这些
 //                                                         文本（T3.2），用完就循环最后一条
@@ -77,6 +81,18 @@
 //                                                         强制 v4/command 的 ACK status（对象可再带
 //                                                         reasonCode/message），测「ACK 被拒时客户端
 //                                                         抛错」；信封校验之后、其余分支之前生效
+//   accountConfigReply: {receivedRevision?, providerCount?, status?}
+//                                                         覆盖 provider/updateAccountConfig 回执的字段（测「回执
+//                                                         revision 不对」）；要它回错误用 errors 字段，如
+//                                                         {"provider/updateAccountConfig": {code:-32602, …}}。
+//                                                         默认回执照 verified.md「闲时任务探针」2026-09-27 App 3.14.1：
+//                                                         {receivedRevision: params.revision, providerCount, status:'received'}。
+//                                                         权宜：不校验 basedOnZCodeBuiltinRevision（真机不等时静默忽略整份
+//                                                         配置），要测「版本号错了回合跑不起来」时再复刻
+//   echoSendParamsInTurnStarted: true                     把收到的 session/send 参数原样放进 turn.started.payload.intent。
+//                                                         verified.md 2026-09-27：真机 turn.started 的 intent 里带
+//                                                         modelSelection，带不带 requestAuth 未见；这个开关是防御性的，
+//                                                         测会话层落盘确实按值抹掉 JWT 与 key
 import { createInterface } from 'node:readline';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -103,10 +119,17 @@ const log = (msg) => process.stderr.write(`mock: ${msg}\n`);
 // T1.3b 第 6 条：写记录前把见过的 apiKey 值抹成 "[REDACTED]"（默认开启，RULES §8 永不落盘）。
 // 值来自个人文件的 access.apiKey（启动时读）和客户端答 requestProviderRuntimeHeaders 时给的
 // requestAuth.apiKey；替换按整个带引号的 JSON 字符串做，记录行保持可 JSON.parse。
+// 闲时回合的 session/send 自带 modelExecution.requestAuth（JWT 与 plan key，verified.md 2026-09-27），
+// 它的 apiKey 和每个 header 值同样抹掉
 const secretValues = new Set();
 function collectSecrets(msg) {
   const v = msg?.result?.requestAuth?.apiKey;
   if (v) secretValues.add(v);
+  const auth = msg?.params?.modelExecution?.requestAuth;
+  if (auth?.apiKey) secretValues.add(auth.apiKey);
+  for (const h of Object.values(auth?.headers ?? {})) {
+    if (h) secretValues.add(h);
+  }
 }
 
 // docs/reference/zcode-app-server-protocol.md「3.12.2 变化」：模型表 = 个人文件里每条 providerRules 的 providerId × personalModelIds。
@@ -345,7 +368,7 @@ const pushEvent = (sessionId, type, payload) => {
 // hang / fail 没走正常收尾的残留不该排进下一回合（权宜：mock 单会话假设，与 activeTurn 同）
 const pendingSteers = [];
 
-async function runTurn(sessionId) {
+async function runTurn(sessionId, sendParams) {
   const turn = script.turns?.[state.sendCount] ?? {};
   state.sendCount += 1;
   state.stopRequested = false; // 新回合重置：上一回合的叫停不波及这一回合
@@ -358,7 +381,8 @@ async function runTurn(sessionId) {
     ev('turn.completed', { resultType: 'cancelled', usage: { totalTokens: 0 } });
     return true;
   };
-  ev('turn.started', {});
+  // 剧本 echoSendParamsInTurnStarted：send 参数原样进 intent（v4 sendText 起的回合没有 send 参数，不带）
+  ev('turn.started', script.echoSendParamsInTurnStarted && sendParams ? { intent: sendParams } : {});
   // 会话的模型：create 时记下的；resume 进来的会话 mock 没建过，退到表里第一个（权宜：resume 不校验会话存在）
   const model = state.sessions.find((s) => s.sessionId === sessionId)?.model ?? availableModels()[0]?.ref
     ?? { providerId: 'zcode-unconfigured', modelId: 'missing-model' };
@@ -627,8 +651,19 @@ function handleRequest(msg) {
         process.exit(3);
       }
       state.activeTurn = true;
-      void runTurn(params.sessionId).then(() => {
+      void runTurn(params.sessionId, params).then(() => {
         state.activeTurn = false;
+      });
+      break;
+    }
+    case 'provider/updateAccountConfig': {
+      // verified.md「闲时任务探针」2026-09-27 App 3.14.1：推闲时授权配置回
+      // {receivedRevision, providerCount, status:'received'|'unchanged'}；剧本 accountConfigReply 可改字段
+      respond(id, {
+        receivedRevision: params.revision,
+        providerCount: Object.keys(params.providers ?? {}).length,
+        status: 'received',
+        ...script.accountConfigReply,
       });
       break;
     }

@@ -16,6 +16,12 @@ import {
   buildPersonalProviderConfig,
   writePersonalProviderFile,
   buildModelSelection,
+  offPeakProviderId,
+  offPeakModelIds,
+  formatBuiltinRevision,
+  builtinRevision,
+  buildOffPeakAccountConfig,
+  buildOffPeakSendParams,
 } from '../lib/providers.mjs';
 import { BUILTIN_PROVIDER_FIXTURE, CREDENTIAL_TEST_SECRET, encryptForTest } from './helpers.mjs';
 
@@ -529,4 +535,150 @@ test('readProviderRegistry：注入 env 里没有的变量绝不从 process.env 
     if (savedBuiltin === undefined) delete process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE;
     else process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = savedBuiltin;
   }
+});
+
+// ---------- 闲时投递（decisions D20，verified.md「闲时任务探针」2026-09-27，App 3.14.1） ----------
+
+// 内置文件里的闲时隐藏条目（形状照真机 zcode-builtin.json 3.14.1）；helpers 的夹具没有它，就近造一份
+const OFFPEAK_BUILTIN = {
+  revision: 30,
+  config: {
+    providerConfigRules: {
+      providerRules: [
+        {
+          providerId: 'account:bigmodel-offpeak-idle-plan',
+          config: {
+            builtinModelIds: ['GLM-5.3', 'GLM-5.3-Flash'],
+            access: { type: 'zhipu-account', mode: 'off-peak', accountType: 'bigmodel' },
+            api: { type: 'anthropic-messages', baseUrl: 'https://zcode.z.ai/api/v1/off-peak/anthropic' },
+          },
+        },
+      ],
+    },
+  },
+};
+
+test('offPeakProviderId：两个账号族各得各的闲时 provider id', () => {
+  assert.equal(offPeakProviderId('zai'), 'account:zai-offpeak-idle-plan');
+  assert.equal(offPeakProviderId('bigmodel'), 'account:bigmodel-offpeak-idle-plan');
+});
+
+test('offPeakProviderId：不认识的账号族抛 ExecutorError', () => {
+  assert.throws(() => offPeakProviderId('openai'), ExecutorError);
+  assert.throws(() => offPeakProviderId(undefined), ExecutorError);
+});
+
+test('offPeakModelIds：返回内置条目的 builtinModelIds', () => {
+  assert.deepEqual(offPeakModelIds(OFFPEAK_BUILTIN, 'bigmodel'), ['GLM-5.3', 'GLM-5.3-Flash']);
+});
+
+test('offPeakModelIds：内置文件里没有这个族的闲时条目返回 null', () => {
+  assert.equal(offPeakModelIds(OFFPEAK_BUILTIN, 'zai'), null);
+  assert.equal(offPeakModelIds(BUILTIN_PROVIDER_FIXTURE, 'bigmodel'), null);
+});
+
+test('formatBuiltinRevision：哈希的是内置文件的绝对路径字符串（真机 3.14.1 实测值）', () => {
+  const realPath = '/Applications/ZCode.app/Contents/Resources/config/provider/zcode-builtin.json';
+  assert.equal(
+    formatBuiltinRevision(30, realPath),
+    'zcode-builtin:30:8f54ff88821cb0f70c213894cd6e3434966f570e74b53e061aa19778f79fab1c',
+  );
+});
+
+test('formatBuiltinRevision：相对路径先按 cwd 解析成绝对路径再哈希', () => {
+  const rel = path.join('some', 'zcode-builtin.json');
+  assert.equal(formatBuiltinRevision(7, rel), formatBuiltinRevision(7, path.resolve(rel)));
+});
+
+test('builtinRevision：读内置文件的 revision，和路径哈希拼成版本号', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-offpeak-rev-'));
+  dirs.push(dir);
+  const file = path.join(dir, 'zcode-builtin.json');
+  await writeFile(file, JSON.stringify(OFFPEAK_BUILTIN));
+  assert.equal(builtinRevision(file), formatBuiltinRevision(30, file));
+  assert.match(builtinRevision(file), /^zcode-builtin:30:[0-9a-f]{64}$/);
+});
+
+test('builtinRevision：文件不存在、不是 JSON、没有 revision 都抛 ExecutorError', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-offpeak-rev-'));
+  dirs.push(dir);
+  const bad = path.join(dir, 'bad.json');
+  await writeFile(bad, '{not json');
+  const norev = path.join(dir, 'norev.json');
+  await writeFile(norev, JSON.stringify({ config: {} }));
+  assert.throws(() => builtinRevision(path.join(dir, 'missing.json')), ExecutorError);
+  assert.throws(() => builtinRevision(bad), ExecutorError);
+  assert.throws(() => builtinRevision(norev), ExecutorError);
+});
+
+test('buildOffPeakAccountConfig：授权闲时 provider 的 updateAccountConfig 参数', () => {
+  const params = buildOffPeakAccountConfig({ family: 'zai', basedOnZCodeBuiltinRevision: 'zcode-builtin:30:abc', now: 1700000000000 });
+  assert.deepEqual(params, {
+    revision: 'zcode-executor-offpeak:1700000000000',
+    basedOnZCodeBuiltinRevision: 'zcode-builtin:30:abc',
+    providers: { 'account:zai-offpeak-idle-plan': { access: { type: 'zhipu-account', entitled: true } } },
+    states: { 'account:zai-offpeak-idle-plan': { availability: 'available', entitled: true, current: true } },
+  });
+});
+
+test('buildOffPeakAccountConfig：缺内置版本号抛 ExecutorError（CLI 会静默忽略整份配置）', () => {
+  assert.throws(() => buildOffPeakAccountConfig({ family: 'zai' }), ExecutorError);
+});
+
+test('buildOffPeakSendParams：闲时回合要带的模型选择、请求鉴权与闲时标识', () => {
+  const params = buildOffPeakSendParams({
+    family: 'bigmodel',
+    modelId: 'GLM-5.3-Flash',
+    reasoningLevel: 'high',
+    jwt: 'jwt-aaaa.bbbb.cccc',
+    planKey: 'plan-key-123456',
+    ticketId: '1000000000000000001',
+    offPeakId: 'offpeak-uuid-1',
+  });
+  assert.deepEqual(params, {
+    modelSelection: { providerId: 'account:bigmodel-offpeak-idle-plan', modelId: 'GLM-5.3-Flash', options: { reasoningLevel: 'high' } },
+    modelExecution: {
+      selectionScope: 'execution',
+      memoryExtraction: 'skip',
+      requestAuth: {
+        apiKey: 'jwt-aaaa.bbbb.cccc',
+        headers: {
+          Authorization: 'Bearer jwt-aaaa.bbbb.cccc',
+          'X-Coding-Plan-Api-Key': 'plan-key-123456',
+          'X-Off-Peak-Ticket-ID': '1000000000000000001',
+        },
+      },
+      subagents: { foregroundModel: 'submission', background: 'deny' },
+    },
+    offPeakTaskId: 'offpeak-uuid-1',
+    offPeakRunType: 'init',
+    toolDenylist: ['CronCreate', 'OffPeakCreate'],
+  });
+});
+
+test('buildOffPeakSendParams：续跑标 resume，toolDenylist 在调用方列表上追加并去重', () => {
+  const params = buildOffPeakSendParams({
+    family: 'zai',
+    modelId: 'GLM-5.3',
+    reasoningLevel: 'max',
+    jwt: 'jwt-aaaa.bbbb.cccc',
+    planKey: 'plan-key-123456',
+    ticketId: '1000000000000000001',
+    offPeakId: 'offpeak-uuid-1',
+    runType: 'resume',
+    toolDenylist: ['WebFetch', 'CronCreate'],
+  });
+  assert.equal(params.offPeakRunType, 'resume');
+  assert.deepEqual(params.toolDenylist, ['WebFetch', 'CronCreate', 'OffPeakCreate']);
+});
+
+test('buildOffPeakSendParams：runType 不是 init/resume、缺号或缺凭据都抛 ExecutorError', () => {
+  const base = {
+    family: 'zai', modelId: 'GLM-5.3', reasoningLevel: 'max', jwt: 'jwt-aaaa.bbbb.cccc',
+    planKey: 'plan-key-123456', ticketId: '1000000000000000001', offPeakId: 'offpeak-uuid-1',
+  };
+  assert.throws(() => buildOffPeakSendParams({ ...base, runType: 'restart' }), ExecutorError);
+  assert.throws(() => buildOffPeakSendParams({ ...base, ticketId: undefined }), ExecutorError);
+  assert.throws(() => buildOffPeakSendParams({ ...base, jwt: '' }), ExecutorError);
+  assert.throws(() => buildOffPeakSendParams({ ...base, planKey: undefined }), ExecutorError);
 });
