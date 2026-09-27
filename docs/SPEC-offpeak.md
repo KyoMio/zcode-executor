@@ -46,7 +46,7 @@ Claude（工头）能把一件不急的开发任务交给 ZCode 的闲时算力�
 2. **开跑**：拉连接（同普通投递）→ 推 `provider/updateAccountConfig`：
    `{revision:"zcode-executor-offpeak:<时间戳>", basedOnZCodeBuiltinRevision:"zcode-builtin:<内置文件 revision>:<sha256(内置文件绝对路径)>",
    providers:{<闲时 providerId>:{access:{type:"zhipu-account", entitled:true}}},
-   states:{<闲时 providerId>:{availability:"available", entitled:true, current:true}}}`，回执 revision 不等 → 按回合异常处理；
+   states:{<闲时 providerId>:{availability:"available", entitled:true, current:true}}}`，回执 revision 不等或推送报错 → 按回合异常处理（回执为 `unchanged` 不算失败）。注意：版本号算错时回执照样是 `received`（CLI 源码原样回显 revision），真实表现是回合报 provider 找不到，所以版本号由 doctor 全链路层兜底；
    → `session/send` 在原参数上加：
    `modelSelection:{providerId:<闲时 providerId>, modelId:<会话模型>, options:{reasoningLevel:<会话思考等级>}}`、
    `modelExecution:{selectionScope:"execution", memoryExtraction:"skip", requestAuth:{apiKey:<JWT>, headers:{Authorization:"Bearer <JWT>",
@@ -97,8 +97,10 @@ readyDeadline, activeDeadline, settledAt, settleError, updatedAt}`。不含任�
 结论四态：
 - `ok`：四层都符合；
 - `changed`：形状、路由、业务码、条目、回执 revision、全链路错误码任一不符（HTTP 404 也算）；
-- `unavailable`：网络错、5xx、超时；
-- `not-applicable`：没登录、团队版、3101 没资格。
+- `unavailable`：网络错、5xx、HTTP 429（限流，业务码不是 3103）、超时；凭据文件存在但读不了（权限等）；
+- `not-applicable`：没登录、团队版、3101 没资格、HTTP 401/403（JWT 失效，重新登录 App）。
+
+客户端只接受 https 的 origin，或 http 的本机回环地址（测试用）；不跟随重定向（3xx 按 `changed`）。
 
 人读输出一行：`doctor ⑤ 闲时：正常` / `接口变了（<层>：期望 …，实际 …，logid …）` / `暂时不可用（…）` / `不适用（…）`。
 另外，App 版本不等于 `OFFPEAK_VERIFIED_APP`（当前 `3.14.1`）时 stderr 多一行提示：「闲时路径只在 App <值> 上真机验证过」，不影响结论。
@@ -123,8 +125,8 @@ bin/zcode-executor doctor --offpeak --json   # 真机零额度自检
 | --- | --- | --- |
 | `lib/credentials.mjs` | 工作流 | 加 `readOffPeakAuth()`：`{family, jwt, planKey}` 或 `{error}`，只多读 `zcodejwttoken` |
 | `lib/offpeak.mjs`（新） | 工作流 | 闲时服务器客户端：`availability / take / status / settle`，fetch 与 origin 可注入；错误分类 |
-| `lib/providers.mjs` | 协议 | 加 `offPeakProviderId(family)`、`builtinRevision(builtinPath)`、`buildOffPeakAccountConfig(...)`（纯函数） |
-| `lib/session.mjs` | 协议 | `send(text, {timeoutMs, extraParams})` 合并额外参数；outcome 加 `errorCode`；落盘事件按值抹 `secrets` |
+| `lib/offpeak-provider.mjs`（新） | 协议 | 闲时 provider id、模型表、内置版本号、授权配置与 send 额外参数（纯函数为主） |
+| `lib/session.mjs` | 协议 | `send(text, {timeoutMs, extraParams})` 合并额外参数；outcome 加 `errorCode`（只在 failed 时有值）；落盘事件与上抛的错误按值抹 `secrets`（同一份名单也交给 `AppServerClient.spawn`，stderr 转发靠它） |
 | `lib/offpeak-run.mjs`（新） | 工作流 | runner 的闲时部分：等号就绪、caffeinate、重取、结算、offpeak.json 读写 |
 | `lib/run.mjs` | 工作流 | 只加调用点，不把闲时逻辑写进来（文件已 510 行） |
 | `lib/cli/send.mjs` `status.mjs` `follow.mjs` `doctor.mjs` | 外壳 | 见 A、E、F |
