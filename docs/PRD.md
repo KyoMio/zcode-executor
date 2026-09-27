@@ -55,6 +55,7 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 | 命令 | 作用 |
 | --- | --- |
 | `doctor [--offpeak] [--json]` | 自检五步，都不花额度：① `zcode.cjs` 旁边找得到 `config/provider/zcode-builtin.json`（3.12+ 判据，找不到提示升级 ZCode App）→ ② provider 两个来源各报状态（账号型 `credentials.json` 是否登录、`config.json` 备用来源）并报选中的 provider → ③ 真握手一次（零 token），报模型等级、provider key 状态 → ④ 新启动 runner 的审批链（可选 Jev 前筛 → ZCode 快筛 → 慢判；只读配置，不联网探测 Jev）→ ⑤ 闲时接口自检：会联网，并起一个带假号的闲时回合（服务器直接拒掉，零额度），见下面「闲时投递」。`--offpeak` 只跑 ⑤ |
+| `quota [--json]` | 今天的闲时取号情况，零额度、不起 app-server、不取号：本工具今天取过几次号（数 `runs/*/events.jsonl` 里机器本地今天的取号与重取号事件，App 里用的不计入；每天约 3 次是观察值）+ 服务器现在能不能取（不能时给可再取的本地时间）。人读一行；`--json` 为 `{usedToday, estimatedDailyLimit, canTakeNumber, nextTakeAt, state, reason}`，`state` 同 doctor ⑤ 的四态。只有「接口变了」退出码 1，额度用完也是 0（见下面「闲时投递」） |
 | `models [--json]` | 从两个来源本地换算可用模型（账号型：`credentials.json` 解出的 key + 内置 provider 文件的模型表；legacy：`~/.zcode/v2/config.json`；3.12 起 `workspace/readState` 已删，不握手），显示每个模型的思考等级、自动分到哪个等级 |
 | `list [--project 关键字] [--json]` | 列登记簿里的会话：id、标题、cwd、等级、上次结果、是否挂起 |
 | `new --cwd <绝对路径> [--title T] [--tier fast\|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]` | 建会话。cwd 必须在白名单内；不是 worktree 只警告不拒 |
@@ -93,6 +94,7 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 规格见 [SPEC-offpeak.md](SPEC-offpeak.md)，为什么这么定见 decisions D20。
 
 - **是什么**：投递的一个属性，会话没有类型。回合用 Coding Plan 订阅的免费闲时算力跑，不占套餐额度；开跑时间由服务器决定——先取号排队，号就绪才开跑。验收与普通投递相同。只支持个人版 Coding Plan，会话的模型要在闲时模型表里。
+- **谁来选**：派单默认普通投递，闲时由用户选择——Claude 每个对话第一次派单前跑 `quota` 查今天用量，把「可以改走闲时、今天已用几次、现在能不能取」告诉用户，用户选了才发 `--offpeak`；返工同样默认普通投递（decisions D20 2026-09-28 补充）。
 - **独占空闲会话**：发闲时投递时会话要空闲（没有活着的 runner、队列为空），否则退出码 2。闲时投递排号或运行期间，同一会话的普通投递被拒；`--steer` 只在回合开跑后放行。约定另开一条会话专门发闲时投递，做完后可在同一会话接着发普通或闲时投递返工。
 - **当场取号**：`send --offpeak` 当场向闲时服务器取号，取号失败退出码 2，报错写明原因与怎么办。取号成功后不带 `--wait` 立刻以 0 返回，人读 `send: 已取号，排第 N 位（闲时投递 <offPeakId>）`，`--json` 在原有字段上加 `offpeak: {offPeakId, ticketId, position}`。
 - **排号不计入 `--timeout`**：`--wait` 的计时从回合开跑算起；回合结束后的退出码与普通投递相同。`--stream` 排号期间每次轮询在 stderr 打一行排位。
