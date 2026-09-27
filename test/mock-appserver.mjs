@@ -88,14 +88,26 @@
 //                                                         默认回执 {receivedRevision: params.revision, providerCount,
 //                                                         status:'received'}，形状出处：ZCode 3.14.1 zcode.cjs 源码（schema DBi），
 //                                                         status 另有 'unchanged'；receivedRevision 永远回显请求 revision。
-//                                                         权宜：不校验 basedOnZCodeBuiltinRevision（真机不等时静默忽略整份
-//                                                         配置），要测「版本号错了回合跑不起来」时再复刻
+//                                                         basedOnZCodeBuiltinRevision 照真机校验：不等于
+//                                                         zcode-builtin:<内置文件 revision>:<sha256(path.resolve(内置文件路径))>
+//                                                         时回执照样 received，但整份配置被忽略（见下面「闲时回合」）
+//   builtinRevision:   "…"                                 mock 眼里内置文件的 revision（缺省读文件顶层 revision）。
+//                                                         模拟 CLI 用的内置配置和客户端读的那份不是同一版
+//                                                         （比如 CDN 刷新过的活动副本），版本号就对不上
+//   offPeakTurnError:  {code, message}                     授权对得上的闲时回合一律以它 turn.failed；
+//                                                         缺省只有假号 1000000000000000000 回 3104，别的号照剧本 turns 跑
+//
+// 闲时回合（verified.md「闲时任务探针」2026-09-27，App 3.14.1）：session/send 的 modelSelection.providerId
+// 是 account:<family>-offpeak-idle-plan 时——内置文件里没这个条目、没推过授权、或推的 basedOnZCodeBuiltinRevision
+// 对不上 → turn.failed，code provider_not_found、message「Provider Registry 中不存在 Provider: <id>」、
+// turnPhase model_creation；对得上且票号是假号 1000000000000000000 → turn.failed，code '3104'、
+// message「off-peak ticket is invalid」（真机零额度）。
 //   echoSendParamsInTurnStarted: true                     把收到的 session/send 参数原样放进 turn.started.payload.intent。
 //                                                         真机事件会不会回显 send 参数未验证；这个开关是防御性的，
 //                                                         测会话层落盘确实按值抹掉 JWT 与 key
 import { createInterface } from 'node:readline';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 const version = process.env.MOCK_APPSERVER_VERSION ?? '0.16.5';
@@ -116,6 +128,21 @@ if (!builtinFile || !existsSync(builtinFile)) {
 }
 
 const log = (msg) => process.stderr.write(`mock: ${msg}\n`);
+
+// 闲时授权的版本号照真机自己算（verified.md「闲时任务探针」2026-09-27）：CLI 哈希的是它看到的内置文件路径字符串，
+// 不是文件内容。故意不 import lib/offpeak-provider.mjs——mock 另写一份才能拦住客户端算法写错
+const OFFPEAK_PROVIDER_RE = /^account:[^:]+-offpeak-idle-plan$/;
+const OFFPEAK_FAKE_TICKET = '1000000000000000000';
+const builtinOffPeak = { revision: undefined, providerIds: new Set() };
+try {
+  const builtin = JSON.parse(readFileSync(builtinFile, 'utf8'));
+  builtinOffPeak.revision = builtin?.revision;
+  for (const rule of builtin?.config?.providerConfigRules?.providerRules ?? []) {
+    if (OFFPEAK_PROVIDER_RE.test(rule?.providerId ?? '')) builtinOffPeak.providerIds.add(rule.providerId);
+  }
+} catch {
+  // 内置文件内容坏了：闲时条目一个都没有，闲时回合全按 provider_not_found 走
+}
 // T1.3b 第 6 条：写记录前把见过的 apiKey 值抹成 "[REDACTED]"（默认开启，RULES §8 永不落盘）。
 // 值来自个人文件的 access.apiKey（启动时读）和客户端答 requestProviderRuntimeHeaders 时给的
 // requestAuth.apiKey；替换按整个带引号的 JSON 字符串做，记录行保持可 JSON.parse。
@@ -196,6 +223,7 @@ const state = {
   // 权宜：单会话假设（与 activeTurn 同），多会话用例出现时改成 per-session
   stopRequested: false,
   generateTextCount: 0, // 第 n 次 workspace/generateText（T3.2：剧本按次序回，错误按次序插）
+  entitledOffPeak: new Set(), // updateAccountConfig 推成功（版本号对得上）的闲时 providerId
 };
 const pendingAnswers = new Map(); // 信封 id → 反向请求条目（存引用，见 askServer）
 
@@ -385,6 +413,11 @@ async function runTurn(sessionId, sendParams) {
   };
   // 剧本 echoSendParamsInTurnStarted：send 参数原样进 intent（v4 sendText 起的回合没有 send 参数，不带）
   ev('turn.started', script.echoSendParamsInTurnStarted && sendParams ? { intent: sendParams } : {});
+  const offPeakError = offPeakTurnError(sendParams);
+  if (offPeakError) {
+    ev('turn.failed', { error: offPeakError });
+    return;
+  }
   // 会话的模型：create 时记下的；resume 进来的会话 mock 没建过，退到表里第一个（权宜：resume 不校验会话存在）
   const model = state.sessions.find((s) => s.sessionId === sessionId)?.model ?? availableModels()[0]?.ref
     ?? { providerId: 'zcode-unconfigured', modelId: 'missing-model' };
@@ -470,6 +503,20 @@ async function runTurn(sessionId, sendParams) {
     if (stray.type) params.type = stray.type;
     send({ method: stray.method ?? 'session/event', params });
   }
+}
+
+// 闲时回合的结局（见文件头「闲时回合」）；不是闲时 provider 返回 null，照剧本跑
+function offPeakTurnError(sendParams) {
+  const providerId = sendParams?.modelSelection?.providerId;
+  if (!OFFPEAK_PROVIDER_RE.test(providerId ?? '')) return null;
+  if (!builtinOffPeak.providerIds.has(providerId) || !state.entitledOffPeak.has(providerId)) {
+    return { code: 'provider_not_found', message: `Provider Registry 中不存在 Provider: ${providerId}`, turnPhase: 'model_creation' };
+  }
+  if (script.offPeakTurnError) return script.offPeakTurnError;
+  const headers = sendParams?.modelExecution?.requestAuth?.headers ?? {};
+  const ticket = Object.entries(headers).find(([name]) => name.toLowerCase() === 'x-off-peak-ticket-id')?.[1];
+  if (ticket === OFFPEAK_FAKE_TICKET) return { code: '3104', message: 'off-peak ticket is invalid' };
+  return null;
 }
 
 // ---------- 方法分发 ----------
@@ -660,7 +707,17 @@ function handleRequest(msg) {
     }
     case 'provider/updateAccountConfig': {
       // 回执形状 {receivedRevision, providerCount, status:'received'|'unchanged'} 出处：ZCode 3.14.1 zcode.cjs
-      // 源码（schema DBi）；推送本身在 verified.md「闲时任务探针」2026-09-27 真机跑通。剧本 accountConfigReply 可改字段
+      // 源码（schema DBi）；推送本身在 verified.md「闲时任务探针」2026-09-27 真机跑通。剧本 accountConfigReply 可改字段。
+      // 版本号不等：真机 CLI 整份忽略，回执照样 received（同一出处）
+      const revision = script.builtinRevision ?? builtinOffPeak.revision;
+      const expected = `zcode-builtin:${revision}:${createHash('sha256').update(path.resolve(builtinFile)).digest('hex')}`;
+      if (params.basedOnZCodeBuiltinRevision === expected) {
+        state.entitledOffPeak = new Set(
+          Object.entries(params.providers ?? {}).filter(([, p]) => p?.access?.entitled === true).map(([providerId]) => providerId),
+        );
+      } else {
+        log(`updateAccountConfig 版本号对不上，整份忽略（期望 ${expected}）`);
+      }
       respond(id, {
         receivedRevision: params.revision,
         providerCount: Object.keys(params.providers ?? {}).length,

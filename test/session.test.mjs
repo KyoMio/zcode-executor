@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { AppServerClient } from '../lib/appserver.mjs';
 import { attachSession, settleTurn } from '../lib/session.mjs';
+import { buildOffPeakAccountConfig, builtinRevision } from '../lib/offpeak-provider.mjs';
 import { startMock, waitFor, readRecord, killAll } from './helpers.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -48,6 +49,13 @@ async function withSession(script, opts, fn) {
       onEvent: opts.onEvent,
       secrets: opts.secrets,
     });
+    // 闲时回合要先推授权（mock 照真机：没推或版本号不对，回合报 provider_not_found）
+    if (opts.authorizeOffPeak) {
+      await client.request(
+        'provider/updateAccountConfig',
+        buildOffPeakAccountConfig({ family: 'bigmodel', basedOnZCodeBuiltinRevision: builtinRevision(mock.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE) }),
+      );
+    }
     return await fn({ session, eventsPath, recordPath: mock.recordPath, client, stderrLines });
   } finally {
     if (client) await client.close({ timeoutMs: 2000 }).catch(() => {});
@@ -667,7 +675,7 @@ const OFFPEAK_EXTRA = {
 };
 
 test('send 的 extraParams 并进 session/send 参数，记录文件里 requestAuth 的 JWT 与 key 被抹掉', async () => {
-  await withSession({}, {}, async ({ session, recordPath }) => {
+  await withSession({}, { authorizeOffPeak: true }, async ({ session, recordPath }) => {
     const result = await session.send('闲时干活', { extraParams: OFFPEAK_EXTRA });
     assert.equal(result.outcome, 'done');
     const sent = readRecord(recordPath).find((m) => m.method === 'session/send');
@@ -696,7 +704,7 @@ test('记录文件保留票号原值，只抹 JWT 与 plan key（header 名不�
       },
     },
   };
-  await withSession({}, {}, async ({ session, recordPath }) => {
+  await withSession({}, { authorizeOffPeak: true }, async ({ session, recordPath }) => {
     await session.send('第一回合', { extraParams: OFFPEAK_EXTRA });
     await session.send('第二回合', { extraParams: lowerHeaders });
     const sends = readRecord(recordPath).filter((m) => m.method === 'session/send');
@@ -755,11 +763,33 @@ test('extraParams 不能覆盖 session/send 的 sessionId 与 content', async ()
 test('闲时号无效的回合 → outcome failed，errorCode 为字符串 3104', async () => {
   // verified.md 2026-09-27：号无效或过期时回合以 turn.failed 结束，payload.error.code 是字符串
   const script = { turns: [{ fail: { code: '3104', message: 'off-peak ticket is invalid' } }] };
-  await withSession(script, {}, async ({ session }) => {
+  await withSession(script, { authorizeOffPeak: true }, async ({ session }) => {
     const result = await session.send('hi', { extraParams: OFFPEAK_EXTRA });
     assert.equal(result.outcome, 'failed');
     assert.equal(result.errorCode, '3104');
     assert.equal(result.reason, 'off-peak ticket is invalid');
+  });
+});
+
+test('闲时回合没推授权 → failed，errorCode provider_not_found（mock 照真机）', async () => {
+  // verified.md「闲时任务探针」2026-09-27：没推授权或版本号算错，选闲时 provider 的回合报 provider 找不到
+  await withSession({}, {}, async ({ session }) => {
+    const result = await session.send('hi', { extraParams: OFFPEAK_EXTRA });
+    assert.equal(result.outcome, 'failed');
+    assert.equal(result.errorCode, 'provider_not_found');
+    assert.match(result.reason, /Provider Registry 中不存在 Provider: account:bigmodel-offpeak-idle-plan/);
+  });
+});
+
+test('闲时回合授权对得上、票号是假号 → failed，errorCode 3104（mock 照真机）', async () => {
+  const fake = { ...OFFPEAK_EXTRA, modelExecution: { ...OFFPEAK_EXTRA.modelExecution, requestAuth: {
+    apiKey: TEST_JWT,
+    headers: { Authorization: `Bearer ${TEST_JWT}`, 'X-Coding-Plan-Api-Key': TEST_PLAN_KEY, 'X-Off-Peak-Ticket-ID': '1000000000000000000' },
+  } } };
+  await withSession({}, { authorizeOffPeak: true }, async ({ session }) => {
+    const result = await session.send('hi', { extraParams: fake });
+    assert.equal(result.outcome, 'failed');
+    assert.equal(result.errorCode, '3104');
   });
 });
 
@@ -773,7 +803,7 @@ test('正常完成的回合 errorCode 为 null', async () => {
 
 test('给了 secrets：events.jsonl 里查不到 JWT 与 key（turn.started 回显了带凭据的 send 参数）', async () => {
   const script = { echoSendParamsInTurnStarted: true };
-  await withSession(script, { secrets: [TEST_JWT, TEST_PLAN_KEY] }, async ({ session, eventsPath }) => {
+  await withSession(script, { secrets: [TEST_JWT, TEST_PLAN_KEY], authorizeOffPeak: true }, async ({ session, eventsPath }) => {
     const result = await session.send('hi', { extraParams: OFFPEAK_EXTRA });
     assert.equal(result.outcome, 'done');
     const raw = await readFile(eventsPath, 'utf8');

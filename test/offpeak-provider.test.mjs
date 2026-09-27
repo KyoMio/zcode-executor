@@ -24,7 +24,7 @@ test.after(async () => {
 const EXEC_ERR_2 = { name: 'ExecutorError', exitCode: 2 };
 
 // 内置文件里的闲时隐藏条目（形状照真机 zcode-builtin.json，verified.md「闲时任务探针」2026-09-27 App 3.14.1）；
-// helpers 的夹具没有它，就近造一份
+// 就近造一份最小的（helpers 的夹具也有，但带着一堆别的条目）
 const OFFPEAK_BUILTIN = {
   revision: 30,
   config: {
@@ -69,7 +69,11 @@ test('offPeakModelIds：返回内置条目的 builtinModelIds', () => {
 
 test('offPeakModelIds：内置文件里没有这个族的闲时条目返回 null', () => {
   assert.equal(offPeakModelIds(OFFPEAK_BUILTIN, 'zai'), null);
-  assert.equal(offPeakModelIds(BUILTIN_PROVIDER_FIXTURE, 'bigmodel'), null);
+  // helpers 的夹具去掉闲时条目，只剩 coding plan 条目
+  const rules = BUILTIN_PROVIDER_FIXTURE.config.providerConfigRules.providerRules.filter((r) => !r.providerId.includes('offpeak'));
+  const withoutOffPeak = { ...BUILTIN_PROVIDER_FIXTURE, config: { ...BUILTIN_PROVIDER_FIXTURE.config, providerConfigRules: { providerRules: rules } } };
+  assert.equal(offPeakModelIds(withoutOffPeak, 'bigmodel'), null);
+  assert.deepEqual(offPeakModelIds(BUILTIN_PROVIDER_FIXTURE, 'bigmodel'), ['GLM-5.3', 'GLM-5.3-Flash']);
 });
 
 test('offPeakModelIds：providerRules 不是数组时返回 null，不抛 TypeError', () => {
