@@ -137,6 +137,7 @@ bin/zcode-executor doctor --offpeak --json   # 真机零额度自检
 | `lib/offpeak.mjs`（新） | 工作流 | 闲时服务器客户端：`availability / take / status / settle`，fetch 与 origin 可注入；错误分类 |
 | `lib/offpeak-provider.mjs`（新） | 协议 | 闲时 provider id、模型表、内置版本号、授权配置与 send 额外参数（纯函数为主） |
 | `lib/session.mjs` | 协议 | `send(text, {timeoutMs, extraParams})` 合并额外参数；outcome 加 `errorCode`（只在 failed 时有值）；落盘事件与上抛的错误按值抹 `secrets`（同一份名单也交给 `AppServerClient.spawn`，stderr 转发靠它） |
+| `lib/offpeak-check.mjs`（新） | 工作流 | doctor ⑤ 的四层自检（起 app-server，外壳只排版） |
 | `lib/offpeak-run.mjs`（新） | 工作流 | runner 的闲时部分：等号就绪、caffeinate、重取、结算、offpeak.json 读写 |
 | `lib/run.mjs` | 工作流 | 只加调用点，不把闲时逻辑写进来（文件已 510 行） |
 | `lib/cli/send.mjs` `status.mjs` `follow.mjs` `doctor.mjs` | 外壳 | 见 A、E、F |
