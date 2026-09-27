@@ -172,7 +172,7 @@ test('send --offpeak --json：取号入队、等号就绪才起 app-server，推
   const final = readJson(path.join(s.runsDir, 'offpeak.json'));
   assert.equal(final.phase, 'done');
   assert.match(final.settledAt, /^\d{4}-\d{2}-\d{2}T.*Z$/);
-  assert.equal(final.settleError ?? null, null);
+  assert.deepEqual(final.unsettledTickets, []);
 
   // 事件齐全、顺序对：taken → ready → started → result → settled
   const types = readEvents(s.runsDir).map((e) => e.type);
@@ -386,7 +386,7 @@ test('updateAccountConfig 回执 revision 对不上：投递以 failed 结束', 
   await assertNoSecrets(s, [r.stdout, r.stderr]);
 });
 
-test('结算一直失败：回合照样 done，退避重试 3 次后 offpeak.json 记 settleError、phase 为 done，stderr 一行', async (t) => {
+test('结算一直失败：回合照样 done，退避重试 3 次后号记进 offpeak.json 的 unsettledTickets、phase 为 done，stderr 一行', async (t) => {
   const s = await setup(t, { offpeak: { failRoute: { settle: { status: 500 } } } });
   const r = await runBin(s.env, ['send', s.entry.id, '闲时的活', '--offpeak', '--wait', '--json']);
   trackPids(s.runsDir);
@@ -395,7 +395,10 @@ test('结算一直失败：回合照样 done，退避重试 3 次后 offpeak.jso
   await waitRunnerGone(s.runsDir);
   const op = readJson(path.join(s.runsDir, 'offpeak.json'));
   assert.equal(op.phase, 'done');
-  assert.match(op.settleError, /结算失败/);
+  assert.equal(op.unsettledTickets.length, 1);
+  assert.equal(op.unsettledTickets[0].ticketId, 'mock-ticket-1');
+  assert.match(op.unsettledTickets[0].error, /结算失败/);
+  assert.match(op.unsettledTickets[0].at, /Z$/);
   assert.equal(op.settledAt, null);
   assert.equal(settleRequests(s).length, 4, '首次 + 退避重试 3 次');
   assert.equal([...runnerLog(s).matchAll(/^runner: 闲时号 mock-ticket-1 结算失败/gm)].length, 1, '重试用完才打一行');

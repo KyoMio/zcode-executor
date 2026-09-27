@@ -212,7 +212,7 @@ export async function startRunner(s) {
 
 export const offPeakJson = (offPeakId, ticketId, extra = {}) => ({
   offPeakId, ticketId, ticketCount: 1, phase: 'queued', position: 1, readyDeadline: null, activeDeadline: null,
-  settledAt: null, settleError: null, updatedAt: new Date().toISOString(), ...extra,
+  startedAt: null, settledAt: null, unsettledTickets: [], updatedAt: new Date().toISOString(), ...extra,
 });
 export const settleRequests = (s) => s.server.requests.filter((q) => q.path.endsWith('/settle'));
 export const takeRequests = (s) => s.server.requests.filter((q) => q.method === 'POST' && q.path === '/api/v1/off-peak/ticket');
