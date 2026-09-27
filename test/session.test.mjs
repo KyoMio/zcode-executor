@@ -685,6 +685,62 @@ test('send 的 extraParams 并进 session/send 参数，记录文件里 requestA
   });
 });
 
+test('记录文件保留票号原值，只抹 JWT 与 plan key（header 名不分大小写）', async () => {
+  const lowerHeaders = {
+    ...OFFPEAK_EXTRA,
+    modelExecution: {
+      ...OFFPEAK_EXTRA.modelExecution,
+      requestAuth: {
+        apiKey: TEST_JWT,
+        headers: { authorization: `Bearer ${TEST_JWT}`, 'x-coding-plan-api-key': TEST_PLAN_KEY, 'x-off-peak-ticket-id': '1000000000000000002' },
+      },
+    },
+  };
+  await withSession({}, {}, async ({ session, recordPath }) => {
+    await session.send('第一回合', { extraParams: OFFPEAK_EXTRA });
+    await session.send('第二回合', { extraParams: lowerHeaders });
+    const sends = readRecord(recordPath).filter((m) => m.method === 'session/send');
+    assert.equal(sends[0].params.modelExecution.requestAuth.headers['X-Off-Peak-Ticket-ID'], '1000000000000000001');
+    assert.equal(sends[1].params.modelExecution.requestAuth.headers['x-off-peak-ticket-id'], '1000000000000000002');
+    assert.equal(sends[1].params.modelExecution.requestAuth.headers['x-coding-plan-api-key'], '[REDACTED]');
+    const raw = await readFile(recordPath, 'utf8');
+    assert.ok(!raw.includes(TEST_JWT));
+    assert.ok(!raw.includes(TEST_PLAN_KEY));
+  });
+});
+
+test('超时后宽限期内收到 turn.failed：outcome 仍是 timeout，errorCode 为 null', async () => {
+  // stopIgnored：stop 照常应答但不叫停，turn.failed 在宽限期（5 秒）内到达
+  const script = {
+    stopIgnored: true,
+    turns: [{ hang: true, events: [{ type: 'turn.failed', delayMs: 600, payload: { error: { code: '3102', message: 'off-peak-ticket-expired: x' } } }] }],
+  };
+  await withSession(script, {}, async ({ session }) => {
+    const result = await session.send('hi', { timeoutMs: 300 });
+    assert.equal(result.outcome, 'timeout');
+    assert.equal(result.errorCode, null);
+  });
+});
+
+test('session/send 被拒时抛出的错误按 secrets 抹掉 message 与 details 里的密钥', async () => {
+  const script = {
+    errors: {
+      'session/send': { code: -32602, message: `bad auth ${TEST_JWT}`, data: { details: [`key ${TEST_PLAN_KEY} rejected`] } },
+    },
+  };
+  await withSession(script, { secrets: [TEST_JWT, TEST_PLAN_KEY] }, async ({ session }) => {
+    await assert.rejects(session.send('hi', { extraParams: OFFPEAK_EXTRA }), (err) => {
+      assert.equal(err.name, 'ExecutorError');
+      assert.ok(!err.message.includes(TEST_JWT));
+      assert.match(err.message, /bad auth <redacted>/);
+      assert.ok(!JSON.stringify(err.details).includes(TEST_PLAN_KEY));
+      assert.deepEqual(err.details.data.details, ['key <redacted> rejected']);
+      assert.equal(err.details.code, -32602);
+      return true;
+    });
+  });
+});
+
 test('extraParams 不能覆盖 session/send 的 sessionId 与 content', async () => {
   await withSession({}, {}, async ({ session, recordPath }) => {
     const result = await session.send('真正的正文', { extraParams: { sessionId: 'sess_hijack', content: '被换掉的正文', offPeakTaskId: 'offpeak-x' } });

@@ -138,6 +138,16 @@ test('builtinProviderConfigPath：按 App 目录布局从 zcode.cjs 推出 ../co
   assert.equal(builtinProviderConfigPath(zcode), builtin);
 });
 
+test('builtinProviderConfigPath：环境变量给相对路径时返回绝对路径（闲时版本号哈希的是子进程看到的绝对路径）', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-executor-test-'));
+  mockDirs.push(dir);
+  const builtin = path.join(dir, 'zcode-builtin.json');
+  await writeFile(builtin, '{}');
+  const rel = path.relative(process.cwd(), builtin);
+  assert.ok(!path.isAbsolute(rel));
+  assert.equal(builtinProviderConfigPath(null, { builtinFile: rel }), path.resolve(rel));
+});
+
 test('spawn：没有个人 provider 文件（参数与环境都没有）→ 抛 ExecutorError，不拉进程', async () => {
   const mock = await startMock({});
   mockDirs.push(mock.dir);
