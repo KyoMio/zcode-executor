@@ -167,12 +167,14 @@ test('new：非 worktree 只警告不拒；worktree 时 isWorktree:true', async 
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
   assert.match(run.stderr, /new: cwd 不是 worktree，照常建/);
   assert.equal(JSON.parse(run.stdout).isWorktree, false);
+  assert.equal(JSON.parse(run.stdout).repoRoot, null, '非 worktree 不记原仓库：执行端改的就是它');
 
   const wt = await setupNew({ worktree: true });
   const runWt = runNew(wt, ['--cwd', wt.cwd, '--json']);
   assert.equal(runWt.status, 0, `stderr: ${runWt.stderr}`);
   assert.doesNotMatch(runWt.stderr, /不是 worktree/);
   assert.equal(JSON.parse(runWt.stdout).isWorktree, true);
+  assert.equal(JSON.parse(runWt.stdout).repoRoot, realpathSync(path.join(wt.workParent, 'repo')), 'worktree 时记下原仓库根，闸门从这里读项目文档');
 });
 
 test('new：--tier fast 选 flash，--tier strong 选非 flash', async () => {

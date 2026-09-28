@@ -300,6 +300,12 @@ z.ai 域名强制客户端签名，只有账号型 off-peak 免签；而且 CLI 
 runner 起来时已经推了表，registry 里的模型清单与 readState 一致；省一次往返。代价是看不到后端的 `disabledReason`，
 真机上 coding plan 的两个模型都没被禁用过。哪天出现被禁用的模型再改成 readState。
 
+## 补记：项目文档不再等同用户意图，改从原仓库读（2026-09-28）
+
+去掉放行例外 `documented-ops` 和 `shared-service-lifecycle` 里「文档列为常规运维就不适用」那句：仓库文档是仓库作者写的，
+陌生仓库或被执行端改过的 AGENTS.md 能借它清掉 soft 规则（与 dsh-auto-approve 同日修的是同一个问题）。
+文档来源从执行副本 cwd 换成 `new` 时记进登记簿的 `repoRoot`（原仓库根）；旧登记项和非 worktree 没有它，就不读文档，重新 `new` 即可。
+
 ## 暂缓
 
 - ~~挂起期间 zcode 每秒重发审批请求，对端对「回旧信封 id」认不认未验~~ 已验（2026-09-08 交付后核验②）：
