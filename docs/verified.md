@@ -268,6 +268,19 @@ T6-C 的背景事实，用户本机跑探针核实；加密与键名细节从 ZC
 | requestAuth 落盘 | 探针后查 `~/.zcode/cli` 与 tasks-index.sqlite 最近 3 小时写过的文件，JWT 与 plan key 都查不到 |
 | 错误码（源码） | 建任务 3101 没资格、3103 额度用完（带 `next_take_at`）；运行中 3105 或 HTTP 429 = 还在排队（CLI 退避重试，最长 5 分钟一次），3102/3001 = 票过期（桌面端回队重新取号，续跑发固定提示「Continue the previous task from where it left off…」、`offPeakRunType:"resume"`） |
 
+## Coding Plan 客户端签名（2026-09-28，App 3.14.1，CLI 0.16.9）
+
+ZCode 对 Coding Plan 用量的优惠（用户说的 0.67 倍）不在客户端算，客户端只负责让服务器认出「这是 ZCode」：
+- 开关：带 Coding Plan key 请求 `https://zcode.z.ai/api/v1/agent/configs`，`data.codingPlanSignature.enable` 为 true 才签，结果缓存 1 小时。
+- 握手：key 须是 `id.secret` 形状；向模型服务所在域名 POST `/api/paas/c1f3a7e2/v2/client`，拿到加密私钥后本地解出 Ed25519 私钥。
+- 每个发往 `bigmodel.cn`/`z.ai`（或 Coding Plan 类 provider）的模型请求加 `X-App-Id: zcode`、`X-Client-Version`、`X-Session-Id`、`X-Client-Ts`、
+  `X-Client-Nonce`、`X-Client-Sig`（对 key id、时间戳、版本、会话 id、随机数的签名）、`X-Client-Pow`（工作量证明）。
+  账号型 off-peak / start-plan 免签（所以自拼 api-key 型闲时 provider 会撞「签名 key 须一个点」）。
+- **我们的普通派单被签了**：`ZCODE_RUNTIME_ENV=development`（只开调试日志，不换服务器；换服务器是 `ZCODE_ENV`）+ `ZCODE_LOG_DIR` 指临时目录，
+  用个人 provider 文件（providerId `zcode-executor`，指向 open.bigmodel.cn）发一次 18 token 的 `workspace/generateText`，调试日志有
+  `feature_gate enabled:true` 与 `signed_sent {signedAttempt:1, providerId:"zcode-executor"}`。回合走同一个模型请求模块，日志里没有未签名或签名失败记录。
+- 倍率本身是服务器规则，客户端代码里没有 0.67，也不显示。
+
 ## 一次性 CLI（备用路线）
 
 `zcode --prompt "<text>" --json --mode build --cwd <dir> --resume <sess_> --attach <file> --disallowed-tools "Write Edit Bash"`。
