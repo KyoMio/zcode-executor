@@ -61,6 +61,7 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 | `new --cwd <绝对路径> [--title T] [--tier fast\|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]` | 建会话。cwd 必须在白名单内；不是 worktree 只警告不拒 |
 | `send <id> <正文\|-> [--task 文件] [--wait] [--steer] [--timeout 秒] [--stream] [--json]` | 投递。默认排队；`--steer` 走 `v4/command` 的 `sendText`（guide）插进当前回合，在下一个工具边界生效、没有边界时排到回合结束后执行，不打断 |
 | `send <id> <正文\|-> --offpeak [--task 文件] [--wait] [--timeout 秒] [--stream] [--json]` | 闲时投递：当场取号，排到号才用免费闲时算力开跑，不占套餐额度（见下面「闲时投递」）。不和 `--steer` 同用 |
+| `send <id> <正文\|-> --start-plan [--task 文件] [--wait] [--timeout 秒] [--stream] [--json]` | start plan 投递：照普通投递立刻开跑，只有这一回合的模型请求改走 Start Plan 订阅额度（见下面「start plan 投递」）。不和 `--steer`、`--offpeak` 同用 |
 | `send <id> --offpeak --resume [--wait] [--stream] [--json]` | 回合 exited 或 runner 崩了之后，只重新拉起 runner 接着跑队列里那次闲时投递，不入队、不取号 |
 | `follow <id> [--timeout 秒] [--stream] [--json]` | 跟看后台 runner，写出新结果就返回 |
 | `status <id> [--tools N] [--json]` | 只读快照：phase（`running` 在跑 / `idle` 队列空 / `pending` 挂起 / `exited` 正常收工 / `stale` runner 半路没了）、最近工具调用、队列长度、上次结果、挂起了多久 |
@@ -75,7 +76,7 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 | --- | --- |
 | 0 | 回合干完了，去验收 |
 | 1 | 用法错、zcode 起不来、版本过低 |
-| 2 | 被拒：白名单外、会话不在登记簿、等级或思考等级不合法；闲时投递取号前或取号时被拒（会话不空闲、模型不在闲时模型表、没登录或团队版、没有闲时资格、额度用完、取号时鉴权被拒（401/403，要在 App 里重新登录）、闲时服务暂时不可用、闲时接口可能变了）；闲时投递占着会话时的普通投递与排号中的 `--steer`；`--resume` 没有可恢复的闲时投递 |
+| 2 | 被拒：白名单外、会话不在登记簿、等级或思考等级不合法；闲时投递取号前或取号时被拒（会话不空闲、模型不在闲时模型表、没登录或团队版、没有闲时资格、额度用完、取号时鉴权被拒（401/403，要在 App 里重新登录）、闲时服务暂时不可用、闲时接口可能变了）；start plan 投递前置条件不满足（模型不在 start plan 模型表、没登录、内置文件没有 start plan 条目）；闲时投递占着会话时的普通投递与排号中的 `--steer`；`--resume` 没有可恢复的闲时投递 |
 | 3 | `send --wait` 超时，当前回合已取消，会话还在可再投；`follow --timeout` 到点只是旁观者走了，不取消任何东西 |
 | 4 | 回合异常：`turn.failed`、被中止、撞输出上限 |
 | 5 | 挂起等人：审批请求或提问 |
@@ -103,6 +104,16 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 - **exited 之后用 `--resume` 恢复**：回合 exited 或 runner 崩了，队列里那次闲时投递还在，这时普通 send 被拒并提示两条路：`send <id> --offpeak --resume` 接着跑（不带正文、`--task`、`--timeout`，带了算用法错，退出码 1；没有可恢复的投递退出码 2；不带 `--wait` 时 `--json` 加 `offpeak: {offPeakId, resumed: true}`），或 `cancel` 收掉。
 - **显示**：`status` 与 `follow` 在闲时投递期间多一行排位、就绪或运行中（带截止时间），另有「号 … 未结算」「投递 … 没收尾」；`status --json` 与 `follow --json` 一律带 `offpeak` 字段（offpeak.json 的内容，没有时为 null）。macOS 上从等号到收尾挂 `caffeinate` 防空闲睡眠。
 - **健康检查 `doctor --offpeak`**：只跑 doctor 的 ⑤，查凭据、内置条目、服务器约定、假号全链路四层，结论四种：正常 / 接口变了 / 暂时不可用 / 不适用。只有「接口变了」退出码 1，适合挂在用户自己的 cron 上；stdout 总会有一行结论，cron 里丢掉 stdout、只看退出码与 stderr。App 版本不是真机验证过的那个时 stderr 多一行提示，不影响结论。代价：每跑一次，zcode 命令行自己的会话库里多一条自检会话，App 的任务列表看不到。
+
+### start plan 投递（只在本地 `offpeak` 分支上）
+
+为什么这么定见 decisions D21。Start Plan 是 App 里的另一档订阅（内置条目 `account:<family>-start-plan`，端点在 zcode.z.ai）。
+
+- **当前不可用（2026-09-29 真机）**：zcode-plan 端点要求阿里云验证码，桌面 App 靠内嵌验证码 SDK 应答，本工具这类无头宿主过不去——`send --start-plan` 会以回合失败（退出码 4，`captcha verify failed`）结束。实现保留（协议层已验证到出站请求），服务器侧放行前别用；普通投递与闲时投递不受影响。
+- **是什么**：投递的一个属性，会话没有类型。照普通投递立刻开跑、立刻计时，闸门、挂起、验收、`--wait`、退出码完全相同；只有这一回合的模型请求改走 Start Plan 订阅额度。没有号：不取号、不排队、不结算、不独占会话。
+- **前置条件**（退出码 2）：会话的模型在 start plan 模型表里（GLM-5.3-Flash、GLM-5.2、GLM-5-Turbo；GLM-5.3 不在表里）、ZCode App 登录着（凭据里解得出 `oauth:active_provider` 与 `zcodejwttoken`）、内置 provider 文件里有 start plan 条目。与 `--steer`、`--offpeak` 同用是用法错（退出码 1）。
+- **机制**：runner 推 `provider/updateAccountConfig` 授权内置条目后 send，回合的鉴权由宿主应答反向请求 `interaction/requestProviderRuntimeHeaders` 给出（材料是 `zcodejwttoken`，App 宿主同款）。`modelSelection` 只在本回合生效，不改会话的当前模型。
+- **显示**：不带 `--wait` 时人读 `send: 已排队，runner pid …（这一回合走 start plan 额度，account:<family>-start-plan）`；`--json` 加 `startPlan: {providerId}`。事件 `executor.startplan.started` 留痕。
 
 ## 5. 模型等级与思考等级
 

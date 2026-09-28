@@ -295,6 +295,51 @@ z.ai 域名强制客户端签名，只有账号型 off-peak 免签；而且 CLI 
 
 重开条件：ZCode 把闲时队列放进 app-server（CLI 自己排队）或提供正式 API；或服务器开始要求客户端签名。
 
+## D21 start plan 投递：会话不改型，逐回合改道，宿主反向请求喂 JWT
+
+定了什么（2026-09-29，重开 PLAN-v4 线 3「start-plan 不做」）：`send <id> <正文> --start-plan`。投递的属性（D20 同一哲学：
+会话没有类型），照普通投递入队、过闸门、计时与退出码，没有号、不等待、不结算；只有这一回合的模型请求改走内置
+`account:<family>-start-plan` 条目（端点 `https://zcode.z.ai/api/v1/zcode-plan/anthropic`），吃 Start Plan 订阅额度。
+send 前置（退出码 2）：会话模型在该条目的 `builtinModelIds` 里（GLM-5.3-Flash、GLM-5.2、GLM-5-Turbo——GLM-5.3 不在表里）、
+凭据能解出 family（`oauth:active_provider`）与 `zcodejwttoken`（`readStartPlanAuth`，不需要 coding plan key 与 user_info）、
+内置文件里有该条目。与 `--steer` / `--offpeak` / `--resume` 同用是用法错（退出码 1）。runner 起连接前看队列头，是 start plan
+项就先把 JWT 进 secrets 与 providerAuth；send 前推 `provider/updateAccountConfig` 授权该条目（revision 前缀
+`zcode-executor-start-plan:`，形状与 D20 同款），send 带 `modelSelection`（逐回合改道）与
+`modelExecution:{selectionScope:"execution", memoryExtraction:"skip"}`，记事件 `executor.startplan.started`。
+
+为什么这么做（2026-09-29 对照本机 App 3.14.1 的 zcode.cjs 与 app.asar，出处与证据记在 docs/tasks/T8-startplan.md）：
+- CLI 只给 `mode:"off-peak"` 的回合认 send 参数里的内联 `modelExecution.requestAuth`；其余 zhipu-account（含 start-plan）
+  一律在每次模型请求前发反向请求 `interaction/requestProviderRuntimeHeaders`。所以 start plan 的鉴权只能走反向请求，
+  appserver.mjs 现成的 providerAuth 钩子应答形状（`{headersApplied:true, requestAuth:{apiKey}}`）正好够。
+- App 宿主给 start-plan 的材料（app.asar `createAccountProviderRequestAuthService.resolveCurrent`）就是
+  `{apiKey: <zcodejwttoken>}`：JWT 单独当凭据、没有额外头、不需要 coding plan key——credentials.json 里本来就没有
+  start-plan 的 key 键。这也是 `readStartPlanAuth` 不要求 user_info 与两把 plan key 的依据。
+- CLI 对 `mode:"start-plan"` 的 zhipu-account 免客户端签名（zcode.cjs `wEs`）；而个人 provider 文件是 api-key 型 provider，
+  指到 zcode.z.ai 会被按域名强制签名、JWT 又不是 `id.secret` 形状（verified.md 2026-09-28「签名 key 须一个点」），
+  所以「拼一条 api-key 型 provider 进个人文件」这条捷径是死的，必须走账号型。
+- `modelExecution.selectionScope` 必须是 `"execution"`（send 参数 schema 的必填字面量）：语义是逐回合改道。缺了它
+  modelSelection 可能落成会话当前模型，之后的普通投递被带着改道、而那个 runner 手上没有 JWT，回合只会失败。
+
+重开 PLAN-v4 线 3 的理由：当时（2026-09-21）记的「start-plan 用的是会过期的 jwt、要自己刷 OAuth」错了两处——
+`zcodejwttoken` 在 D20 已解、真机未见过期；宿主的 start-plan requestAuth 也不需要刷 OAuth，把同一个 JWT 按反向请求
+喂给 app-server 即可。
+
+风险与边界：接口与键名是 App 私有实现，改了这条通道就断，普通派单不受影响；Start Plan 忙（3008/3009/3010）CLI 自带
+退避与恢复；captcha（3007）CLI 会再要一次运行时头（我们答同一个 JWT），需要人过验证码时回合以错误结束。providerAuth
+答不出（凭据没了）回合立刻失败，不傻等 180 秒。JWT 待遇同 D20：只进内存、secrets 抹除名单与 JSON-RPC 应答。
+不做 doctor ⑥：凭据与条目缺失由 send 前置检查兜住，接口变了会在下一次投递的回合错误里现形。
+
+重开条件：CLI 开始对 start-plan 回合认别的鉴权来源；或内置条目的 mode、模型表变了（模型表以 `startPlanModelIds`
+读内置文件为准，App 改了跟着改）。
+
+真机验证（2026-09-29，详见 verified.md「start plan 投递真机探针」）：实现全链路按设计工作（授权推送、改道、
+宿主喂 JWT、请求到达 zcode-plan 端点），但服务器以 HTTP 400 `captcha verify failed` 拒绝——zcode-plan 端点要求
+阿里云验证码（`x-aliyun-captcha-verify-param`），桌面 App 宿主靠内嵌验证码 SDK 应答，无头宿主造不出这个头，
+CLI 的 standalone 端口也因此只支持 individual-coding-plan。**结论：start plan 通道目前是 App-UI 依赖的，
+执行端侧的实现保留但用不了**；`--start-plan` 会以清晰的回合失败（退出码 4）结束，普通投递与闲时投递不受影响。
+重开条件追加：服务器对账号型 start plan 放行验证码要求（比如像 coding plan 那样发平台 key），或提供无头宿主
+可复用的验证凭据。
+
 ## 补记：模型审批的模型从已推的 provider 表里选，不再多一次 readState
 
 runner 起来时已经推了表，registry 里的模型清单与 readState 一致；省一次往返。代价是看不到后端的 `disabledReason`，

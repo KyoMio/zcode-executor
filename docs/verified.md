@@ -333,3 +333,20 @@ zcode-open-bridge 称此模式不读配置里的模型，要环境变量注入�
 
 coder-mcp-bridge 的审批策略：非 plan 档下 `requestPermission` 自动批准（除写到
 exclusive 根之外），`requestUserInput` 只自动批 plan_approval。
+
+## start plan 投递真机探针（2026-09-29，App 3.14.1，CLI 0.16.9）
+
+`send --start-plan` 全链路（T8）：授权推送、逐回合改道、宿主应答 runtime headers 全部按预期工作，但**回合被服务器挡在阿里云验证码上**。
+
+| 项 | 结果 |
+| --- | --- |
+| 授权推送 | `provider/updateAccountConfig`（revision `zcode-executor-start-plan:*`）推送成功，回执 received |
+| send 改道 | `modelSelection.providerId = account:bigmodel-start-plan`、modelId GLM-5.3-Flash，请求到达 `https://zcode.z.ai/api/v1/zcode-plan/anthropic`（调试日志 `model.network.started` 的 baseURL 实证） |
+| 鉴权应答 | 宿主按 providerId 答 `{headersApplied:true, requestAuth:{apiKey:<zcodejwttoken>}}`；CLI 日志 `Client request signing skipped by provider access mode`（start-plan 免签，与源码 `wEs` 一致） |
+| 服务器回应 | HTTP **400**，`captcha verify failed`（business error，reason 被归为 auth_failed）；第二次（captcha-retry）同样 400。CLI 的重试只会再要一次运行时头，宿主答不出 captcha token 就到此为止 |
+| 对照 | 桌面 App 同时段的 start-plan 请求正常（本会话就跑在它上面）；App 宿主对 start-plan 的 runtime-headers 请求走 UI 层（内嵌阿里云验证码 SDK，`x-aliyun-captcha-verify-param`），无头宿主造不出这个头。CLI 的 standalone 端口干脆只支持 individual-coding-plan、对 start-plan 直接抛错——start plan 实际是 App-UI 依赖的通道 |
+| 结论 | 协议层实现正确且已验证到出站请求；被服务器侧验证码网关挡住是外部约束。普通投递、闲时投递不受影响 |
+
+npm test 从 App 宿主会话里跑会挂死的根因（同日）：宿主环境带的 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`、
+`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 泄漏进测试进程，appserver.test.mjs 里「没设环境变量应抛错」的用例失真、
+spawn 用例真的拉起 app-server 等不到握手。已在 appserver.test.mjs 顶部把宿主的 `ZCODE_*` 清掉（保留 `ZCODE_BIN`）。
