@@ -228,6 +228,9 @@ test('闲时投递期间：排号时普通 send 与 --steer 都拒（2）；运�
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^send: 已取号，排第 1 位（闲时投递 offpeak-[0-9a-f-]{36}）\n$/);
   trackPids(s.runsDir);
+  // send 刚 detached 起的 runner 要几百毫秒才写锁；不等问题件，下一条普通 send 会撞进
+  // 「runner 已不在（可 --resume）」的误判窗口（负载下复现过的竞态，退出码相同只是文案不同）
+  await waitFor(() => existsSync(path.join(s.runsDir, 'lock')));
 
   const plain = await runBin(s.env, ['send', s.entry.id, '插队的活']);
   assert.equal(plain.status, 2, plain.stderr);

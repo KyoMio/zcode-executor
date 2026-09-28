@@ -18,6 +18,14 @@ import { startMock, waitFor, readRecord, killAll } from './helpers.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// 2026-09-29：在 ZCode App 的会话里跑 npm test 时，宿主环境带着 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE、
+// ZCODE_PERSONAL_PROVIDER_CONFIG_FILE 等变量。本文件多条用例验证「这些变量没设时应抛错/回落」，泄漏会让
+// 它们失真，spawn 用例还会真的拉起 app-server 子进程等不到握手、整份文件永不退出（全量测试挂死的根因）。
+// 测试一律当宿主的 ZCODE_* 不存在（ZCODE_BIN 是用户可能有意指 dev 构建的，保留）。
+for (const k of Object.keys(process.env)) {
+  if (k.startsWith('ZCODE_') && k !== 'ZCODE_BIN') delete process.env[k];
+}
+
 // after() 兜底：清僵尸进程与临时目录（RULES §9）
 const pids = [];
 const mockDirs = [];
