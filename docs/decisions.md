@@ -363,6 +363,9 @@ Codex、Gemini、Copilot、Grok 照旧只有 skill 与 CLI。函数钩子在正�
 
 重开条件：Claude Code 撤掉或大改函数钩子接口；或需要在面板上应答挂起（要先改 AGENTS.md 的硬约束）。
 
+实测（2026-10-02，verified.md「Claude Code mod」）：桌面版检查点 W1–W9 用户报告通过；`watch` 首轮对本机 219 条会话约 0.4 秒、稳态 CPU 约 4%。
+未验证：其他宿主读到只有 `modules` 的 `hooks/hooks.json` 会不会报错（Codex、Copilot CLI 若按 Claude 的 hooks 约定读这个文件）；有人报错再改清单。
+
 ## 补记：模型审批的模型从已推的 provider 表里选，不再多一次 readState
 
 runner 起来时已经推了表，registry 里的模型清单与 readState 一致；省一次往返。代价是看不到后端的 `disabledReason`，

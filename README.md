@@ -211,6 +211,18 @@ This is how zcode-executor itself was built:
 
 The split keeps the expensive model on judgment and the cheap one on typing.
 
+## Watch pane (Claude Code only)
+
+In Claude Code (terminal or the desktop Code tab), type `/zcode` to open a live pane showing what this project's zcode sessions are doing:
+
+- **Needs you**: pending permission requests (full command and reason), questions, runners that died;
+- **Running**: the executor's latest reply lines, the tool it is running with its arguments, recently finished tools (failures in red), and queue position for off-peak sends;
+- **Finished**: sessions that ended in the last 10 minutes show the outcome and the last reply lines; older ones take one line each.
+
+The pane opens by itself when Claude sends a task. The status line sums up running turns and pending requests, and a toast pops on a pending request, a finished turn, or a dead runner. The pane is read-only: pending requests still go through Claude.
+It reads `zcode-executor watch --json` (read-only, long-running, no quota) and shows only sessions of the repository the Claude session is in. If the pane says node cannot be found, set `nodePath` in the plugin's settings.
+Other agents ignore the pane and keep using the skill and the CLI.
+
 ## Commands
 
 | Command | What it does |
@@ -220,8 +232,9 @@ The split keeps the expensive model on judgment and the cheap one on typing.
 | `new --cwd <abs> [--title T] [--tier fast\|strong] [--thought L] [--deny "Tool…"] [--provider id] [--json]` | Registers a session (returns a local id `x_…`); the ZCode session is created on first `send` |
 | `send <id> <text\|-> [--task file] [--wait] [--timeout s] [--steer] [--stream] [--json]` | Queues a message; `--wait` follows until done or blocked; `--task` is the task file the review uses as your authorization; `--steer` injects into a running turn — it takes effect at the next tool boundary, or after the turn ends if there is none |
 | `follow <id> [--timeout s] [--stream] [--json]` | Follows a background runner until a result or a pending request |
-| `status <id> [--tools N] [--json]` | Read-only snapshot: phase, recent tools, queue, pending, last result |
-| `list [--project kw] [--json]` | Registered sessions with phase, tier and last outcome |
+| `status <id> [--tools N] [--json]` | Read-only snapshot: phase, recent tools (with command or path), queue, pending, last result |
+| `list [--project kw] [--json]` | Registered sessions with phase, tier and last outcome; `--json` adds the owning repository |
+| `watch [--json]` | Read-only, long-running: prints a session snapshot whenever one changes; feeds the watch pane |
 | `cancel <id>` | Denies any pending request, stops the turn, clears the queue |
 | `approve <id>` / `deny <id>` | Answers the pending permission request (allow is `allow_once` only) |
 | `answer <id> [--] <values…>` | Answers the pending question by index, value or label; multi-select comma-separated |
