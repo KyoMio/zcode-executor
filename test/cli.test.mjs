@@ -108,13 +108,14 @@ async function setupNew({ worktree = false, script, zcodeConfig } = {}) {
   return { mock, home, workParent, cwd, zcodeConfigPath, recordPath: mock.env.MOCK_APPSERVER_RECORD };
 }
 
-function runNew({ mock, home, zcodeConfigPath }, args) {
+function runNew({ mock, home, zcodeConfigPath }, args, extraEnv = {}) {
   const env = {
     ...process.env,
     ZCODE_BIN: mock.zcodePath,
     ZCODE_EXECUTOR_HOME: home,
     ZCODE_CONFIG_PATH: zcodeConfigPath,
     ...mock.env,
+    ...extraEnv,
   };
   return spawnSync(process.execPath, [BIN, 'new', ...args], { encoding: 'utf8', env, timeout: 60_000 });
 }
@@ -175,6 +176,24 @@ test('new：非 worktree 只警告不拒；worktree 时 isWorktree:true', async 
   assert.doesNotMatch(runWt.stderr, /不是 worktree/);
   assert.equal(JSON.parse(runWt.stdout).isWorktree, true);
   assert.equal(JSON.parse(runWt.stdout).repoRoot, realpathSync(path.join(wt.workParent, 'repo')), 'worktree 时记下原仓库根，闸门从这里读项目文档');
+});
+
+test('new：父进程带着指向别的仓库的 GIT_DIR（git 钩子里）时，worktree 判断仍按 cwd 本身', async () => {
+  const other = await setupNew({ worktree: true });
+  const hookEnv = { GIT_DIR: path.join(other.workParent, 'repo', '.git', 'worktrees', 'wt') };
+
+  const plainDir = path.join(other.workParent, 'plain'); // 白名单内、不是 git 仓库的普通目录
+  await mkdir(plainDir);
+  const run = runNew(other, ['--cwd', plainDir, '--json'], hookEnv);
+  assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+  assert.equal(JSON.parse(run.stdout).isWorktree, false, '普通目录不能被 GIT_DIR 说成别的仓库的 worktree');
+  assert.equal(JSON.parse(run.stdout).repoRoot, null, '闸门不能去别的仓库读项目文档');
+
+  const wt = await setupNew({ worktree: true });
+  const runWt = runNew(wt, ['--cwd', wt.cwd, '--json'], hookEnv);
+  assert.equal(runWt.status, 0, `stderr: ${runWt.stderr}`);
+  assert.equal(JSON.parse(runWt.stdout).isWorktree, true);
+  assert.equal(JSON.parse(runWt.stdout).repoRoot, realpathSync(path.join(wt.workParent, 'repo')));
 });
 
 test('new：--tier fast 选 flash，--tier strong 选非 flash', async () => {
