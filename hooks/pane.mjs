@@ -31,6 +31,9 @@ const waitSvg = (size) => svgDoc(size, `<style>
 // 终端没有 Svg：执行中用转圈字符，由 register.mjs 定时换帧（frame 递增）
 export const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 
+// Code 只许制表符与换行两种控制字符、至多 10000 字，否则整棵树被拒（类型声明 CodeProps）
+const codeText = (text) => String(text).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').slice(0, 10000);
+
 const hhmm = (iso) => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '' : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -82,7 +85,7 @@ export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message
     const p = s.pendingDetail ?? {};
     const body = p.kind === 'question' ? (p.questionTexts ?? []).map((q, i) => `${i + 1}. ${q}`).join('\n') : p.summary;
     return card('warning', headRow(lead, head.label, head.color, s, cornerOf(s, now)), meta(s),
-      body && h(Box, { marginTop: 1 }, h(Code, { source: body, language: p.kind === 'question' ? 'text' : p.toolName === 'Bash' ? 'bash' : 'text' })),
+      body && h(Box, { marginTop: 1 }, h(Code, { source: codeText(body), language: p.kind === 'question' ? 'text' : p.toolName === 'Bash' ? 'bash' : 'text' })),
       p.reason && T({ dimColor: true }, `原因：${p.reason}`),
       T({ dimColor: true }, '由 Claude 在对话中处理'));
   };

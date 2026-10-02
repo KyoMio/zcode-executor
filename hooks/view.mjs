@@ -133,3 +133,48 @@ export function repoName(session) {
   const p = session.repo ?? session.cwd ?? '';
   return p.split('/').filter(Boolean).pop() ?? '';
 }
+
+/** 面板数据的初始值（同 types/index.d.ts 的 ZcodeExecutorPanel）。 */
+export const EMPTY_PANEL = { sessions: {}, repo: null, synced: false, updatedAt: null, link: 'starting', message: null };
+
+/**
+ * 处理 watch --json 的一行（PRD 第 4 节）。纯函数：输入面板数据、基线、这一行和当前时间文字，
+ * 返回新面板数据、新基线、该弹的提示、状态栏文字（status 为 null 表示这一行不动状态栏）。
+ * hello 开始一轮新基线；synced 之前的快照只进基线、不弹提示（重连后不补弹）；synced 时基线整体换上。
+ * 提示只对本项目的会话（与面板、状态栏同一套过滤）。
+ */
+export function applyLine(panel, baseline, msg, clockText) {
+  const statusOf = (p) => statusLine(filterByRepo(Object.values(p.sessions), p.repo));
+  const keep = { panel, baseline, toasts: [], status: null };
+  if (msg?.type === 'hello') {
+    return { ...keep, panel: { ...panel, repo: msg.repo ?? null, synced: false }, baseline: {} };
+  }
+  if (msg?.type === 'session' && msg.session?.id) {
+    const s = msg.session;
+    if (!panel.synced) return { ...keep, baseline: { ...baseline, [s.id]: s } };
+    const inScope = panel.repo === null || s.repo === panel.repo;
+    const next = { ...panel, sessions: { ...panel.sessions, [s.id]: s }, updatedAt: clockText };
+    return { ...keep, panel: next, toasts: inScope ? toastsFor(panel.sessions[s.id], s) : [], status: statusOf(next) };
+  }
+  if (msg?.type === 'removed' && msg.id) {
+    if (!panel.synced) {
+      const { [msg.id]: _gone, ...rest } = baseline;
+      return { ...keep, baseline: rest };
+    }
+    const { [msg.id]: _gone, ...rest } = panel.sessions;
+    const next = { ...panel, sessions: rest, updatedAt: clockText };
+    return { ...keep, panel: next, status: statusOf(next) };
+  }
+  if (msg?.type === 'synced') {
+    const next = { ...panel, sessions: { ...baseline }, synced: true, link: 'live', message: null, updatedAt: clockText };
+    return { ...keep, panel: next, baseline: {}, status: statusOf(next) };
+  }
+  return keep;
+}
+
+/** watch 起不来时面板上的说明：只有看得出是找不到 node 时才提 nodePath 配置项。 */
+export function startFailure(reason) {
+  const text = String(reason ?? '').trim() || 'watch 没有输出就退出了';
+  const noNode = /env: .?node|ENOENT|No such file|not found/i.test(text);
+  return `启动 watch 失败：${text}${noNode ? '。可在插件配置里填写 node 路径（nodePath）' : ''}`;
+}

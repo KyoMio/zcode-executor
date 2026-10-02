@@ -2,6 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  EMPTY_PANEL,
+  applyLine,
   cornerOf,
   elapsed,
   filterByRepo,
@@ -10,6 +12,7 @@ import {
   repoName,
   scopeNote,
   sectionsOf,
+  startFailure,
   statusLine,
   toastsFor,
 } from '../hooks/view.mjs';
@@ -128,7 +131,24 @@ test('仓库名取所属仓库最后一段，没有所属仓库时退到 cwd', (
 
 // pane.mjs 用全局 h 构造元素（mod 运行环境给的）；这里装一个桩，把树收成普通对象，查文案在不在。
 test('布局：样稿数据在桌面与终端两种元素表下都能画出，关键文案都在树里', async () => {
-  globalThis.h = (type, props, ...kids) => ({ type, props: props ?? {}, kids: kids.flat() });
+  // 桩 h 按引擎类型声明（BoxProps、TextProps、SvgProps、CodeProps）核对属性名与取值：多一个不认的属性，引擎会整树拒画
+  const ALLOWED = {
+    Box: new Set(['key', 'flexDirection', 'flexGrow', 'flexShrink', 'alignItems', 'justifyContent', 'gap', 'width', 'height',
+      'margin', 'marginX', 'marginY', 'marginTop', 'marginBottom', 'marginLeft', 'marginRight', 'padding', 'paddingX', 'paddingY',
+      'paddingTop', 'paddingBottom', 'paddingLeft', 'paddingRight', 'borderStyle', 'borderColor', 'borderDimColor', 'backgroundColor', 'overflow', 'display']),
+    Text: new Set(['color', 'backgroundColor', 'dimColor', 'bold', 'italic', 'underline', 'strikethrough', 'inverse', 'wrap']),
+    Svg: new Set(['source', 'alt', 'width', 'height', 'isInteractive']),
+    Code: new Set(['source', 'language', 'path', 'startLine', 'format']),
+  };
+  globalThis.h = (type, props, ...kids) => {
+    for (const [k, v] of Object.entries(props ?? {})) {
+      assert.ok(ALLOWED[type]?.has(k), `${type} 不认属性 ${k}`);
+      assert.ok(['string', 'number', 'boolean'].includes(typeof v), `${type}.${k} 不是简单值`);
+    }
+    if (type === 'Code') assert.ok(!/[\x00-\x08\x0b-\x1f\x7f]/.test(props.source) && props.source.length <= 10000, 'Code 内容有不许的控制字符或过长');
+    assert.equal(props?.isInteractive, undefined, 'Svg 不开交互框（桌面版会闪）');
+    return { type, props: props ?? {}, kids: kids.flat() };
+  };
   const { drawPane, SPINNER } = await import('../hooks/pane.mjs');
   const texts = (node) => {
     if (node === null || node === undefined || node === false) return [];
@@ -138,7 +158,7 @@ test('布局：样稿数据在桌面与终端两种元素表下都能画出，�
   };
   const types = (node) => (node && typeof node === 'object' ? [node.type, ...node.kids.flatMap(types)] : []);
   const sessions = [
-    snap({ id: 'p', title: 'T5', phase: 'pending', since: ago(3), pendingDetail: { kind: 'permission', toolName: 'Bash', summary: 'rm -rf ../dist', reason: '任务单没有授权' } }),
+    snap({ id: 'p', title: 'T5', phase: 'pending', since: ago(3), pendingDetail: { kind: 'permission', toolName: 'Bash', summary: 'rm -rf ../dist\r\necho \x1b[31mdone', reason: '任务单没有授权' } }),
     snap({ id: 'q1', title: 'T2', phase: 'pending', since: ago(1), pendingDetail: { kind: 'question', questionTexts: ['保留兼容吗？'] } }),
     snap({ id: 's', title: 'T7', phase: 'stale', since: ago(26) }),
     snap({ id: 'r', title: 'T4', phase: 'running', since: ago(12), task: 'docs/tasks/T4.md', reply: ['画板读取投影的部分已经改完。'],
@@ -164,4 +184,42 @@ test('布局：样稿数据在桌面与终端两种元素表下都能画出，�
   const down = texts(drawPane(desktop, { sessions: [], repo: null, updatedAt: null, link: 'down', message: '实时连接中断，5 秒后重连', now: NOW })).join('\n');
   for (const want of ['已断开', '实时连接中断，5 秒后重连', '未在 git 仓库中，显示全部项目', '没有执行中的回合']) assert.ok(down.includes(want), `缺「${want}」`);
   delete globalThis.h;
+});
+
+test('逐行处理：hello 开新基线，synced 前的快照不弹提示，synced 后的变化才弹，且只弹本项目的', () => {
+  let panel = { ...EMPTY_PANEL, sessions: { old: snap({ id: 'old' }) } };
+  let baseline = {};
+  const step = (msg) => {
+    const r = applyLine(panel, baseline, msg, '12:00:00');
+    panel = r.panel;
+    baseline = r.baseline;
+    return r;
+  };
+  step({ type: 'hello', repo: '/repo/app' });
+  assert.equal(panel.synced, false);
+  const before = step({ type: 'session', session: snap({ id: 'a', phase: 'pending', pendingDetail: { kind: 'question', questionTexts: ['x'] } }) });
+  assert.deepEqual(before.toasts, []); // 重连后的第一轮只是基线
+  assert.equal(before.status, null);
+  step({ type: 'session', session: snap({ id: 'b', phase: 'running', repo: '/repo/other' }) });
+  step({ type: 'session', session: snap({ id: 'gone', phase: 'running' }) });
+  step({ type: 'removed', id: 'gone' }); // synced 前消失的会话不带进面板
+  const synced = step({ type: 'synced' });
+  assert.deepEqual(Object.keys(panel.sessions).sort(), ['a', 'b']); // 旧的 old 被新基线整体换掉
+  assert.equal(panel.link, 'live');
+  assert.equal(synced.status, 'zcode：1 个挂起'); // b 不是本项目的，不算进状态栏
+  const other = step({ type: 'session', session: snap({ id: 'b', phase: 'pending', repo: '/repo/other', pendingDetail: { kind: 'question', questionTexts: ['y'] } }) });
+  assert.deepEqual(other.toasts, []); // 别的项目不弹
+  const mine = step({ type: 'session', session: snap({ id: 'a', phase: 'idle', lastOutcome: 'done', lastEndedAt: ago(0), title: 'W1' }) });
+  assert.deepEqual(mine.toasts, ['zcode W1 回合结束：已完成']);
+  assert.equal(mine.status, undefined); // 都没了，清掉状态栏
+  const removed = step({ type: 'removed', id: 'a' });
+  assert.deepEqual(Object.keys(panel.sessions), ['b']);
+  assert.equal(removed.status, undefined); // 删掉后状态栏照样重算
+  assert.equal(step({ type: '没见过' }).panel, panel); // 不认识的行原样放过
+});
+
+test('watch 起不来的说明：看得出找不到 node 才提 nodePath', () => {
+  assert.equal(startFailure('env: node: No such file or directory'), '启动 watch 失败：env: node: No such file or directory。可在插件配置里填写 node 路径（nodePath）');
+  assert.equal(startFailure('zcode-executor: 不认识的命令 watch'), '启动 watch 失败：zcode-executor: 不认识的命令 watch');
+  assert.equal(startFailure(''), '启动 watch 失败：watch 没有输出就退出了');
 });
