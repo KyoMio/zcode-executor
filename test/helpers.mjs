@@ -7,7 +7,7 @@
 // T6-C：内置文件夹具带账号型 providerRules 与 GLM-5.3 的 modelRules（形状照真机 zcode-builtin.json，
 // 2026-09-21 对照 ZCode 源码 3.14.0）；可选写一份加密的 credentials.json。ZCODE_DATA_BASE_DIR 一律
 // 指进夹具临时目录、ZCODE_CREDENTIAL_SECRET 固定测试值——测试全程不读真实的 ~/.zcode，密钥派生不依赖运行机器。
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, symlink, writeFile, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { createCipheriv, randomBytes, randomUUID } from 'node:crypto';
 import os from 'node:os';
@@ -67,6 +67,30 @@ export const BUILTIN_PROVIDER_FIXTURE = {
             api: { type: 'anthropic-messages', baseUrl: 'https://api.z.ai/api/anthropic' },
           },
         },
+        // 闲时隐藏条目（形状照真机 zcode-builtin.json，verified.md 闲时任务探针（2026-09-27），App 3.14.1）：
+        // CLI 里一直都有、默认 entitled:false，推 provider/updateAccountConfig 之后才可用
+        {
+          providerId: 'account:bigmodel-offpeak-idle-plan',
+          providerName: 'BigModel Off-Peak Idle Plan',
+          config: {
+            group: 'bigmodel-family',
+            visibility: 'hidden',
+            builtinModelIds: ['GLM-5.3', 'GLM-5.3-Flash'],
+            access: { type: 'zhipu-account', mode: 'off-peak', accountType: 'bigmodel' },
+            api: { type: 'anthropic-messages', baseUrl: 'https://zcode.z.ai/api/v1/off-peak/anthropic' },
+          },
+        },
+        {
+          providerId: 'account:zai-offpeak-idle-plan',
+          providerName: 'ZAI Off-Peak Idle Plan',
+          config: {
+            group: 'zai-family',
+            visibility: 'hidden',
+            builtinModelIds: ['GLM-5.3', 'GLM-5.3-Flash'],
+            access: { type: 'zhipu-account', mode: 'off-peak', accountType: 'zai' },
+            api: { type: 'anthropic-messages', baseUrl: 'https://zcode.z.ai/api/v1/off-peak/anthropic' },
+          },
+        },
         {
           providerId: 'account:zai-team-coding-plan',
           providerName: 'ZAI Team Coding Plan',
@@ -103,12 +127,16 @@ export const BUILTIN_PROVIDER_FIXTURE = {
  * 与 ZCODE_CREDENTIAL_SECRET（固定测试值）。给了 credentials 才写加密的 credentials.json。
  *
  * @param {object} [opts.credentials] 账号型登录夹具：{ family='bigmodel', accountId='10086',
- *   individual=true, team=true }；两把 api-key 随机生成，值返回在 accountKeys 里（断言「输出不含 key」用）
+ *   individual=true, team=true, jwt? }；两把 api-key 随机生成，值返回在 accountKeys 里（断言「输出不含 key」用）；
+ *   给了 jwt（字符串）才写 zcodejwttoken（闲时投递的鉴权，D20）
+ * @param {string} [opts.appVersion] 给了就把 mock 放进假的 App 目录布局
+ *   （<dir>/ZCode.app/Contents/Resources/glm/zcode.mjs，符号链接到 mock），旁边的 Contents/Info.plist
+ *   写这个 CFBundleShortVersionString；返回的 zcodePath 指向那个链接。没给时 zcodePath 就是 mock 本身（推不出 App 版本）
  * @returns {Promise<{zcodePath: string, env: object, recordPath: string, dir: string,
  *   personalProviderFile: string, apiKey: string, credentialsPath: string,
  *   accountKeys: {individual?: string, team?: string}, cleanup: () => Promise<void>}>}
  */
-export async function startMock({ script, record, version, credentials } = {}) {
+export async function startMock({ script, record, version, credentials, appVersion } = {}) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-mock-'));
   const scriptPath = path.join(dir, 'script.json');
   await writeFile(scriptPath, JSON.stringify(script ?? {}));
@@ -134,7 +162,7 @@ export async function startMock({ script, record, version, credentials } = {}) {
   const credentialsPath = path.join(dataDir, '.zcode', 'v2', 'credentials.json');
   const accountKeys = {};
   if (credentials) {
-    const { family = 'bigmodel', accountId = '10086', individual = true, team = true } = credentials;
+    const { family = 'bigmodel', accountId = '10086', individual = true, team = true, jwt } = credentials;
     if (individual) accountKeys.individual = `account-key-individual-${randomBytes(4).toString('hex')}`;
     if (team) accountKeys.team = `account-key-team-${randomBytes(4).toString('hex')}`;
     const encoded = encodeURIComponent(accountId);
@@ -144,12 +172,27 @@ export async function startMock({ script, record, version, credentials } = {}) {
       [`account-provider:coding-plan:account:${family}-individual-coding-plan:account:${encoded}:api-key`]: accountKeys.individual,
       [`account-provider:coding-plan:account:${family}-team-coding-plan:account:${encoded}:api-key`]: accountKeys.team,
       [`oauth:${family}:access_token`]: 'enc:v1:garbage', // 别的键给了坏密文也不该被读
+      zcodejwttoken: jwt,
     };
     for (const key of Object.keys(entries)) {
       if (entries[key] !== undefined) entries[key] = encryptForTest(String(entries[key]));
     }
     await mkdir(path.dirname(credentialsPath), { recursive: true });
     await writeFile(credentialsPath, JSON.stringify(entries), { mode: 0o600 });
+  }
+  let zcodePath = MOCK_PATH;
+  if (appVersion) {
+    // 权宜：布局 <App>.app/Contents/Resources/glm/zcode.cjs 与 <App>.app/Contents/Info.plist 是 2026-09-27 本机 App 3.14.1
+    // 看到的，未记进 verified.md，未验证；别的平台或版本布局不同时改这里和 lib/offpeak-check.mjs 的 appVersionOf。
+    // mock 是 ESM，链接名用 .mjs：叫 .cjs 会被当成 CommonJS 加载
+    const glm = path.join(dir, 'ZCode.app', 'Contents', 'Resources', 'glm');
+    await mkdir(glm, { recursive: true });
+    zcodePath = path.join(glm, 'zcode.mjs');
+    await symlink(MOCK_PATH, zcodePath);
+    await writeFile(
+      path.join(dir, 'ZCode.app', 'Contents', 'Info.plist'),
+      `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">\n<dict>\n    <key>CFBundleShortVersionString</key>\n    <string>${appVersion}</string>\n</dict>\n</plist>\n`,
+    );
   }
   const env = {
     MOCK_APPSERVER_SCRIPT: scriptPath,
@@ -166,7 +209,7 @@ export async function startMock({ script, record, version, credentials } = {}) {
     cleaned = true;
     await rm(dir, { recursive: true, force: true });
   };
-  return { zcodePath: MOCK_PATH, env, recordPath, dir, personalProviderFile, apiKey, credentialsPath, accountKeys, cleanup };
+  return { zcodePath, env, recordPath, dir, personalProviderFile, apiKey, credentialsPath, accountKeys, cleanup };
 }
 
 /** 轮询直到 fn 返回真值；返回那个值，超时抛错（带上最后一次的值方便排障）。 */

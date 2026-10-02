@@ -1,6 +1,6 @@
 // test/mock-appserver.mjs —— stdio 上说 app-server 协议的假进程（整个项目的测试接缝）。
 // 由剧本 JSON 驱动，收到的每条消息追加到记录文件（MOCK_APPSERVER_RECORD，一行一条 JSON），
-// apiKey 值写盘前抹成 "[REDACTED]"（T1.3b 第 6 条，RULES §8 永不落盘）。
+// apiKey 值（含闲时 send 的 requestAuth.apiKey 与 Authorization、X-Coding-Plan-Api-Key 两个 header 值）写盘前抹成 "[REDACTED]"（T1.3b 第 6 条，RULES §8 永不落盘）。
 // 日志一律 stderr（`mock: ` 前缀）。stdin EOF 后退出码 0。信封无 jsonrpc 字段；未知方法回 -32601。
 // 目标是「真机行为的复刻」：每个默认返回形状旁注明出处（verified.md / verified.md / 探针实测日期）。
 // 复刻的是 ZCode App 3.12.2 的 app-server（verified.md「3.12.2 直连探针实测」与 docs/reference/zcode-app-server-protocol.md「3.12.2 变化」，2026-09-18）：provider 表不再由
@@ -57,7 +57,11 @@
 //                                                         schema/toolCallId 透传，可造 ExitPlanMode 形状
 //     completeDelayMs: 800                                    应答之后到 completed 之间睡多少毫秒（T2.8）
 //     hang:       true                                    不再推任何事件
-//     fail:       {code, message}                         推 turn.failed（payload.error）
+//     fail:       {code, message}                         推 turn.failed（payload.error）。闲时号失效用
+//                                                         {code:'3104', message:…}（号无效）或 {code:'3102',
+//                                                         message:'off-peak-ticket-expired: …'}（号过期）——
+//                                                         verified.md「闲时任务探针」2026-09-27 App 3.14.1：
+//                                                         code 是字符串，3102 的 message 以 off-peak-ticket-expired: 开头
 //     都没有                                              最后推 turn.completed
 //   generateText:      { replies: [文本…] }                workspace/generateText 按调用顺序回这些
 //                                                         文本（T3.2），用完就循环最后一条
@@ -77,9 +81,41 @@
 //                                                         强制 v4/command 的 ACK status（对象可再带
 //                                                         reasonCode/message），测「ACK 被拒时客户端
 //                                                         抛错」；信封校验之后、其余分支之前生效
+//   accountConfigReply: {receivedRevision?, providerCount?, status?}
+//                                                         覆盖 provider/updateAccountConfig 回执的字段（测「回执
+//                                                         revision 不对」）；要它回错误用 errors 字段，如
+//                                                         {"provider/updateAccountConfig": {code:-32602, …}}。
+//                                                         默认回执 {receivedRevision: params.revision, providerCount,
+//                                                         status:'received'}，形状出处：ZCode 3.14.1 zcode.cjs 源码（schema DBi），
+//                                                         status 另有 'unchanged'；receivedRevision 永远回显请求 revision。
+//                                                         basedOnZCodeBuiltinRevision 照真机校验（verified.md 闲时任务探针（2026-09-27））：不等于
+//                                                         zcode-builtin:<内置文件 revision>:<sha256(path.resolve(内置文件路径))>
+//                                                         时回执照样 received，但整份配置被忽略（见下面「闲时回合」）
+//   builtinRevision:   "…"                                 mock 眼里内置文件的 revision（缺省读文件顶层 revision）。
+//                                                         模拟 CLI 用的内置配置和客户端读的那份不是同一版
+//                                                         （比如 CDN 刷新过的活动副本），版本号就对不上
+//   offPeakTurnError:  {code, message, attribution?} | false  授权对得上的闲时回合一律以它 turn.failed（error 原样
+//                                                         放进 payload.error，attribution 形状见下）；false 表示连假号也照剧本
+//                                                         turns 跑（测回合挂住、正常完成）；缺省只有假号回 3104，别的号照剧本跑
+//   offPeakTurnErrors: [{code, message, attribution?}, …]  跨进程计数：第 n 个闲时 session/send（按记录文件里已有的条数算，
+//                                                         doctor 重跑全链路会起新进程）用第 n 项，用完回到缺省行为
+//   sessionCreateResult: {…}                               session/create 直接回这个 result（测返回形状不对）
+//
+// 闲时回合（verified.md 闲时任务探针（2026-09-27），App 3.14.1）：session/send 的 modelSelection.providerId
+// 是 account:<family>-offpeak-idle-plan 时——内置文件里没这个条目、没推过授权、或推的 basedOnZCodeBuiltinRevision
+// 对不上 → turn.failed，payload {error:{code:'provider_not_found', message:「Provider Registry 中不存在 Provider: <id>」},
+// turnPhase:'model_creation'}；对得上且票号是假号 1000000000000000000 → turn.failed，code '3104'、
+// message「off-peak ticket is invalid」，stderr 打一行 ProviderBusinessError（真机零额度）。
+// 权宜：真机记下的是 turn.terminal 的 errorCode provider_not_found，turn.failed 的 payload.error.code 按同值复刻，
+// 未逐字验证；真机再抓到 turn.failed 原文时核对。
+// payload.error 的完整形状 {type, message, code?, attribution?:{source?, reason?, statusCode?, providerErrorCode?, retryable?}, retryable?}
+// 出自 zcode.cjs 3.14.1 源码（turn.failed schema），未验证；剧本用 attribution.reason 测暂时性失败的分类。
+//   echoSendParamsInTurnStarted: true                     把收到的 session/send 参数原样放进 turn.started.payload.intent。
+//                                                         真机事件会不会回显 send 参数未验证；这个开关是防御性的，
+//                                                         测会话层落盘确实按值抹掉 JWT 与 key
 import { createInterface } from 'node:readline';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 const version = process.env.MOCK_APPSERVER_VERSION ?? '0.16.5';
@@ -100,13 +136,37 @@ if (!builtinFile || !existsSync(builtinFile)) {
 }
 
 const log = (msg) => process.stderr.write(`mock: ${msg}\n`);
+
+// 闲时授权的版本号照真机自己算（verified.md 闲时任务探针（2026-09-27））：CLI 哈希的是它看到的内置文件路径字符串，
+// 不是文件内容。故意不 import lib/offpeak-provider.mjs——mock 另写一份才能拦住客户端算法写错
+const OFFPEAK_PROVIDER_RE = /^account:[^:]+-offpeak-idle-plan$/;
+const OFFPEAK_FAKE_TICKET = '1000000000000000000';
+const builtinOffPeak = { revision: undefined, providerIds: new Set() };
+try {
+  const builtin = JSON.parse(readFileSync(builtinFile, 'utf8'));
+  builtinOffPeak.revision = builtin?.revision;
+  for (const rule of builtin?.config?.providerConfigRules?.providerRules ?? []) {
+    if (OFFPEAK_PROVIDER_RE.test(rule?.providerId ?? '')) builtinOffPeak.providerIds.add(rule.providerId);
+  }
+} catch {
+  // 内置文件内容坏了：闲时条目一个都没有，闲时回合全按 provider_not_found 走
+}
 // T1.3b 第 6 条：写记录前把见过的 apiKey 值抹成 "[REDACTED]"（默认开启，RULES §8 永不落盘）。
 // 值来自个人文件的 access.apiKey（启动时读）和客户端答 requestProviderRuntimeHeaders 时给的
 // requestAuth.apiKey；替换按整个带引号的 JSON 字符串做，记录行保持可 JSON.parse。
+// 闲时回合的 session/send 自带 modelExecution.requestAuth（verified.md「闲时任务探针」2026-09-27）：
+// apiKey（JWT）和 Authorization、X-Coding-Plan-Api-Key 两个 header 值抹掉（header 名不分大小写）；
+// 票号 X-Off-Peak-Ticket-ID 不是秘密，原样留在记录里供断言
+const SECRET_HEADERS = new Set(['authorization', 'x-coding-plan-api-key']);
 const secretValues = new Set();
 function collectSecrets(msg) {
   const v = msg?.result?.requestAuth?.apiKey;
   if (v) secretValues.add(v);
+  const auth = msg?.params?.modelExecution?.requestAuth;
+  if (auth?.apiKey) secretValues.add(auth.apiKey);
+  for (const [name, value] of Object.entries(auth?.headers ?? {})) {
+    if (value && SECRET_HEADERS.has(name.toLowerCase())) secretValues.add(value);
+  }
 }
 
 // docs/reference/zcode-app-server-protocol.md「3.12.2 变化」：模型表 = 个人文件里每条 providerRules 的 providerId × personalModelIds。
@@ -171,6 +231,7 @@ const state = {
   // 权宜：单会话假设（与 activeTurn 同），多会话用例出现时改成 per-session
   stopRequested: false,
   generateTextCount: 0, // 第 n 次 workspace/generateText（T3.2：剧本按次序回，错误按次序插）
+  entitledOffPeak: new Set(), // updateAccountConfig 推成功（版本号对得上）的闲时 providerId
 };
 const pendingAnswers = new Map(); // 信封 id → 反向请求条目（存引用，见 askServer）
 
@@ -345,7 +406,7 @@ const pushEvent = (sessionId, type, payload) => {
 // hang / fail 没走正常收尾的残留不该排进下一回合（权宜：mock 单会话假设，与 activeTurn 同）
 const pendingSteers = [];
 
-async function runTurn(sessionId) {
+async function runTurn(sessionId, sendParams) {
   const turn = script.turns?.[state.sendCount] ?? {};
   state.sendCount += 1;
   state.stopRequested = false; // 新回合重置：上一回合的叫停不波及这一回合
@@ -358,7 +419,17 @@ async function runTurn(sessionId) {
     ev('turn.completed', { resultType: 'cancelled', usage: { totalTokens: 0 } });
     return true;
   };
-  ev('turn.started', {});
+  // 剧本 echoSendParamsInTurnStarted：send 参数原样进 intent（v4 sendText 起的回合没有 send 参数，不带）
+  ev('turn.started', script.echoSendParamsInTurnStarted && sendParams ? { intent: sendParams } : {});
+  const offPeakError = offPeakTurnError(sendParams);
+  if (offPeakError) {
+    if (offPeakError.code === '3104') {
+      // verified.md 闲时任务探针（2026-09-27）：假号回合 CLI stderr 打 ProviderBusinessError（providerCode 3104，HTTP 400）
+      log('ProviderBusinessError: off-peak ticket is invalid (providerCode: 3104, statusCode: 400)');
+    }
+    ev('turn.failed', { error: offPeakError, ...(offPeakError.code === 'provider_not_found' ? { turnPhase: 'model_creation' } : {}) });
+    return;
+  }
   // 会话的模型：create 时记下的；resume 进来的会话 mock 没建过，退到表里第一个（权宜：resume 不校验会话存在）
   const model = state.sessions.find((s) => s.sessionId === sessionId)?.model ?? availableModels()[0]?.ref
     ?? { providerId: 'zcode-unconfigured', modelId: 'missing-model' };
@@ -446,6 +517,45 @@ async function runTurn(sessionId) {
   }
 }
 
+// 闲时回合的结局（见文件头「闲时回合」）；不是闲时 provider 返回 null，照剧本跑
+function offPeakTurnError(sendParams) {
+  const providerId = sendParams?.modelSelection?.providerId;
+  if (!OFFPEAK_PROVIDER_RE.test(providerId ?? '')) return null;
+  if (!builtinOffPeak.providerIds.has(providerId) || !state.entitledOffPeak.has(providerId)) {
+    return { code: 'provider_not_found', message: `Provider Registry 中不存在 Provider: ${providerId}` };
+  }
+  if (script.offPeakTurnErrors) {
+    // 记录文件在处理前就写了这一条，所以数到的条数里含本次
+    const n = readRecordedOffPeakSends();
+    if (n >= 1 && n <= script.offPeakTurnErrors.length) return script.offPeakTurnErrors[n - 1];
+  }
+  if (script.offPeakTurnError === false) return null;
+  if (script.offPeakTurnError) return script.offPeakTurnError;
+  const headers = sendParams?.modelExecution?.requestAuth?.headers ?? {};
+  const ticket = Object.entries(headers).find(([name]) => name.toLowerCase() === 'x-off-peak-ticket-id')?.[1];
+  if (ticket === OFFPEAK_FAKE_TICKET) return { code: '3104', message: 'off-peak ticket is invalid' };
+  return null;
+}
+
+// 记录文件里闲时 session/send 的条数（跨 mock 进程共享同一个记录文件）
+function readRecordedOffPeakSends() {
+  let raw = '';
+  try {
+    raw = readFileSync(process.env.MOCK_APPSERVER_RECORD, 'utf8');
+  } catch {
+    return 0; // 没配记录文件：当第 0 条
+  }
+  return raw.split('\n').filter((line) => {
+    if (!line.includes('"session/send"')) return false;
+    try {
+      const msg = JSON.parse(line);
+      return msg.method === 'session/send' && OFFPEAK_PROVIDER_RE.test(msg.params?.modelSelection?.providerId ?? '');
+    } catch {
+      return false; // 半截行
+    }
+  }).length;
+}
+
 // ---------- 方法分发 ----------
 function afterHandled(method) {
   if (script.exitAfter === method) {
@@ -514,6 +624,10 @@ function handleRequest(msg) {
       };
       state.sessions.push(session);
       if (params.persistence === 'deferred') state.deferredIds.add(sessionId);
+      if (script.sessionCreateResult) {
+        respond(id, script.sessionCreateResult);
+        break;
+      }
       // verified.md「requestRuntimePreferences 时序」行：应答之后才发，params 带 sessionId 和 scope
       respond(id, { session, settings });
       void askServer('session/requestRuntimePreferences', { sessionId, scope: 'runtime-materialization' }).then((answer) => {
@@ -627,8 +741,29 @@ function handleRequest(msg) {
         process.exit(3);
       }
       state.activeTurn = true;
-      void runTurn(params.sessionId).then(() => {
+      void runTurn(params.sessionId, params).then(() => {
         state.activeTurn = false;
+      });
+      break;
+    }
+    case 'provider/updateAccountConfig': {
+      // 回执形状 {receivedRevision, providerCount, status:'received'|'unchanged'} 出处：ZCode 3.14.1 zcode.cjs
+      // 源码（schema DBi）；推送本身在 verified.md「闲时任务探针」2026-09-27 真机跑通。剧本 accountConfigReply 可改字段。
+      // 版本号不等：CLI 整份忽略（verified.md 闲时任务探针（2026-09-27）），回执照样 received（zcode.cjs 3.14.1 源码，未验证）
+      const revision = script.builtinRevision ?? builtinOffPeak.revision;
+      const expected = `zcode-builtin:${revision}:${createHash('sha256').update(path.resolve(builtinFile)).digest('hex')}`;
+      if (params.basedOnZCodeBuiltinRevision === expected) {
+        state.entitledOffPeak = new Set(
+          Object.entries(params.providers ?? {}).filter(([, p]) => p?.access?.entitled === true).map(([providerId]) => providerId),
+        );
+      } else {
+        log(`updateAccountConfig 版本号对不上，整份忽略（期望 ${expected}）`);
+      }
+      respond(id, {
+        receivedRevision: params.revision,
+        providerCount: Object.keys(params.providers ?? {}).length,
+        status: 'received',
+        ...script.accountConfigReply,
       });
       break;
     }
@@ -692,6 +827,15 @@ function handleRequest(msg) {
         log(`v4 stop 收到（sessionId=${sessionId}）`);
         respond(id, { commandId, status: 'accepted', revisionAtDecision: 0 });
         if (state.activeTurn && script.stopIgnored !== true) state.stopRequested = true;
+        break;
+      }
+      if (type === 'renameSession') {
+        // zcode.cjs 3.14.1 源码：renameSession {title} 调 runtime.setCustomSessionTitle，ACK accepted。未验证
+        if (typeof params.payload?.title !== 'string') {
+          respond(id, { commandId, status: 'failed', reasonCode: 'proto.invalidPayload', revisionAtDecision: 0 });
+          break;
+        }
+        respond(id, { commandId, status: 'accepted', revisionAtDecision: 0 });
         break;
       }
       respond(id, { commandId, status: 'rejected', reasonCode: 'proto.unsupportedCommand', revisionAtDecision: 0 });

@@ -11,6 +11,7 @@ import {
   decryptCredentialValue,
   deriveCredentialKey,
   readCodingPlanKeys,
+  readOffPeakAuth,
 } from '../lib/credentials.mjs';
 
 const dirs = [];
@@ -249,4 +250,116 @@ test('credentials：api-key 解出来不是字符串（如明文数字）→ 当
   assert.equal(out.family, 'bigmodel');
   assert.equal('individual' in out.plans, false);
   assert.ok(out.plans.team); // 字符串那把照常
+});
+
+// ---------- readOffPeakAuth（闲时投递，decisions D20：只多解 zcodejwttoken） ----------
+
+const TEST_JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoxfQ.test-jwt-signature';
+
+/** 闲时夹具：四个键加一把 JWT；个人版 / 团队版 key 可去掉。 */
+function offPeakEntries({ family = 'bigmodel', individual = true, team = true } = {}) {
+  const entries = fullEntries({ family });
+  entries.zcodejwttoken = TEST_JWT;
+  if (!individual) delete entries[`account-provider:coding-plan:account:${family}-individual-coding-plan:account:10086:api-key`];
+  if (!team) delete entries[`account-provider:coding-plan:account:${family}-team-coding-plan:account:10086:api-key`];
+  return entries;
+}
+
+test('闲时凭据：JWT 与个人版 key 都在 → 返回 family、jwt、planKey（个人版）', async () => {
+  const entries = offPeakEntries({ family: 'zai' });
+  const file = await writeCredentials(entries);
+  const out = readOffPeakAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  assert.deepEqual(out, {
+    family: 'zai',
+    jwt: TEST_JWT,
+    planKey: entries['account-provider:coding-plan:account:zai-individual-coding-plan:account:10086:api-key'],
+  });
+});
+
+test('闲时凭据：别的键是解不开的坏值也不影响——只比 D19 多读 zcodejwttoken 一个键', async () => {
+  const entries = offPeakEntries();
+  entries['oauth:bigmodel:access_token'] = 'enc:v1:garbage'; // 不加密写进去，谁去解谁就炸
+  const file = await writeCredentials(entries, {
+    encryptKeys: Object.keys(entries).filter((k) => k !== 'oauth:bigmodel:access_token'),
+  });
+  const out = readOffPeakAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  assert.equal(out.error, undefined);
+  assert.equal(out.jwt, TEST_JWT);
+});
+
+test('闲时凭据：凭据文件不存在 → not-applicable，说没用账号登录', () => {
+  const file = path.join(os.tmpdir(), `zcode-cred-none-${Date.now()}.json`);
+  const out = readOffPeakAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  assert.equal(out.kind, 'not-applicable');
+  assert.match(out.error, /登录/);
+});
+
+test('闲时凭据：没有 zcodejwttoken → not-applicable，说没用账号登录', async () => {
+  const entries = offPeakEntries();
+  delete entries.zcodejwttoken;
+  const file = await writeCredentials(entries);
+  const out = readOffPeakAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  assert.equal(out.kind, 'not-applicable');
+  assert.match(out.error, /登录/);
+});
+
+test('闲时凭据：没有账号信息（active_provider）→ not-applicable', async () => {
+  const entries = offPeakEntries();
+  delete entries['oauth:active_provider'];
+  const file = await writeCredentials(entries);
+  const out = readOffPeakAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  assert.equal(out.kind, 'not-applicable');
+  assert.match(out.error, /登录/);
+});
+
+test('闲时凭据：只有团队版 key → not-applicable「团队版暂不支持闲时投递」', async () => {
+  const file = await writeCredentials(offPeakEntries({ individual: false }));
+  const out = readOffPeakAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  assert.equal(out.kind, 'not-applicable');
+  assert.match(out.error, /团队版暂不支持闲时投递/);
+});
+
+test('闲时凭据：两把 key 都没有 → not-applicable', async () => {
+  const file = await writeCredentials(offPeakEntries({ individual: false, team: false }));
+  const out = readOffPeakAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  assert.equal(out.kind, 'not-applicable');
+  assert.ok(out.error);
+});
+
+test('闲时凭据：JWT 解不开 → changed，error 里没有密文', async () => {
+  const entries = offPeakEntries();
+  const sealed = encrypt(TEST_JWT, deriveCredentialKey({ env: { ZCODE_CREDENTIAL_SECRET: '另一个密钥' } }));
+  entries.zcodejwttoken = sealed;
+  const file = await writeCredentials(entries, { encryptKeys: Object.keys(entries).filter((k) => k !== 'zcodejwttoken') });
+  const out = readOffPeakAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  assert.equal(out.kind, 'changed');
+  assert.match(out.error, /zcodejwttoken/);
+  assert.equal(out.error.includes(sealed), false);
+});
+
+test('闲时凭据：凭据文件不是合法 JSON → changed', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-cred-test-'));
+  dirs.push(dir);
+  const file = path.join(dir, 'credentials.json');
+  await writeFile(file, '{not json');
+  const out = readOffPeakAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  assert.equal(out.kind, 'changed');
+});
+
+test('闲时凭据：user_info 解出来不是 JSON → changed', async () => {
+  const entries = offPeakEntries();
+  entries['oauth:bigmodel:user_info'] = 'not-json';
+  const file = await writeCredentials(entries);
+  const out = readOffPeakAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  assert.equal(out.kind, 'changed');
+});
+
+test('闲时凭据：失败时返回值里查不到 JWT 与 key', async () => {
+  const entries = offPeakEntries({ individual: false });
+  const file = await writeCredentials(entries);
+  const out = readOffPeakAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  const teamValue = entries['account-provider:coding-plan:account:bigmodel-team-coding-plan:account:10086:api-key'];
+  assert.ok(out.error);
+  assert.equal(JSON.stringify(out).includes(TEST_JWT), false);
+  assert.equal(JSON.stringify(out).includes(teamValue), false);
 });

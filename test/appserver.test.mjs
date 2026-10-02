@@ -18,6 +18,14 @@ import { startMock, waitFor, readRecord, killAll } from './helpers.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// 2026-09-29：在 ZCode App 的会话里跑 npm test 时，宿主环境带着 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE、
+// ZCODE_PERSONAL_PROVIDER_CONFIG_FILE 等变量。本文件多条用例验证「这些变量没设时应抛错/回落」，泄漏会让
+// 它们失真，spawn 用例还会真的拉起 app-server 子进程等不到握手、整份文件永不退出（全量测试挂死的根因）。
+// 测试一律当宿主的 ZCODE_* 不存在（ZCODE_BIN 是用户可能有意指 dev 构建的，保留）。
+for (const k of Object.keys(process.env)) {
+  if (k.startsWith('ZCODE_') && k !== 'ZCODE_BIN') delete process.env[k];
+}
+
 // after() 兜底：清僵尸进程与临时目录（RULES §9）
 const pids = [];
 const mockDirs = [];
@@ -136,6 +144,16 @@ test('builtinProviderConfigPath：按 App 目录布局从 zcode.cjs 推出 ../co
   });
   await writeFile(builtin, '{}');
   assert.equal(builtinProviderConfigPath(zcode), builtin);
+});
+
+test('builtinProviderConfigPath：环境变量给相对路径时返回绝对路径（闲时版本号哈希的是子进程看到的绝对路径）', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-executor-test-'));
+  mockDirs.push(dir);
+  const builtin = path.join(dir, 'zcode-builtin.json');
+  await writeFile(builtin, '{}');
+  const rel = path.relative(process.cwd(), builtin);
+  assert.ok(!path.isAbsolute(rel));
+  assert.equal(builtinProviderConfigPath(null, { builtinFile: rel }), path.resolve(rel));
 });
 
 test('spawn：没有个人 provider 文件（参数与环境都没有）→ 抛 ExecutorError，不拉进程', async () => {

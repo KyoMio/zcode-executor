@@ -371,11 +371,11 @@ test('doctor：插件配置错误时审批链不可确定，不虚报 ZCode', as
   });
 });
 
-test('doctor：人读输出——① 一行、② 账号型与 config.json 两行加选中一行、③④ 各一行', async () => {
+test('doctor：人读输出——① 一行、② 账号型与 config.json 两行加选中一行、③④⑤ 各一行', async () => {
   const { run, mock } = await runCli(['doctor']);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
   const lines = run.stdout.split('\n').filter((l) => l.trim());
-  assert.equal(lines.length, 6); // T6-C 起 ② 拆成账号型 + config.json 两行，选中单独一行
+  assert.equal(lines.length, 7); // T6-C 起 ② 拆成账号型 + config.json 两行，选中单独一行；OP3 加 ⑤ 闲时一行
   assert.match(lines[0], /doctor ① zcode：版本 0\.16\.5，内置 provider 文件 /);
   assert.ok(lines[0].includes(mock.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE), lines[0]);
   assert.match(lines[1], /doctor ② 账号型 coding plan：未登录（credentials\.json 不存在）/);
@@ -383,6 +383,7 @@ test('doctor：人读输出——① 一行、② 账号型与 config.json 两�
   assert.match(lines[3], /doctor ② 选中 builtin:bigmodel-coding-plan（apiKey 在）/);
   assert.match(lines[4], /doctor ③ 握手：选中 builtin:bigmodel-coding-plan/);
   assert.match(lines[5], /doctor ④ 模型审批：开启，新启动 runner 将使用 ZCode 快筛/);
+  assert.match(lines[6], /doctor ⑤ 闲时：不适用（没找到 ZCode 凭据文件/); // 夹具没登录，不碰闲时服务器
 });
 
 test('doctor：选中的 provider 没有明文 apiKey → ② 先报「apiKey 不在」，③ 失败，退出码 1（断粮预警）', async () => {

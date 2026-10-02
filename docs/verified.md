@@ -238,6 +238,49 @@ T6-C 的背景事实，用户本机跑探针核实；加密与键名细节从 ZC
 - 键名是 App 的私有实现：`account-provider:coding-plan:account:<family>-<plan>-coding-plan:account:<encodeURIComponent(id)>:api-key`。
   哪天改了就读不到，读不到要明确报「不可用」，不静默（D19）。
 
+## 闲时任务探针（2026-09-27，App 3.14.1，CLI 0.16.9）
+
+事实来自拆 App 安装包（`app.asar` 的 host / scheduler 进程与 `glm/zcode.cjs`）加本机探针。
+探针脚本在会话 scratchpad，没进仓库；取号两次（用掉两次免费取号），模型调用一次极小的。
+
+| 验的点 | 结果 |
+| --- | --- |
+| 谁管闲时队列 | 桌面宿主进程（`OffPeakTaskService`），不是 CLI。CLI 只有模型工具 `OffPeakCreate`/`OffPeakList`，建会话带 `offPeakToolEnabled:true` 才挂上，调用时发反向请求 `offPeak/create`、`offPeak/list` 给客户端 |
+| 服务器与鉴权 | 生产 origin `https://zcode.z.ai`，接口前缀 `/api/v1/off-peak`；头 `Authorization: Bearer <JWT>` + `x-coding-plan-api-key: <账号 Coding Plan key>`。JWT 在 credentials.json 键 `zcodejwttoken`（同一套 AES-GCM），载荷字段 `user_id, token_version, sub, iat`，**没有 exp** |
+| `GET /ticket/availability`（零额度） | `{code:0, data:{can_take_number:true}}`；不可取时带 `next_take_at` |
+| `POST /ticket {task_id}` | `{ticket_id, task_id, state:"queued", position, next_poll_after:90, queued_at}`。第一次排第 1 位，第二次排第 15 位 |
+| `POST /ticket/status {ticket_ids}` | 两次都在 30 到 100 秒内变 `ready`，带 `ready_deadline`（约 queued_at + 310 秒，**就绪只有约 5 分钟**），`position:null` |
+| `POST /ticket/<id>/settle` | 对已过期的票也回 200，data 原样带 `state:"expired"` |
+| 直接 fetch 打 `/anthropic/v1/messages` | 换模型名、换请求头组合都是 400 `code 3001 parameter error`，原因没查实；改走 CLI 就好了（见下两行），不再深究 |
+| 普通 api-key provider 指向闲时地址 | CLI 对 `z.ai`/`bigmodel.cn` 域名下的 provider 强制做客户端签名，签名 key 要「id.secret」一个点的形状，JWT 有两个点 → 本地报「Client signing credential must contain one separator」，请求没发出去。只有 `zhipu-account` 的 `off-peak`/`start-plan` 免签（`wEs`） |
+| 个人 provider 文件里写 `zhipu-account` 条目 | 整份个人文件失效，连普通 provider 都没了（create 报 Model 不存在） |
+| **官方闲时 provider + updateAccountConfig（可行路线）** | 内置 `account:<family>-offpeak-idle-plan` 在 CLI 里一直都有，只是 `entitled:false`。推 `provider/updateAccountConfig {revision, basedOnZCodeBuiltinRevision, providers:{<id>:{access:{type:"zhipu-account", entitled:true}}}, states:{<id>:{availability:"available", entitled:true, current:true}}}` 回 `received`。**`basedOnZCodeBuiltinRevision` 必须是 `zcode-builtin:<内置文件 revision>:<sha256(内置文件绝对路径)>`**，不等 CLI 整份忽略（这就是 D19 时账号 provider「推了也找不到」的原因）。之后 `session/send` 带 `modelSelection:{providerId:<id>, modelId, options:{reasoningLevel}}`、`modelExecution:{selectionScope:"execution", memoryExtraction:"skip", requestAuth:{apiKey:<JWT>, headers:{Authorization, X-Coding-Plan-Api-Key, X-Off-Peak-Ticket-ID}}, subagents:{foregroundModel:"submission", background:"deny"}}`、`offPeakTaskId`、`offPeakRunType:"init"` |
+| 过期票发回合（零额度） | 请求真的到了 zcode.z.ai，回 400 `3102 off-peak ticket has expired or exceeded max running time`；`turn.failed` 的 code `3102`、message 以 `off-peak-ticket-expired:` 开头（CLI 的闲时失败判定生效） |
+| **端到端（取号第二次）** | 取号排第 15 位，30 秒后 ready → 推账号配置 → send「只回复两个字：收到」→ `account:bigmodel-offpeak-idle-plan`/`GLM-5.3-Flash` 请求 6.3 秒完成，`turn.completed` `resultType:"success"`、response「收到」、usage input 31619 / output 3。票随后是 `active`，`active_deadline` = 第一条请求 + **3 小时整**；settle 后 `state:"settled"` |
+| 假号（零额度） | 2026-09-27 真机：`POST /ticket/status {ticket_ids:["1000000000000000000"]}` 回 `{code:0, data:{next_poll_after:90, tickets:[{ticket_id, state:"not_found", position:null}]}}`；推好授权后用这个号发闲时回合，`turn.failed`、`payload.error.code` `"3104"`、message「off-peak ticket is invalid」（CLI stderr 打 ProviderBusinessError，`providerCode: 3104`，HTTP 400）。doctor 全链路层靠这两条（OP3 真机复跑两次结果相同） |
+| 没推授权就选闲时 provider | 回合 `turn.failed`，`turn.terminal` 的 errorCode `provider_not_found`、`turnPhase: model_creation`、message「Provider Registry 中不存在 Provider: account:bigmodel-offpeak-idle-plan」 |
+| deferred 会话发过回合会留记录 | `persistence:"deferred"` 建的会话**一发回合就写进** `~/.zcode/cli/db/db.sqlite` 的 `session` 表（只 create + close 不发回合时不留，见上文 3.12.2 探针）。v4 命令 `deleteSession` 回 `accepted`，但源码里它只调宿主的 `closeSession`，CLI 库里的行不删。这些会话不在 App 的 `tasks-index.sqlite` 里，App 任务列表看不到。v4 `renameSession {title}` 真机可用（OP3 真机复跑后库里标题是「zcode-executor doctor 闲时自检」） |
+| doctor ⑤ 真机（OP3 合并前） | `doctor --offpeak --json`：ok、退出码 0、stderr 为空、约 4 秒；完整 doctor 七行全部正常；内置文件换成删掉闲时条目的副本 → 「接口变了（内置条目…）」、退出码 1；输出里查不到 JWT 与 key |
+| 检查点 6a（2026-09-28，offpeak 分支 42c0d63） | 新会话（GLM-5.3-Flash）`send --offpeak`：排第 9 位，约 1 分钟就绪，回合 46 秒 done，改动正确；taken/ready/started/settled 事件齐全，号已结算；回合的模型请求全走 `account:bigmodel-offpeak-idle-plan`，只有闸门快筛那一次走普通 provider；runs 目录 5 个文件查不到 JWT 与 key |
+| 检查点 6b | 同一会话先普通投递返工（done，offpeak.json 不受影响），再 `--offpeak` 返工：发的是原文、`runType:"init"`，done，号结算 |
+| 检查点 6c（部分） | 闲时回合里红线挂起（写 /tmp）**压 10 分钟**再放行：6 秒后模型发起下一步，号仍有效。40 分钟那档被我们自己的默认回合超时（`waitTimeoutSec` 1800 秒，从回合开跑算、挂起时间也算）在第 30 分钟截断，结局 timeout 并正常结算，**没测成**；要带 `--timeout 5400` 重测 |
+| 免费取号额度 | 2026-09-28 本地时间 02:07–02:11 成功取号 3 次后，第 4 次回 3103「take number limit exceeded」，`next_take_at` 为次日 00:00（本地，UTC+8）。前一天用了 2 次。推断**每天约 3 次、零点重置**；客户端把它换算成本地时间报出，退出码 2（真机走通）。一次闲时投递最多用 3 个号，可能一次吃光当天额度 |
+| requestAuth 落盘 | 探针后查 `~/.zcode/cli` 与 tasks-index.sqlite 最近 3 小时写过的文件，JWT 与 plan key 都查不到 |
+| 错误码（源码） | 建任务 3101 没资格、3103 额度用完（带 `next_take_at`）；运行中 3105 或 HTTP 429 = 还在排队（CLI 退避重试，最长 5 分钟一次），3102/3001 = 票过期（桌面端回队重新取号，续跑发固定提示「Continue the previous task from where it left off…」、`offPeakRunType:"resume"`） |
+
+## Coding Plan 客户端签名（2026-09-28，App 3.14.1，CLI 0.16.9）
+
+ZCode 对 Coding Plan 用量的优惠（用户说的 0.67 倍）不在客户端算，客户端只负责让服务器认出「这是 ZCode」：
+- 开关：带 Coding Plan key 请求 `https://zcode.z.ai/api/v1/agent/configs`，`data.codingPlanSignature.enable` 为 true 才签，结果缓存 1 小时。
+- 握手：key 须是 `id.secret` 形状；向模型服务所在域名 POST `/api/paas/c1f3a7e2/v2/client`，拿到加密私钥后本地解出 Ed25519 私钥。
+- 每个发往 `bigmodel.cn`/`z.ai`（或 Coding Plan 类 provider）的模型请求加 `X-App-Id: zcode`、`X-Client-Version`、`X-Session-Id`、`X-Client-Ts`、
+  `X-Client-Nonce`、`X-Client-Sig`（对 key id、时间戳、版本、会话 id、随机数的签名）、`X-Client-Pow`（工作量证明）。
+  账号型 off-peak / start-plan 免签（所以自拼 api-key 型闲时 provider 会撞「签名 key 须一个点」）。
+- **我们的普通派单被签了**：`ZCODE_RUNTIME_ENV=development`（只开调试日志，不换服务器；换服务器是 `ZCODE_ENV`）+ `ZCODE_LOG_DIR` 指临时目录，
+  用个人 provider 文件（providerId `zcode-executor`，指向 open.bigmodel.cn）发一次 18 token 的 `workspace/generateText`，调试日志有
+  `feature_gate enabled:true` 与 `signed_sent {signedAttempt:1, providerId:"zcode-executor"}`。回合走同一个模型请求模块，日志里没有未签名或签名失败记录。
+- 倍率本身是服务器规则，客户端代码里没有 0.67，也不显示。
+
 ## 一次性 CLI（备用路线）
 
 `zcode --prompt "<text>" --json --mode build --cwd <dir> --resume <sess_> --attach <file> --disallowed-tools "Write Edit Bash"`。
@@ -290,3 +333,20 @@ zcode-open-bridge 称此模式不读配置里的模型，要环境变量注入�
 
 coder-mcp-bridge 的审批策略：非 plan 档下 `requestPermission` 自动批准（除写到
 exclusive 根之外），`requestUserInput` 只自动批 plan_approval。
+
+## start plan 投递真机探针（2026-09-29，App 3.14.1，CLI 0.16.9）
+
+`send --start-plan` 全链路（T8）：授权推送、逐回合改道、宿主应答 runtime headers 全部按预期工作，但**回合被服务器挡在阿里云验证码上**。
+
+| 项 | 结果 |
+| --- | --- |
+| 授权推送 | `provider/updateAccountConfig`（revision `zcode-executor-start-plan:*`）推送成功，回执 received |
+| send 改道 | `modelSelection.providerId = account:bigmodel-start-plan`、modelId GLM-5.3-Flash，请求到达 `https://zcode.z.ai/api/v1/zcode-plan/anthropic`（调试日志 `model.network.started` 的 baseURL 实证） |
+| 鉴权应答 | 宿主按 providerId 答 `{headersApplied:true, requestAuth:{apiKey:<zcodejwttoken>}}`；CLI 日志 `Client request signing skipped by provider access mode`（start-plan 免签，与源码 `wEs` 一致） |
+| 服务器回应 | HTTP **400**，`captcha verify failed`（business error，reason 被归为 auth_failed）；第二次（captcha-retry）同样 400。CLI 的重试只会再要一次运行时头，宿主答不出 captcha token 就到此为止 |
+| 对照 | 桌面 App 同时段的 start-plan 请求正常（本会话就跑在它上面）；App 宿主对 start-plan 的 runtime-headers 请求走 UI 层（内嵌阿里云验证码 SDK，`x-aliyun-captcha-verify-param`），无头宿主造不出这个头。CLI 的 standalone 端口干脆只支持 individual-coding-plan、对 start-plan 直接抛错——start plan 实际是 App-UI 依赖的通道 |
+| 结论 | 协议层实现正确且已验证到出站请求；被服务器侧验证码网关挡住是外部约束。普通投递、闲时投递不受影响 |
+
+npm test 从 App 宿主会话里跑会挂死的根因（同日）：宿主环境带的 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`、
+`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 泄漏进测试进程，appserver.test.mjs 里「没设环境变量应抛错」的用例失真、
+spawn 用例真的拉起 app-server 等不到握手。已在 appserver.test.mjs 顶部把宿主的 `ZCODE_*` 清掉（保留 `ZCODE_BIN`）。

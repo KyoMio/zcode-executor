@@ -32,6 +32,16 @@ _Avoid_: 轮次、prompt、run
 Claude 看 `git diff` 和测试结果判断任务是否完成。执行端的自述不算证据。
 _Avoid_: 确认、review
 
+**闲时投递（off-peak send）**：
+回合要等服务器放出闲时算力才开跑的一次投递，用 Coding Plan 订阅的免费闲时额度，不占套餐额度。
+会话、回合、验收的含义照旧，只是开跑时间由服务器决定。
+_Avoid_: 闲时任务（只指 ZCode App 里的同名功能）、闲时会话（会话没有类型，闲时是投递的属性）、离峰任务、off-peak task
+
+**号（ticket）**：
+闲时投递在服务器排队用的凭证，一次投递可能先后用到几个号。取号即进队；号就绪后要在几分钟内开跑，开跑后有最长运行时间；
+用完要结算。
+_Avoid_: 票、排队项、队列项
+
 **执行副本（worktree）**：
 执行端干活用的 git worktree，和主检出隔离。由 Claude 建，本项目只记录。
 
@@ -109,5 +119,5 @@ _Avoid_: OAuth provider、zhipu-account
 
 **凭据文件（credentials file）**：
 `~/.zcode/v2/credentials.json`，ZCode App 存登录凭据的平面 JSON，值多为 `enc:v1:` 加密（AES-256-GCM）。
-本项目只读、只解四个键（active provider、user_info、两把 coding plan api-key），其余键一律不读不解。
+本项目只读、只解四个键（active provider、user_info、两把 coding plan api-key），闲时任务另解 `zcodejwttoken`（D20），其余键一律不读不解。
 _Avoid_: 密钥库、keychain

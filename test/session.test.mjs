@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { AppServerClient } from '../lib/appserver.mjs';
 import { attachSession, settleTurn } from '../lib/session.mjs';
+import { buildOffPeakAccountConfig, builtinRevision } from '../lib/offpeak-provider.mjs';
 import { startMock, waitFor, readRecord, killAll } from './helpers.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -46,7 +47,15 @@ async function withSession(script, opts, fn) {
       eventsPath,
       handlers: opts.handlers,
       onEvent: opts.onEvent,
+      secrets: opts.secrets,
     });
+    // 闲时回合要先推授权（mock 照真机：没推或版本号不对，回合报 provider_not_found）
+    if (opts.authorizeOffPeak) {
+      await client.request(
+        'provider/updateAccountConfig',
+        buildOffPeakAccountConfig({ family: 'bigmodel', basedOnZCodeBuiltinRevision: builtinRevision(mock.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE) }),
+      );
+    }
     return await fn({ session, eventsPath, recordPath: mock.recordPath, client, stderrLines });
   } finally {
     if (client) await client.close({ timeoutMs: 2000 }).catch(() => {});
@@ -62,7 +71,14 @@ test('settleTurn：completed → done，lastText 拼接 text_delta，usage 透�
     { type: 'model.streaming', payload: { kind: 'text_delta', delta: '，世界' } },
     { type: 'turn.completed', payload: { resultType: 'success', usage: { totalTokens: 42 } } },
   ]);
-  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '你好，世界', usage: { totalTokens: 42 } });
+  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '你好，世界', usage: { totalTokens: 42 }, errorCode: null, errorReason: null });
+});
+
+test('settleTurn：failed 的 error.code 统一成字符串放进 errorCode，没有 code 为 null', () => {
+  assert.equal(settleTurn([{ type: 'turn.failed', payload: { error: { code: 1308, message: 'x' } } }]).errorCode, '1308');
+  assert.equal(settleTurn([{ type: 'turn.failed', payload: { error: { code: '3104', message: 'x' } } }]).errorCode, '3104');
+  assert.equal(settleTurn([{ type: 'turn.failed', payload: { error: { message: 'x' } } }]).errorCode, null);
+  assert.equal(settleTurn([{ type: 'turn.started', payload: {} }]).errorCode, null);
 });
 
 test('settleTurn：failed 带 error.message', () => {
@@ -77,17 +93,17 @@ test('settleTurn：failed 带 error.message', () => {
 // 结束事件只有这两个）
 test('settleTurn：resultType 缺省 → done', () => {
   const settled = settleTurn([{ type: 'turn.completed', payload: { usage: { totalTokens: 3 } } }]);
-  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 3 } });
+  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 3 }, errorCode: null, errorReason: null });
 });
 
 test('settleTurn：resultType null 也算缺省 → done', () => {
   const settled = settleTurn([{ type: 'turn.completed', payload: { resultType: null, usage: { totalTokens: 3 } } }]);
-  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 3 } });
+  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 3 }, errorCode: null, errorReason: null });
 });
 
 test('settleTurn：resultType success → done', () => {
   const settled = settleTurn([{ type: 'turn.completed', payload: { resultType: 'success', usage: { totalTokens: 4 } } }]);
-  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 4 } });
+  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 4 }, errorCode: null, errorReason: null });
 });
 
 test('settleTurn：resultType cancelled → outcome cancelled，reason 说明被叫停', () => {
@@ -97,6 +113,8 @@ test('settleTurn：resultType cancelled → outcome cancelled，reason 说明被
     reason: '回合被叫停（resultType=cancelled）',
     lastText: '',
     usage: { totalTokens: 0 },
+    errorCode: null,
+    errorReason: null,
   });
 });
 
@@ -633,5 +651,234 @@ test('非 session/event 的通知按 {method, params} 落盘', async () => {
     const telemetry = events.filter((e) => e.method === 'process/mcpTelemetry');
     assert.equal(telemetry.length, 1); // T1.1b 第 11 条：{method, params} 形状落盘
     assert.deepEqual(telemetry[0].params.foo, 'bar');
+  });
+});
+
+// ---------- 闲时回合（decisions D20，verified.md「闲时任务探针」2026-09-27，App 3.14.1） ----------
+
+// 测试用凭据：够长（scrubValues 只抹 ≥ 8 字符的值），和测试里别的字符串不重叠
+const TEST_JWT = 'test-jwt-header.test-jwt-payload.test-jwt-signature';
+const TEST_PLAN_KEY = 'test-plan-key-0123456789abcdef';
+const OFFPEAK_EXTRA = {
+  modelSelection: { providerId: 'account:bigmodel-offpeak-idle-plan', modelId: 'GLM-5.3-Flash', options: { reasoningLevel: 'high' } },
+  modelExecution: {
+    selectionScope: 'execution',
+    memoryExtraction: 'skip',
+    requestAuth: {
+      apiKey: TEST_JWT,
+      headers: { Authorization: `Bearer ${TEST_JWT}`, 'X-Coding-Plan-Api-Key': TEST_PLAN_KEY, 'X-Off-Peak-Ticket-ID': '1000000000000000001' },
+    },
+    subagents: { foregroundModel: 'submission', background: 'deny' },
+  },
+  offPeakTaskId: 'offpeak-test-1',
+  offPeakRunType: 'init',
+  toolDenylist: ['CronCreate', 'OffPeakCreate'],
+};
+
+test('send 的 extraParams 并进 session/send 参数，记录文件里 requestAuth 的 JWT 与 key 被抹掉', async () => {
+  await withSession({}, { authorizeOffPeak: true }, async ({ session, recordPath }) => {
+    const result = await session.send('闲时干活', { extraParams: OFFPEAK_EXTRA });
+    assert.equal(result.outcome, 'done');
+    const sent = readRecord(recordPath).find((m) => m.method === 'session/send');
+    assert.equal(sent.params.sessionId, SESSION_ID);
+    assert.equal(sent.params.content, '闲时干活');
+    assert.deepEqual(sent.params.modelSelection, OFFPEAK_EXTRA.modelSelection);
+    assert.equal(sent.params.offPeakTaskId, 'offpeak-test-1');
+    assert.equal(sent.params.offPeakRunType, 'init');
+    assert.deepEqual(sent.params.toolDenylist, ['CronCreate', 'OffPeakCreate']);
+    assert.equal(sent.params.modelExecution.requestAuth.apiKey, '[REDACTED]');
+    assert.equal(sent.params.modelExecution.requestAuth.headers.Authorization, '[REDACTED]');
+    const raw = await readFile(recordPath, 'utf8');
+    assert.ok(!raw.includes(TEST_JWT));
+    assert.ok(!raw.includes(TEST_PLAN_KEY));
+  });
+});
+
+test('记录文件保留票号原值，只抹 JWT 与 plan key（header 名不分大小写）', async () => {
+  const lowerHeaders = {
+    ...OFFPEAK_EXTRA,
+    modelExecution: {
+      ...OFFPEAK_EXTRA.modelExecution,
+      requestAuth: {
+        apiKey: TEST_JWT,
+        headers: { authorization: `Bearer ${TEST_JWT}`, 'x-coding-plan-api-key': TEST_PLAN_KEY, 'x-off-peak-ticket-id': '1000000000000000002' },
+      },
+    },
+  };
+  await withSession({}, { authorizeOffPeak: true }, async ({ session, recordPath }) => {
+    await session.send('第一回合', { extraParams: OFFPEAK_EXTRA });
+    await session.send('第二回合', { extraParams: lowerHeaders });
+    const sends = readRecord(recordPath).filter((m) => m.method === 'session/send');
+    assert.equal(sends[0].params.modelExecution.requestAuth.headers['X-Off-Peak-Ticket-ID'], '1000000000000000001');
+    assert.equal(sends[1].params.modelExecution.requestAuth.headers['x-off-peak-ticket-id'], '1000000000000000002');
+    assert.equal(sends[1].params.modelExecution.requestAuth.headers['x-coding-plan-api-key'], '[REDACTED]');
+    const raw = await readFile(recordPath, 'utf8');
+    assert.ok(!raw.includes(TEST_JWT));
+    assert.ok(!raw.includes(TEST_PLAN_KEY));
+  });
+});
+
+test('超时后宽限期内收到 turn.failed：outcome 仍是 timeout，errorCode 为 null', async () => {
+  // stopIgnored：stop 照常应答但不叫停，turn.failed 在宽限期（5 秒）内到达
+  const script = {
+    stopIgnored: true,
+    turns: [{ hang: true, events: [{ type: 'turn.failed', delayMs: 600, payload: { error: { code: '3102', message: 'off-peak-ticket-expired: x' } } }] }],
+  };
+  await withSession(script, {}, async ({ session }) => {
+    const result = await session.send('hi', { timeoutMs: 300 });
+    assert.equal(result.outcome, 'timeout');
+    assert.equal(result.errorCode, null);
+  });
+});
+
+test('session/send 被拒时抛出的错误按 secrets 抹掉 message 与 details 里的密钥', async () => {
+  const script = {
+    errors: {
+      'session/send': { code: -32602, message: `bad auth ${TEST_JWT}`, data: { details: [`key ${TEST_PLAN_KEY} rejected`] } },
+    },
+  };
+  await withSession(script, { secrets: [TEST_JWT, TEST_PLAN_KEY] }, async ({ session }) => {
+    await assert.rejects(session.send('hi', { extraParams: OFFPEAK_EXTRA }), (err) => {
+      assert.equal(err.name, 'ExecutorError');
+      assert.ok(!err.message.includes(TEST_JWT));
+      assert.match(err.message, /bad auth <redacted>/);
+      assert.ok(!JSON.stringify(err.details).includes(TEST_PLAN_KEY));
+      assert.deepEqual(err.details.data.details, ['key <redacted> rejected']);
+      assert.equal(err.details.code, -32602);
+      return true;
+    });
+  });
+});
+
+test('extraParams 不能覆盖 session/send 的 sessionId 与 content', async () => {
+  await withSession({}, {}, async ({ session, recordPath }) => {
+    const result = await session.send('真正的正文', { extraParams: { sessionId: 'sess_hijack', content: '被换掉的正文', offPeakTaskId: 'offpeak-x' } });
+    assert.equal(result.outcome, 'done');
+    const sent = readRecord(recordPath).find((m) => m.method === 'session/send');
+    assert.equal(sent.params.sessionId, SESSION_ID);
+    assert.equal(sent.params.content, '真正的正文');
+    assert.equal(sent.params.offPeakTaskId, 'offpeak-x');
+  });
+});
+
+test('闲时号无效的回合 → outcome failed，errorCode 为字符串 3104', async () => {
+  // verified.md 2026-09-27：号无效或过期时回合以 turn.failed 结束，payload.error.code 是字符串
+  const script = { turns: [{ fail: { code: '3104', message: 'off-peak ticket is invalid' } }] };
+  await withSession(script, { authorizeOffPeak: true }, async ({ session }) => {
+    const result = await session.send('hi', { extraParams: OFFPEAK_EXTRA });
+    assert.equal(result.outcome, 'failed');
+    assert.equal(result.errorCode, '3104');
+    assert.equal(result.reason, 'off-peak ticket is invalid');
+  });
+});
+
+test('闲时回合没推授权 → failed，errorCode provider_not_found（mock 照真机）', async () => {
+  // verified.md 闲时任务探针（2026-09-27）：没推授权或版本号算错，选闲时 provider 的回合报 provider_not_found
+  await withSession({}, {}, async ({ session }) => {
+    const result = await session.send('hi', { extraParams: OFFPEAK_EXTRA });
+    assert.equal(result.outcome, 'failed');
+    assert.equal(result.errorCode, 'provider_not_found');
+    assert.match(result.reason, /Provider Registry 中不存在 Provider: account:bigmodel-offpeak-idle-plan/);
+  });
+});
+
+test('闲时回合授权对得上、票号是假号 → failed，errorCode 3104（mock 照真机）', async () => {
+  const fake = { ...OFFPEAK_EXTRA, modelExecution: { ...OFFPEAK_EXTRA.modelExecution, requestAuth: {
+    apiKey: TEST_JWT,
+    headers: { Authorization: `Bearer ${TEST_JWT}`, 'X-Coding-Plan-Api-Key': TEST_PLAN_KEY, 'X-Off-Peak-Ticket-ID': '1000000000000000000' },
+  } } };
+  await withSession({}, { authorizeOffPeak: true }, async ({ session }) => {
+    const result = await session.send('hi', { extraParams: fake });
+    assert.equal(result.outcome, 'failed');
+    assert.equal(result.errorCode, '3104');
+  });
+});
+
+test('settleTurn：turn.failed 带 attribution.reason 时 errorReason 取它，没有为 null', () => {
+  // turn.failed 的 payload.error.attribution 形状出自 zcode.cjs 3.14.1 源码，未验证
+  const withReason = settleTurn([
+    { type: 'turn.started', payload: {} },
+    { type: 'turn.failed', payload: { error: { code: 'model_rate_limited', message: 'slow down', attribution: { source: 'provider', reason: 'rate_limited' } } } },
+  ]);
+  assert.equal(withReason.errorCode, 'model_rate_limited');
+  assert.equal(withReason.errorReason, 'rate_limited');
+  const without = settleTurn([
+    { type: 'turn.started', payload: {} },
+    { type: 'turn.failed', payload: { error: { code: '3104', message: 'x' } } },
+  ]);
+  assert.equal(without.errorReason, null);
+});
+
+test('send 的结果带 errorReason（只有 failed 才有值）', async () => {
+  const script = { turns: [{ fail: { code: 'model_request_failed', message: 'boom', attribution: { reason: 'server_error' } } }] };
+  await withSession(script, {}, async ({ session }) => {
+    const failed = await session.send('hi');
+    assert.equal(failed.outcome, 'failed');
+    assert.equal(failed.errorReason, 'server_error');
+  });
+  await withSession({}, {}, async ({ session }) => {
+    assert.equal((await session.send('hi')).errorReason, null);
+  });
+});
+
+test('正常完成的回合 errorCode 为 null', async () => {
+  await withSession({}, {}, async ({ session }) => {
+    const result = await session.send('hi');
+    assert.equal(result.outcome, 'done');
+    assert.equal(result.errorCode, null);
+  });
+});
+
+test('给了 secrets：events.jsonl 里查不到 JWT 与 key（turn.started 回显了带凭据的 send 参数）', async () => {
+  const script = { echoSendParamsInTurnStarted: true };
+  await withSession(script, { secrets: [TEST_JWT, TEST_PLAN_KEY], authorizeOffPeak: true }, async ({ session, eventsPath }) => {
+    const result = await session.send('hi', { extraParams: OFFPEAK_EXTRA });
+    assert.equal(result.outcome, 'done');
+    const raw = await readFile(eventsPath, 'utf8');
+    assert.ok(!raw.includes(TEST_JWT));
+    assert.ok(!raw.includes(TEST_PLAN_KEY));
+    // 抹完每行仍是合法 JSON，非密钥字段原样保留
+    const started = raw.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l)).find((e) => e.type === 'turn.started');
+    assert.equal(started.payload.intent.offPeakTaskId, 'offpeak-test-1');
+    assert.equal(started.payload.intent.modelExecution.requestAuth.apiKey, '<redacted>');
+    assert.equal(started.payload.intent.modelExecution.requestAuth.headers.Authorization, 'Bearer <redacted>');
+  });
+});
+
+test('没给 secrets：事件照原样落盘（旧行为不变）', async () => {
+  const script = { echoSendParamsInTurnStarted: true };
+  await withSession(script, {}, async ({ session, eventsPath }) => {
+    await session.send('hi', { extraParams: { offPeakTaskId: 'offpeak-plain-1' } });
+    const started = (await readFile(eventsPath, 'utf8')).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l)).find((e) => e.type === 'turn.started');
+    assert.deepEqual(started.payload.intent, { offPeakTaskId: 'offpeak-plain-1', sessionId: SESSION_ID, content: 'hi' });
+  });
+});
+
+test('provider/updateAccountConfig：回执回显 revision 与 provider 个数，status received', async () => {
+  await withSession({}, {}, async ({ client, recordPath }) => {
+    const params = {
+      revision: 'zcode-executor-offpeak:1',
+      basedOnZCodeBuiltinRevision: 'zcode-builtin:30:abc',
+      providers: { 'account:zai-offpeak-idle-plan': { access: { type: 'zhipu-account', entitled: true } } },
+      states: { 'account:zai-offpeak-idle-plan': { availability: 'available', entitled: true, current: true } },
+    };
+    const reply = await client.request('provider/updateAccountConfig', params);
+    assert.deepEqual(reply, { receivedRevision: 'zcode-executor-offpeak:1', providerCount: 1, status: 'received' });
+    const recorded = readRecord(recordPath).find((m) => m.method === 'provider/updateAccountConfig');
+    assert.deepEqual(recorded.params, params);
+  });
+});
+
+test('provider/updateAccountConfig：剧本可让回执 revision 对不上，或直接回 -32602', async () => {
+  await withSession({ accountConfigReply: { receivedRevision: 'stale-revision' } }, {}, async ({ client }) => {
+    const reply = await client.request('provider/updateAccountConfig', { revision: 'zcode-executor-offpeak:2', providers: {} });
+    assert.equal(reply.receivedRevision, 'stale-revision');
+  });
+  const errors = { 'provider/updateAccountConfig': { code: -32602, message: 'Invalid params' } };
+  await withSession({ errors }, {}, async ({ client }) => {
+    await assert.rejects(client.request('provider/updateAccountConfig', { revision: 'r' }), (err) => {
+      assert.equal(err.details.code, -32602);
+      return true;
+    });
   });
 });
