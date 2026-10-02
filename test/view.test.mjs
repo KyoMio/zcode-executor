@@ -141,12 +141,14 @@ test('布局：样稿数据在桌面与终端两种元素表下都能画出，�
     Text: new Set(['color', 'backgroundColor', 'dimColor', 'bold', 'italic', 'underline', 'strikethrough', 'inverse', 'wrap']),
     Svg: new Set(['source', 'alt', 'width', 'height', 'isInteractive']),
     Code: new Set(['source', 'language', 'path', 'startLine', 'format']),
+    Markdown: new Set(['key', 'text', 'dimColor']),
   };
   globalThis.h = (type, props, ...kids) => {
     for (const [k, v] of Object.entries(props ?? {})) {
       assert.ok(ALLOWED[type]?.has(k), `${type} 不认属性 ${k}`);
       assert.ok(['string', 'number', 'boolean'].includes(typeof v), `${type}.${k} 不是简单值`);
     }
+    if (type === 'Markdown') assert.ok(!/[\x00-\x08\x0b-\x1f\x7f]/.test(props.text) && props.text.length <= 10000, 'Markdown 内容有不许的控制字符或过长');
     if (type === 'Code') assert.ok(!/[\x00-\x08\x0b-\x1f\x7f]/.test(props.source) && props.source.length <= 10000, 'Code 内容有不许的控制字符或过长');
     assert.equal(props?.isInteractive, undefined, 'Svg 不开交互框（桌面版会闪）');
     return { type, props: props ?? {}, kids: kids.flat() };
@@ -224,4 +226,24 @@ test('watch 起不来的说明：看得出找不到 node 才提 nodePath', () =>
   assert.equal(startFailure('env: node: No such file or directory'), '启动 watch 失败：env: node: No such file or directory。可在插件配置里填写 node 路径（nodePath）');
   assert.equal(startFailure('zcode-executor: 不认识的命令 watch'), '启动 watch 失败：zcode-executor: 不认识的命令 watch');
   assert.equal(startFailure(''), '启动 watch 失败：watch 没有输出就退出了');
+});
+
+test('布局：快照带 replyMarkdown 时回复按 Markdown 画，没有时退回逐行；终端与桌面一样', async () => {
+  globalThis.h = (type, props, ...kids) => ({ type, props: props ?? {}, kids: kids.flat() });
+  const { drawPane } = await import('../hooks/pane.mjs');
+  const find = (node, type) => (node && typeof node === 'object'
+    ? (node.type === type ? [node] : []).concat(node.kids.flatMap((k) => find(k, type))) : []);
+  const md = '## 完成情况\n\n- 改了 `a.mjs`\r\n- 测试 **707** 全过\x1b';
+  const running = snap({ id: 'r', phase: 'running', since: ago(1), reply: ['旧的逐行回复'], replyMarkdown: md });
+  const ended = snap({ id: 'e', phase: 'exited', lastOutcome: 'done', since: ago(2), reply: ['一', '二', '三', '四', '五'] });
+  for (const el of [{ Box: 'Box', Text: 'Text', Code: 'Code', Svg: 'Svg', Markdown: 'Markdown' }, { Box: 'Box', Text: 'Text', Code: 'Code', Markdown: 'Markdown' }]) {
+    const tree = drawPane(el, { sessions: [running, ended], repo: '/repo/app', updatedAt: '12:00:00', now: NOW });
+    const mds = find(tree, 'Markdown');
+    assert.equal(mds.length, 1); // 只有带 replyMarkdown 的执行中卡片
+    assert.equal(mds[0].props.text, '## 完成情况\n\n- 改了 `a.mjs`\n- 测试 **707** 全过'); // CR 与控制字符清掉
+    const texts = JSON.stringify(tree);
+    assert.ok(!texts.includes('旧的逐行回复')); // 有 Markdown 就不再画逐行
+    assert.ok(texts.includes('二') && !texts.includes('"一"')); // 刚结束卡片退回逐行，只留最后 4 行
+  }
+  delete globalThis.h;
 });

@@ -15,6 +15,7 @@ export type ZcodeExecutorSnapshot = {
   lastEndedAt: string | null;
   lastEndOutcome: string | null;
   reply: string[];
+  replyMarkdown?: string;
   activeTool: ZcodeExecutorTool | null;
   recentTools: ZcodeExecutorTool[];
   pendingDetail:

@@ -31,7 +31,7 @@ const waitSvg = (size) => svgDoc(size, `<style>
 // 终端没有 Svg：执行中用转圈字符，由 register.mjs 定时换帧（frame 递增）
 export const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 
-// Code 只许制表符与换行两种控制字符、至多 10000 字，否则整棵树被拒（类型声明 CodeProps）
+// Code 与 Markdown 只许制表符与换行两种控制字符、至多 10000 字，否则整棵树被拒（类型声明 CodeProps、MarkdownProps）
 const codeText = (text) => String(text).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').slice(0, 10000);
 
 const hhmm = (iso) => {
@@ -49,7 +49,7 @@ const hhmm = (iso) => {
  *   frame      终端转圈字符的帧号
  */
 export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message = null, now, frame = 0 }) {
-  const { Box, Text, Code, Svg } = el;
+  const { Box, Text, Code, Svg, Markdown } = el;
   const T = (props, ...kids) => h(Text, { wrap: 'truncate-end', ...props }, ...kids);
   const showRepo = repo === null || repo === undefined; // 显示全部项目时才标仓库名
   const sections = sectionsOf(sessions, now);
@@ -68,6 +68,11 @@ export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message
         h(Text, { color, bold: true }, label),
         T({ bold: true }, ` ${s.title || s.id}`)),
       corner && h(Text, { dimColor: true }, corner));
+  // 回复：快照带 replyMarkdown（v0.4.1 起，最新一条消息的原文）就按 Markdown 画，像 Claude 自己的回复一样；
+  // 旧版 watch 没有这个字段时退回逐行显示
+  const replyOf = (s, lastLines) => (s.replyMarkdown && Markdown
+    ? h(Box, { marginTop: 1, paddingLeft: 2 }, h(Markdown, { text: codeText(s.replyMarkdown) }))
+    : replyBlock(lastLines ? (s.reply ?? []).slice(-lastLines) : (s.reply ?? [])));
   const replyBlock = (lines) => lines.length > 0 && h(Box, { flexDirection: 'column', marginTop: 1 },
     ...lines.map((line) => h(Box, { flexDirection: 'row' },
       h(Text, { color: 'success' }, '┃ '),
@@ -96,7 +101,7 @@ export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message
     return card('success',
       headRow(icon('pulse', 16), head.label, head.color, s, cornerOf(s, now)),
       meta(s),
-      replyBlock(s.reply ?? []),
+      replyOf(s),
       s.activeTool && h(Box, { flexDirection: 'row', marginTop: 1 },
         h(Text, { color: 'success', bold: true }, `▸ ${s.activeTool.toolName}  `),
         T({}, s.activeTool.summary ?? '')),
@@ -110,7 +115,7 @@ export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message
     return card(o.color,
       headRow(h(Text, { color: o.color, bold: true }, o.glyph), o.label, o.color, s, s.since ? hhmm(s.since) : null),
       meta(s),
-      replyBlock((s.reply ?? []).slice(-4)));
+      replyOf(s, 4));
   };
 
   const doneRow = (s) => {
