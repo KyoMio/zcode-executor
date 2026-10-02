@@ -182,12 +182,21 @@ export function startFailure(reason) {
   return `启动 watch 失败：${text}${noNode ? '。可在插件配置里填写 node 路径（nodePath）' : ''}`;
 }
 
-/** 收起时回复区的一行预览：第一行有内容的文字，去掉开头的 Markdown 记号（标题、列表、引用、表格竖线）与加粗。 */
+/**
+ * 收起时回复区的一行预览：第一行有内容的文字，只去掉纯排版的 Markdown 记号，内容里的符号一个不动：
+ * 整行的分隔线（`---` `***` `___`）跳过；行首的标题 `# `、无序列表 `- ` `* ` `+ `、引用 `> `（记号后面必须跟空格才算）；表格行（以 `|` 开头）首尾的竖线；
+ * 反引号代码以外成对的 `**加粗**` 记号。有序列表的编号保留（表示步骤顺序）；`__` 一律不动（常是 `__init__` 这类内容）。
+ */
 export function previewLine(markdown) {
+  const unbold = (text) => text.split(/(`[^`]*`)/).map((part, i) => (i % 2 === 1 ? part : part.replace(/\*\*(?=\S)(.+?)(?<=\S)\*\*/g, '$1'))).join('');
   for (const raw of String(markdown ?? '').split('\n')) {
     const line = raw.trim();
-    if (!line || line === '…' || /^(```|~~~)/.test(line) || /^\|?[\s|:-]+\|?$/.test(line)) continue;
-    const text = line.replace(/^(#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s*)/, '').replace(/^\||\|$/g, '').replace(/\*\*|__/g, '').trim();
+    if (!line || line === '…' || /^(```|~~~)/.test(line)) continue;
+    if (line.startsWith('|') && /^[\s|:-]+$/.test(line)) continue; // 表格分隔行 | --- | :-: |
+    if (/^([-*_])(\s*\1){2,}\s*$/.test(line)) continue; // 分隔线 --- *** ___
+    let text = line.replace(/^(#{1,6}|[-*+]|>)\s+/, '');
+    if (line.startsWith('|')) text = text.replace(/^\|/, '').replace(/\|$/, '');
+    text = unbold(text).trim();
     if (text) return text;
   }
   return '';

@@ -257,6 +257,18 @@ test('收起时的预览行：第一行有内容的文字，去掉 Markdown 记�
   assert.equal(previewLine('```js\nconst a = 1;\n```'), 'const a = 1;');
   assert.equal(previewLine('| 项 | 结果 |\n| --- | --- |'), '项 | 结果');
   assert.equal(previewLine(''), '');
+  // 内容里的符号不能去掉
+  assert.equal(previewLine('改了 `__init__.py` 与 `**kwargs`'), '改了 `__init__.py` 与 `**kwargs`');
+  assert.equal(previewLine('Python 的 __name__ 判断'), 'Python 的 __name__ 判断');
+  assert.equal(previewLine('**加粗** 与 `**代码里**`'), '加粗 与 `**代码里**`');
+  assert.equal(previewLine('1. 先读任务单'), '1. 先读任务单'); // 有序编号保留
+  assert.equal(previewLine('a | b 两种写法'), 'a | b 两种写法'); // 不是表格行，竖线不动
+  assert.equal(previewLine('#123 已修'), '#123 已修'); // # 后没空格不是标题
+  assert.equal(previewLine('-1 度、->、*重要*、C++'), '-1 度、->、*重要*、C++');
+  assert.equal(previewLine('> 引用的话'), '引用的话');
+  assert.equal(previewLine('- 列表项'), '列表项');
+  assert.equal(previewLine('---\n正文'), '正文'); // 整行分隔线是排版，跳过
+  assert.equal(previewLine('--- 之后的说明'), '--- 之后的说明'); // 后面有字就是内容
 });
 
 test('回复默认收起成一行预览加「展开回复」按钮，按下后改由 Markdown 显示全文并给「收起」', async () => {
