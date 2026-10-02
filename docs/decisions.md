@@ -192,7 +192,7 @@ provider，不能靠它临时插入。写用户自己的 `~/.zcode/v2/provider_c
 
 ## D16 Jev 改为可选前筛，原 ZCode 快筛完整保留
 
-定了什么：按已批准的 [修复与优化方案](jev-hardening-plan.md)，Jev 是提前通过层，不再替代 ZCode 快筛。红线和 `allow_once` 在前；非空白 `review.jev.apiKey` 启用 Jev。证据充分且五项概率均达标的 pass 提前 allow；flag/error/skip、超时、非法响应和 adapter 异常都进入原 ZCode fast + low 快筛，结果未通过或无法解析才慢判。原快筛调用失败仍 `review-failed` / ask，慢判失败仍 ask。无 key 保留原链路，关闭 review 的原挂起合同不变。
+定了什么：按已批准的 修复与优化方案（`docs/jev-hardening-plan.md`，本地记录，不进仓库），Jev 是提前通过层，不再替代 ZCode 快筛。红线和 `allow_once` 在前；非空白 `review.jev.apiKey` 启用 Jev。证据充分且五项概率均达标的 pass 提前 allow；flag/error/skip、超时、非法响应和 adapter 异常都进入原 ZCode fast + low 快筛，结果未通过或无法解析才慢判。原快筛调用失败仍 `review-failed` / ask，慢判失败仍 ask。无 key 保留原链路，关闭 review 的原挂起合同不变。
 
 为什么：保留原快筛的判断机会，让 Jev 不能提前通过时回到既有审批链，而不是强制慢判。前筛仍有提前放行权，增加一层本身不是安全证明；必要证据门槛、输入脱敏、响应校验和严格 deadline 必须同时成立。
 
@@ -275,7 +275,7 @@ z.ai 域名强制客户端签名，只有账号型 off-peak 免签；而且 CLI 
 与 plan key 同一待遇——只进内存、secrets 抹除名单和 JSON-RPC 参数，不落盘、不进 runs/ 和日志（探针已确认 CLI
 不把 requestAuth 写进 ~/.zcode/cli）；免费取号次数有限，票过期重取要设上限；就绪只有约 5 分钟，运行最长 3 小时。
 
-规则（2026-09-27 grill 定下，细节见 docs/SPEC-offpeak.md）：
+规则（2026-09-27 grill 定下，细节见 docs/SPEC-offpeak.md，本地记录，不进仓库）：
 - 入口是 `send <id> <正文> --offpeak`；会话没有类型，闲时是投递的属性。闲时投递独占空闲会话：会话有活 runner 或
   队列非空就拒绝（退出码 2）；排号期间同一会话的其他投递也拒绝。约定另开会话专门发闲时投递，完成后可在同一会话
   发普通或闲时投递返工。
