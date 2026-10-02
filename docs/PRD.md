@@ -1,6 +1,6 @@
 # PRD — zcode-executor
 
-> 状态：第一版已实现（2026-09-08）；模型审批部分已按批准的 [Jev 修订路线](jev-hardening-plan.md) 更新为目标合同，实施与验证进度以对应记录为准。需求于 2026-09-07 对齐（31 个问题一轮轮问完）。
+> 状态：第一版已实现（2026-09-08）；模型审批部分已按批准的 Jev 修订路线（`docs/jev-hardening-plan.md`，本地记录，不进仓库） 更新为目标合同，实施与验证进度以对应记录为准。需求于 2026-09-07 对齐（31 个问题一轮轮问完）。
 > 术语以 [CONTEXT.md](CONTEXT.md) 为准；为什么这么定见 [decisions.md](decisions.md)；
 > 本机实测事实见 [verified.md](verified.md)；接手开发见 `docs/handoff/handoff-20260908.md`（本地记录，不进仓库）。
 
@@ -87,11 +87,11 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 - 一条会话同一时刻最多一个挂起（审批在回合内串行）。`approve` / `deny` / `answer` 应答的就是那一个。
 - `--thought` 的值在建会话前对着该模型的合法档位校验，不合法退出码 2（`session/create` 遇到非法值会静默忽略，不能靠它报错）。
 - 正文写 `-` 从 stdin 读。`--json` 给机器可读结构。
-- `doctor` 的退出码与 `--json.ok`：①–③ 有一步失败，或 ⑤ 的结论是「接口变了」（changed），`ok` 为 false、退出码 1；⑤ 的另外三种结论（正常、暂时不可用、不适用）不影响两者。⑤ 加进来之前 `ok` 只看 ①–③（offpeak 分支、2026-09-27 起才看 ⑤）。`--json` 加 `offpeak: {state, layer, expected, actual, reason, logid, appVersion, verifiedAppVersion}`；`doctor --offpeak --json` 只输出 `{ok, offpeak}`（另外，测试用的闲时服务地址环境变量 `ZCODE_EXECUTOR_OFFPEAK_ORIGIN` 配错时，`doctor --offpeak` 也以 1 退出）。
+- `doctor` 的退出码与 `--json.ok`：①–③ 有一步失败，或 ⑤ 的结论是「接口变了」（changed），`ok` 为 false、退出码 1；⑤ 的另外三种结论（正常、暂时不可用、不适用）不影响两者。⑤ 加进来之前 `ok` 只看 ①–③（2026-09-27 起才看 ⑤）。`--json` 加 `offpeak: {state, layer, expected, actual, reason, logid, appVersion, verifiedAppVersion}`；`doctor --offpeak --json` 只输出 `{ok, offpeak}`（另外，测试用的闲时服务地址环境变量 `ZCODE_EXECUTOR_OFFPEAK_ORIGIN` 配错时，`doctor --offpeak` 也以 1 退出）。
 
-### 闲时投递（只在本地 `offpeak` 分支上）
+### 闲时投递
 
-规格见 [SPEC-offpeak.md](SPEC-offpeak.md)，为什么这么定见 decisions D20。
+规格见 `docs/SPEC-offpeak.md`（本地记录，不进仓库），为什么这么定见 decisions D20。
 
 - **是什么**：投递的一个属性，会话没有类型。回合用 Coding Plan 订阅的免费闲时算力跑，不占套餐额度；开跑时间由服务器决定——先取号排队，号就绪才开跑。验收与普通投递相同。只支持个人版 Coding Plan，会话的模型要在闲时模型表里。
 - **谁来选**：派单默认普通投递，闲时由用户选择——Claude 每个对话第一次派单前跑 `quota` 查今天用量，把「可以改走闲时、今天已用几次、现在能不能取」告诉用户，说完照常普通投递、不等回答，用户选了才在之后的投递发 `--offpeak`；返工同样默认普通投递（decisions D20 2026-09-28 补充）。
@@ -203,7 +203,7 @@ Flash 类模型思考等级不要往低调，效果差。
 - 退出码 5 的两种处理：审批请求用 AskUserQuestion 转给人再 `approve` / `deny`；提问自己先判断能不能答，能答就 `answer`。
 - `--steer` 是插话不是打断；要打断先 `cancel`。
 - `follow` 用后台任务起，别在前台 timeout 包着等。
-- 闲时投递（只在 `offpeak` 分支）：什么时候用、另开会话发、退出码 2 的几种原因怎么处理、`--resume` 与 `cancel`、`doctor --offpeak`。
+- 闲时投递：什么时候用、另开会话发、退出码 2 的几种原因怎么处理、`--resume` 与 `cancel`、`doctor --offpeak`。
 - 不要在 ZCode App 里打开正在跑的会话（共用 sqlite，没有跨进程锁）。
 - git 操作一律 `-C <绝对路径>`，主仓合并、执行副本切分支分清楚；切新分支前核对 main 已含上一单（踩过）。
 

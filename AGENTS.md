@@ -4,7 +4,7 @@ Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给�
 在 worktree 里隔离执行，用 git diff 和测试客观验收。
 
 **状态（2026-09-21）**：第一版完成并已适配 ZCode App 3.12.2（decisions D14）；对照 ZCode 开源源码 3.14.0 修正了 `session/stop`、回合结算与插话（插话改走 `v4/command`，D17），并接上账号型 Coding Plan（凭据文件来源，D19）；`npm test` 438 个用例，真机检查点 6b/6c 走通。
-术语在 [docs/CONTEXT.md](docs/CONTEXT.md)。本地开发记录（`docs/handoff/`、`docs/tasks/`、`docs/PLAN*.md`、`docs/archive/`）不进 GitHub，只在开发机上有；
+术语在 [docs/CONTEXT.md](docs/CONTEXT.md)。本地开发记录（`docs/handoff/`、`docs/tasks/`、`docs/PLAN*.md`、`docs/archive/`、`docs/SPEC-offpeak.md`、`docs/jev-*-plan.md`、`docs/research/`）不进 GitHub，只在开发机上有；
 有它们就从 `docs/PLAN-v4.md` 与 `docs/handoff/handoff-20260908.md` 接手，没有就从 README 与 docs/PRD.md 开始。
 
 ## 分层
