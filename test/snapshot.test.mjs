@@ -272,6 +272,7 @@ test('snapshotOf：running 给 reply/activeTool/recentTools/task，since 取 cur
   ]); // 6 个完成只留最后 5 个（Write c1 被挤掉），新的在后
   assert.equal(snap.since, T(1)); // current.startedAt 优先于 state.startedAt
   assert.equal(snap.lastEndedAt, null);
+  assert.equal(snap.lastEndOutcome, null); // 还没有 last.json：结束结果为 null
   assert.equal(snap.offpeakQueue, null);
   assert.equal(snap.pendingDetail, null);
 });
@@ -343,6 +344,7 @@ test('snapshotOf：exited/idle 的 since 按 last.endedAt → state.updatedAt �
   assert.equal(done.phase, 'exited');
   assert.equal(done.since, T(1));
   assert.equal(done.lastEndedAt, T(1));
+  assert.equal(done.lastEndOutcome, 'done'); // SPEC 快照表新增行：结束结果随 last.json 走
   assert.equal(done.lastOutcome, 'done');
   assert.equal(done.task, 'docs/from-last.md'); // current 没有就取 last.task
 
