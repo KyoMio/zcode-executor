@@ -290,9 +290,21 @@ test('list/status --json 的 repo：登记簿带 repoRoot 时直接用它，cwd 
   const entry = { id: 'x_00000001', sessionId: null, title: 't', cwd: '/nonexistent/wt', repoRoot: '/nonexistent/main-repo' };
   const { run } = await setupRegistry([entry]);
   const listed = JSON.parse(run(['list', '--json']).stdout);
-  assert.equal(listed.sessions[0].repo, '/nonexistent/main-repo');
+  assert.equal(listed.sessions[0].repo, '/nonexistent/main-repo'); // realpath 失败（目录没了）原样返回
   const status = JSON.parse(run(['status', 'x_00000001', '--json']).stdout);
   assert.equal(status.repo, '/nonexistent/main-repo');
+});
+
+test('list --json 的 repo：repoRoot 是指向主仓库的符号链接时给真实路径（与 hello 同口径）', async (t) => {
+  const workParent = await mkdtemp(path.join(os.tmpdir(), 'zcode-repo-root-'));
+  dirs.push(workParent);
+  const main = initRepo(workParent, 'repo');
+  const link = path.join(workParent, 'root-link');
+  await symlink(main, link); // new 写 repoRoot 时没转真实路径：repoOf 里补一道 realpath
+  const entry = { id: 'x_00000001', sessionId: null, title: 't', cwd: null, repoRoot: link };
+  const { run } = await setupRegistry([entry]);
+  const listed = JSON.parse(run(['list', '--json']).stdout);
+  assert.equal(listed.sessions[0].repo, main);
 });
 
 test('list/status --json 的 repo：cwd 是真 worktree 且登记簿没有 repoRoot 时，给主仓库根', async (t) => {
