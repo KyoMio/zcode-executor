@@ -11,3 +11,7 @@ docs/archive/
 docs/SPEC-offpeak.md
 docs/jev-*-plan.md
 docs/research/
+docs/SPEC-watch-pane.md
+
+# Claude Code 按目录加载本插件（--plugin-dir / CLAUDE_CODE_PLUGIN_DIRS）时引擎写的类型配置
+/tsconfig.json

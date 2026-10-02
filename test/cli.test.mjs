@@ -9,6 +9,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { worktreeStatus } from '../lib/cli/common.mjs';
 import { startMock, readRecord, killAll } from './helpers.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -279,6 +280,100 @@ test('new：人读输出一行本地 id 开头（D13）', async () => {
   const run = runNew(env, ['--cwd', env.cwd, '--title', 't']);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
   assert.match(run.stdout.trim(), /^new: x_[0-9a-f]{8} \S+\/\S+ 思考 \S+ \S/);
+});
+
+// ---------- repo（所属仓库，SPEC-watch-pane C）----------
+
+// 手写登记簿起环境：list/status 只读登记簿与 runs/，不起 mock、不碰 zcode。
+// 返回的 run() 对同一个 home 跑任意子命令，方便 list 与 status 对照断言
+async function setupRegistry(entries) {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'zcode-repo-home-'));
+  dirs.push(home);
+  await writeFile(path.join(home, 'sessions.json'), JSON.stringify({ sessions: Object.fromEntries(entries.map((e) => [e.id, e])) }));
+  const env = { ...process.env, ZCODE_EXECUTOR_HOME: home };
+  return {
+    home,
+    run: (args) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env, timeout: 60_000 }),
+  };
+}
+
+// git init + 一个空提交（worktree add 要有 HEAD），返回 realpath 后的仓库根（macOS /var → /private/var）
+function initRepo(workParent, name) {
+  const repo = path.join(workParent, name);
+  execFileSync('git', ['init', '--quiet', repo]);
+  execFileSync('git', ['-C', repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init']);
+  return realpathSync(repo);
+}
+
+test('list/status --json 的 repo：登记簿带 repoRoot 时直接用它，cwd 不存在也照给', async () => {
+  const entry = { id: 'x_00000001', sessionId: null, title: 't', cwd: '/nonexistent/wt', repoRoot: '/nonexistent/main-repo' };
+  const { run } = await setupRegistry([entry]);
+  const listed = JSON.parse(run(['list', '--json']).stdout);
+  assert.equal(listed.sessions[0].repo, '/nonexistent/main-repo'); // realpath 失败（目录没了）原样返回
+  const status = JSON.parse(run(['status', 'x_00000001', '--json']).stdout);
+  assert.equal(status.repo, '/nonexistent/main-repo');
+});
+
+test('list --json 的 repo：repoRoot 是指向主仓库的符号链接时给真实路径（与 hello 同口径）', async (t) => {
+  const workParent = await mkdtemp(path.join(os.tmpdir(), 'zcode-repo-root-'));
+  dirs.push(workParent);
+  const main = initRepo(workParent, 'repo');
+  const link = path.join(workParent, 'root-link');
+  await symlink(main, link); // new 写 repoRoot 时没转真实路径：repoOf 里补一道 realpath
+  const entry = { id: 'x_00000001', sessionId: null, title: 't', cwd: null, repoRoot: link };
+  const { run } = await setupRegistry([entry]);
+  const listed = JSON.parse(run(['list', '--json']).stdout);
+  assert.equal(listed.sessions[0].repo, main);
+});
+
+test('list/status --json 的 repo：cwd 是真 worktree 且登记簿没有 repoRoot 时，给主仓库根', async (t) => {
+  const workParent = await mkdtemp(path.join(os.tmpdir(), 'zcode-repo-work-'));
+  dirs.push(workParent);
+  const main = initRepo(workParent, 'repo');
+  const wt = path.join(workParent, 'wt');
+  execFileSync('git', ['-C', main, 'worktree', 'add', '--quiet', wt]);
+  const entry = { id: 'x_00000002', sessionId: null, title: 't', cwd: realpathSync(wt) }; // 刻意没有 repoRoot 键
+  const { run } = await setupRegistry([entry]);
+  const listed = JSON.parse(run(['list', '--json']).stdout);
+  assert.equal(listed.sessions[0].repo, main);
+  const status = JSON.parse(run(['status', 'x_00000002', '--json']).stdout);
+  assert.equal(status.repo, main);
+});
+
+test('worktreeStatus：cwd 就是主仓库时 repo 是它自己，repoRoot 仍为 null', async (t) => {
+  const workParent = await mkdtemp(path.join(os.tmpdir(), 'zcode-repo-main-'));
+  dirs.push(workParent);
+  const main = initRepo(workParent, 'repo');
+  assert.deepEqual(worktreeStatus(main), { isWorktree: false, repoRoot: null, repo: main });
+  const entry = { id: 'x_00000003', sessionId: null, title: 't', cwd: main };
+  const { run } = await setupRegistry([entry]);
+  assert.equal(JSON.parse(run(['list', '--json']).stdout).sessions[0].repo, main);
+  assert.equal(JSON.parse(run(['status', 'x_00000003', '--json']).stdout).repo, main);
+});
+
+test('worktreeStatus：cwd 是指向主仓库的符号链接时，repo 取真实路径', async (t) => {
+  const workParent = await mkdtemp(path.join(os.tmpdir(), 'zcode-repo-link-'));
+  dirs.push(workParent);
+  const main = initRepo(workParent, 'repo');
+  const link = path.join(workParent, 'link');
+  await symlink(main, link); // git 对主仓库给相对路径 .git，拼出来是链接路径，repo 必须 realpath
+  assert.deepEqual(worktreeStatus(link), { isWorktree: false, repoRoot: null, repo: main });
+});
+
+test('list/status --json 的 repo：cwd 不是 git 仓库或已不存在时为 null，命令照常退出码 0', async (t) => {
+  const plain = await mkdtemp(path.join(os.tmpdir(), 'zcode-repo-plain-')); // 存在但不是 git 仓库
+  dirs.push(plain);
+  const entries = [
+    { id: 'x_00000004', sessionId: null, title: '非仓库', cwd: plain },
+    { id: 'x_00000005', sessionId: null, title: '已删除', cwd: '/nonexistent/xyz' },
+  ];
+  const { run } = await setupRegistry(entries);
+  const listed = run(['list', '--json']);
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.deepEqual(JSON.parse(listed.stdout).sessions.map((s) => s.repo), [null, null]);
+  const status = run(['status', 'x_00000005', '--json']);
+  assert.equal(status.status, 0, status.stderr);
+  assert.equal(JSON.parse(status.stdout).repo, null);
 });
 
 test('doctor：找不到内置 provider 文件（App 低于 3.12）→ 退出码 1，--json zcode.ok=false，③ 跳过', async () => {

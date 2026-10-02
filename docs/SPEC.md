@@ -1,6 +1,6 @@
 # SPEC — zcode-executor 第一版
 
-> 状态：2026-09-07 由 [PRD.md](PRD.md) 和对齐记录综合而成，2026-09-08 第一版实现完成；2026-09-18 的「Jev 可选快筛」是已确认、待按 PLAN 阶段 6 实现的增量，其余章节描述当前行为。
+> 状态：2026-09-07 由 [PRD.md](PRD.md) 和对齐记录综合而成，2026-09-08 第一版实现完成；2026-09-18 的「Jev 可选快筛」已实现（D16）。闲时投递（D20）与观察面板（D22）的规格是本地记录，行为以 PRD 第 4 节为准；本文件其余章节描述第一版的实现与测试决定。
 > 术语按 [CONTEXT.md](CONTEXT.md)；决策理由在 [decisions.md](decisions.md)；
 > 接手开发在 `docs/handoff/handoff-20260908.md`（本地记录，不进仓库）。
 > 本仓库没有接工单系统，这份文件就是需求规格；实现任务仍拆到 `docs/PLAN.md` 与 `docs/tasks/`。
@@ -100,8 +100,8 @@ Jev 快筛：
 
 - 一个客户端对象管一个子进程：发请求返回 Promise 按 id 配对；收到带 `method` 和 `id` 的消息视为反向请求，
   交给注册的处理器；同一 `requestId` 的反向请求每秒重发，只处理第一次，后续丢弃但不报错。
-- 建会话前先选定 provider 并写一份个人 provider 文件：从 `~/.zcode/v2/config.json` 的 `provider` 里按等级
-  与 provider 优先级选出一项，换算成个人 provider 文件（decisions D14，形状见
+- 建会话前先选定 provider 并写一份个人 provider 文件：provider 有两个来源——账号型 Coding Plan（`~/.zcode/v2/credentials.json` 解出的平台 key 加内置 provider 文件的模型表，D19）
+  与 `~/.zcode/v2/config.json` 的 `provider`；按等级与 provider 优先级选出一项，换算成个人 provider 文件（decisions D14，形状见
   `docs/reference/zcode-app-server-protocol.md`「3.12.2 变化」），路径经 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`
   环境变量传给子进程；不传则 create 被拒。（3.12 前是读全部启用的 provider、过滤掉 models 为空或
   `enabled:false` 的，构造成 `workspace/updateProviderRegistry` 的 registry 整表推给子进程，此法 3.12 起
@@ -264,8 +264,8 @@ Jev 快筛：
 
 ### 外壳
 
-- CLI 子命令：`doctor、models、list、new、send、follow、status、cancel、approve、deny、answer`，参数见 PRD 第 4 节。
-- `doctor` 三步零 token：`zcode.cjs` 旁边找得到 `config/provider/zcode-builtin.json`（3.12+ 判据，3.12 前是版本 ≥ 0.14.8，见 decisions D14）；`~/.zcode/v2/config.json` 存在；真握手一次——模型清单与等级分配仍是从 config.json 本地算，握手只是把 create 返回的 `settings.model.available` 拿来比对，缺的进警告，并多报一句选中 provider 在 config.json 里有没有明文 apiKey。另有一行本地状态显示审批 pipeline（可选 Jev 前筛 → ZCode 快筛 → 慢判）；不联网探测 Jev。
+- CLI 子命令：`doctor、models、list、new、send、follow、status、cancel、approve、deny、answer、quota、watch`，参数见 PRD 第 4 节。
+- `doctor` 不花额度，共五步（PRD 第 4 节）：`zcode.cjs` 旁边找得到 `config/provider/zcode-builtin.json`（3.12+ 判据，3.12 前是版本 ≥ 0.14.8，见 decisions D14）；provider 两个来源各报状态（D19）；真握手一次——模型清单与等级分配仍是从 config.json 本地算，握手只是把 create 返回的 `settings.model.available` 拿来比对，缺的进警告，并多报一句选中 provider 在 config.json 里有没有明文 apiKey。另有一行本地状态显示审批 pipeline（可选 Jev 前筛 → ZCode 快筛 → 慢判）；不联网探测 Jev。第 ⑤ 步自检闲时接口，会联网（D20）。
 - skill 名 `zcode-executor`，触发词「让 zcode 去做」「派给 zcode」。内容按 PRD 第 9 节。
 - 任务单模板加一行提醒投递时带 `--task`。
 
@@ -279,7 +279,7 @@ Jev 快筛：
 1. **CLI 对 mock app-server**（主接缝）。`test/mock-appserver.mjs` 是一个 stdio 上说 app-server 协议的假进程，
    行为由剧本 JSON 驱动（create 返回什么、send 后推哪些事件、什么时候发审批请求或提问、哪个方法回错误、
    处理完哪个方法就崩），收到的每条消息追加到记录文件供断言。CLI 通过环境变量指向它。
-   覆盖：doctor 三步、new 的白名单与等级与思考等级校验、send --wait 的六种退出码、后台 runner 与 follow / status、
+   覆盖：doctor 各步、new 的白名单与等级与思考等级校验、send --wait 的六种退出码、后台 runner 与 follow / status、
    队列顺序与崩溃重投、锁互斥、cancel、approve / deny / answer 的应答形状与事件、create 返回的模型表到等级的分配。
    落点：`test/mock-appserver.mjs` 与 `test/cli.test.mjs`。
 2. **闸门的纯函数**。红线匹配、提示词组装、快筛与慢判的输出解析、等级自动分配，都是无副作用函数，

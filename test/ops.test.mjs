@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { appendFile, mkdir, mkdtemp, writeFile, readFile, readdir, rm } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -46,8 +46,10 @@ const envFor = (home, mock, zcodeConfigPath) => ({
   ...mock.env,
 });
 
-// 造环境：mock + 临时家目录（白名单指到 git 仓库）+ new 一条会话
-async function setupOps(t, { script, title = 't' } = {}) {
+// 造环境：mock + 临时家目录（白名单指到 git 仓库）+ new 一条会话。
+// repo 参数给测试自己建好的仓库（要已 realpath）：剧本里得提前用会话 cwd 拼绝对路径时用；
+// 缺省照旧自建 workParent/repo
+async function setupOps(t, { script, title = 't', repo: repoArg } = {}) {
   t.after(() => {
     killAll(runnerPids);
     killAll(mockPids);
@@ -56,12 +58,18 @@ async function setupOps(t, { script, title = 't' } = {}) {
   dirs.push(mock.dir);
   const home = await mkdtemp(path.join(os.tmpdir(), 'zcode-ops-home-'));
   dirs.push(home);
-  const workParent = await mkdtemp(path.join(os.tmpdir(), 'zcode-ops-work-'));
-  dirs.push(workParent);
-  const repo = path.join(workParent, 'repo');
-  execFileSync('git', ['init', '--quiet', repo]);
-  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-  await writeFile(path.join(home, 'config.json'), JSON.stringify({ allowedRoots: [workParent], review: { enabled: false } })); // T3.2：这组测的是挂起管线本身，模型审批关掉（开了会自动放行）
+  let workParent;
+  let repo;
+  if (repoArg) {
+    repo = repoArg;
+  } else {
+    workParent = await mkdtemp(path.join(os.tmpdir(), 'zcode-ops-work-'));
+    dirs.push(workParent);
+    repo = path.join(workParent, 'repo');
+    execFileSync('git', ['init', '--quiet', repo]);
+    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+  }
+  await writeFile(path.join(home, 'config.json'), JSON.stringify({ allowedRoots: [workParent ?? path.dirname(repo)], review: { enabled: false } })); // T3.2：这组测的是挂起管线本身，模型审批关掉（开了会自动放行）
   const zcodeConfigDir = await mkdtemp(path.join(os.tmpdir(), 'zcode-ops-zconfig-'));
   dirs.push(zcodeConfigDir);
   const zcodeConfigPath = path.join(zcodeConfigDir, 'config.json');
@@ -259,7 +267,8 @@ test('status：--tools 取最近工具调用，上下文占用来自 turn.comple
   assert.equal(out.tools[0].toolName, 'Bash'); // 最近 1 条
   assert.equal(typeof out.totalTokens, 'number');
   const human = runBin(env.env, ['status', env.entry.id]);
-  assert.match(human.stdout, /最近工具: Write\(started\)、Bash\(started\)/); // 不传 --tools 默认 5 条
+  // 人读的最近工具按调用列出（SPEC-watch-pane B）；这两行没有 toolCallId 也没有参数，只写工具名
+  assert.match(human.stdout, /最近工具: Write、Bash/); // 不传 --tools 默认 5 次
   assert.match(human.stdout, /上下文: \d+ tokens/);
 });
 
@@ -806,13 +815,53 @@ test('status 最近工具：batch/result 跳过、toolCallId 反查、路径显�
   runBin(env.env, ['send', env.entry.id, '看最近工具', '--wait']);
   const out = JSON.parse(runBin(env.env, ['status', env.entry.id, '--tools', '5', '--json']).stdout);
   assert.deepEqual(out.tools, [
-    { toolName: 'Write', kind: 'scheduled', file: 'x.md' },
-    { toolName: 'Write', kind: 'started', file: 'x.md' },
-    { toolName: 'Write', kind: 'result', file: 'x.md' }, // result 行没有 toolName，靠 toolCallId 反查
-    { toolName: 'Bash', kind: 'scheduled', file: null }, // batch 行没有 toolCallId，直接跳过
+    { toolName: 'Write', kind: 'scheduled', file: 'x.md', summary: 'docs/deep/x.md' },
+    { toolName: 'Write', kind: 'started', file: 'x.md', summary: 'docs/deep/x.md' },
+    { toolName: 'Write', kind: 'result', file: 'x.md', summary: 'docs/deep/x.md' }, // result 行没有 toolName，靠 toolCallId 反查
+    { toolName: 'Bash', kind: 'scheduled', file: null, summary: 'ls' }, // batch 行没有 toolCallId，直接跳过
   ]);
   const human = runBin(env.env, ['status', env.entry.id]);
-  assert.match(human.stdout, /最近工具: Write\(x\.md\)、Write\(x\.md\)、Write\(x\.md\)、Bash\(scheduled\)/);
+  // 人读的最近工具按调用去重（SPEC-watch-pane B）：Write 三行是同一次调用，摘要给相对路径
+  assert.match(human.stdout, /最近工具: Write\(docs\/deep\/x\.md\)、Bash\(ls\)/);
+});
+
+test('status 最近工具：3.12+ 形状参数在 model.streaming 的 tool_call 里，file 与 summary 有值', async (t) => {
+  // 真机的 file_path 是绝对路径，剧本在 mock 启动前就得定死，所以仓库先建好：
+  // realpath 与登记簿 cwd 同一写法（resolveWhitelist 会 realpath），两边字符串一致
+  const workParent = await mkdtemp(path.join(os.tmpdir(), 'zcode-ops-work-'));
+  dirs.push(workParent);
+  const repo = path.join(workParent, 'repo');
+  execFileSync('git', ['init', '--quiet', repo]);
+  const repoReal = realpathSync(repo);
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repoReal });
+  const env = await setupOps(t, {
+    repo: repoReal,
+    script: {
+      turns: [
+        {
+          // verified.md 2026-10-02（App 3.14.1）：scheduled 行 inputOmitted:true 不带 input，
+          // 参数只在同 toolCallId 的 model.streaming tool_call 里；真机 file_path 是绝对路径
+          events: [
+            { type: 'tool.updated', payload: { toolCallId: 't1', toolName: 'Write', kind: 'scheduled', inputOmitted: true, inputRef: 'model_stream' } },
+            { type: 'model.streaming', payload: { assistantMessageId: 'msg_1', kind: 'tool_call', toolCallId: 't1', toolName: 'Write', input: { file_path: `${repoReal}/docs/deep/x.md` } } },
+            { type: 'tool.updated', payload: { toolCallId: 't1', toolName: 'Write', kind: 'started' } },
+            { type: 'model.streaming', payload: { assistantMessageId: 'msg_1', kind: 'text_delta', delta: '写好了' } },
+            { type: 'tool.updated', payload: { toolCallId: 't1', kind: 'result', result: { success: true, content: 'ok' } } },
+          ],
+        },
+      ],
+    },
+  });
+  assert.equal(env.entry.cwd, repoReal); // 剧本里的绝对路径与登记簿 cwd 同源，summary 的相对路径才可信
+  runBin(env.env, ['send', env.entry.id, '3.12 形状的活', '--wait']);
+  const out = JSON.parse(runBin(env.env, ['status', env.entry.id, '--tools', '5', '--json']).stdout);
+  assert.deepEqual(out.tools, [
+    { toolName: 'Write', kind: 'scheduled', file: 'x.md', summary: 'docs/deep/x.md' },
+    { toolName: 'Write', kind: 'started', file: 'x.md', summary: 'docs/deep/x.md' },
+    { toolName: 'Write', kind: 'result', file: 'x.md', summary: 'docs/deep/x.md' },
+  ]);
+  const human = runBin(env.env, ['status', env.entry.id]);
+  assert.match(human.stdout, /最近工具: Write\(docs\/deep\/x\.md\)/);
 });
 
 test('list：pending 行末尾带「挂起: 工具名」（T2.8 第 3 条）', async (t) => {

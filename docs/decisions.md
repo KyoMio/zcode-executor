@@ -4,7 +4,8 @@
 D10 是 T0.2 探针之后补的，D11 是检查点 1 撞出来的，D12 D13 是 2026-09-08 做阶段 2 时定的，
 D14 是 2026-09-18 适配 ZCode App 3.12.2 时补的，D15 是同日确定 Jev 可选快筛时补的；D16 记录本轮批准的 Jev 前筛修订，替代 D15 的路由与审计方案；
 D17、D18、D19 是 2026-09-21 对照 ZCode 开源源码（3.14.0）做线 A/B/C 时补的：D17 插话改走 v4 命令、D18 旧协议面退役风险、D19 账号型 Coding Plan 来源。
-D20 是 2026-09-27 实现闲时任务前，端到端真机跑通后补的，并修订 D19 的读取范围。
+D20 是 2026-09-27 实现闲时投递前，端到端真机跑通后补的，并修订 D19 的读取范围。D21（start plan 投递）是 2026-09-29 补的，2026-10-02 因验证码闸门整体撤除。
+D22（观察面板做成 Claude Code mod）是 2026-10-02 做 v0.4.0 时补的。
 
 ## D1 定位：派单与验收层，协议是别人的事
 
@@ -344,6 +345,28 @@ CLI 的 standalone 端口也因此只支持 individual-coding-plan。**结论：
 原因是上面的验证码闸门：功能在无头宿主上必然失败，留着只增加维护面。旧实现在 git 历史里（e26fedb），
 重开条件满足时可以从那里拣回；上面的协议结论仍有效。
 
+## D22 观察面板做成 Claude Code mod，数据只从 `watch` 子命令来
+
+定了什么（2026-10-02）：在插件里加一个只在 Claude Code 里生效的观察面板（`hooks/`，Claude Code 的函数钩子插件，俗称 mod）。
+`/zcode` 打开，Claude 投递时自动打开，实时显示本项目各会话的回复、工具、挂起与闲时排队；配状态栏汇总与弹出提示。
+命令行新增常驻只读的 `watch --json` 推送会话快照，mod 起一个 `watch` 子进程用到会话结束。
+
+为什么这么做：
+- 派出去的任务原来只能靠 Claude 去 `status` / `follow` 轮询，人看不到过程；mod 能画面板、状态栏、提示，零额度。
+- mod 运行环境没有 Node，不能 import `lib/`。让它直接读 `runs/` 就要在 mod 里重写一遍阶段判断（`phaseOf` 要查进程是否活着，mod 做不到），
+  所以数据只从 CLI 来，判断逻辑只留一份。用常驻 `watch` 推送而不是 mod 定时调 `status`：事件文件最大 121MB，每次从头读不起。
+- 面板只看不应答：审批与提问仍由 Claude 用 AskUserQuestion 转交（AGENTS.md 硬约束），面板上不放批准按钮。
+- 只显示当前 Claude 会话所在仓库的会话（所属仓库按 git 共同数据目录判定，见 CONTEXT.md）。
+- 桌面版的动态图标用 `Svg` 的图片模式加 SVG 内的 CSS 动画：2026-10-02 实测 `isInteractive` 的沙箱框会被宿主不定时刷新、明显闪烁，图片模式照播不闪（verified.md）。
+
+风险与边界：mod 接口在 Claude Code 里标着早期预览，可能随版本变；所以 mod 只用少数接口，逻辑都在 CLI。只有 Claude Code 认 mod，
+Codex、Gemini、Copilot、Grok 照旧只有 skill 与 CLI。函数钩子在正式安装的插件里是否默认启用、非人手打开的面板在窄窗口是否排队，以检查点实测为准。
+
+重开条件：Claude Code 撤掉或大改函数钩子接口；或需要在面板上应答挂起（要先改 AGENTS.md 的硬约束）。
+
+实测（2026-10-02，verified.md「Claude Code mod」）：桌面版检查点 W1–W9 用户报告通过；`watch` 首轮对本机 219 条会话约 0.4 秒、稳态 CPU 约 4%。
+未验证：其他宿主读到只有 `modules` 的 `hooks/hooks.json` 会不会报错（Codex、Copilot CLI 若按 Claude 的 hooks 约定读这个文件）；有人报错再改清单。
+
 ## 补记：模型审批的模型从已推的 provider 表里选，不再多一次 readState
 
 runner 起来时已经推了表，registry 里的模型清单与 readState 一致；省一次往返。代价是看不到后端的 `disabledReason`，
@@ -371,3 +394,5 @@ runner 起来时已经推了表，registry 里的模型清单与 readState 一�
   这个模型，还要再拆 `states` 与内置活动文件的语义才能往下走。收益只是「会话在 App 里显示成同一个账号」，先记着。
 - 只支持 ZCode App 3.12+，不做新旧两套握手兼容。理由：`--version` 区分不出新旧（3.11.2 和 3.12.2 都打印
   `0.16.5`），两套握手会让 mock 和测试翻倍；App 自动更新，用户机器回不去老版本。
+- `new` 时对非 worktree 的 cwd 也把所属仓库写进登记簿（D22）：现在 `repoRoot` 只在 worktree 时写，其余靠 `watch`/`list` 现查 git 并缓存。
+  登记簿格式要改、旧记录也没有这个字段，等现查成为瓶颈再做。

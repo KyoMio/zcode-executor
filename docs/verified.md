@@ -311,6 +311,30 @@ zcode-open-bridge 称此模式不读配置里的模型，要环境变量注入�
 - 拿源码：`npm pack zcode-acp-server@0.27.3`，或 npx 缓存里的 0.17.1
   `~/.npm/_npx/c904e5833c2b97e0/node_modules/zcode-acp-server`。
 
+## 工具参数位置与 Bash 成败字段（2026-10-02，App 3.14.1，零 token，读本机 runs/）
+
+- `tool.updated` 的 scheduled 行带 `inputOmitted:true`、`inputRef:"model_stream"`，不带 `input`；参数在同一 `toolCallId` 的
+  `model.streaming` 事件里：`kind:'tool_call'` 的 `payload.input` 是完整参数（之前还有 `tool_input_start/delta/end` 流式分片）。
+  所以 `status` 原先只在 `tool.updated` 里找 `file_path`，3.12 起 `file` 恒为 null。
+- `tool.updated` 的 result 行 `result.success` 对 Bash 退出码非 0 也是 true（x_af149b61 的 122 条结果全为 true，最近 30 个会话没见过 false）；
+  真实成败在 `result.perf.detail.command`：`exitCode`、`status:"failed"`。
+- 回复文字是 `model.streaming` 的 `kind:'text_delta'`，思考是 `reasoning_delta`（量约为回复的十几倍）；`last.json` 的 `lastText`
+  把一回合里多条消息首尾直接相连，没有分隔。
+- `events.jsonl` 九成以上是 `v4/telemetry/event` 遥测行；本机最大的事件文件 121MB。
+
+## Claude Code mod（2026-10-02，Claude Code 桌面版，引擎 2.1.286）
+
+- 函数钩子插件（mod）的 `$.process.run` / `$.process.spawn` 在桌面版 Code 标签页可用（类型文件标着 "CLI only"）；
+  桌面版进程的 PATH 含 `~/.local/bin`，`/usr/bin/env node` 找得到 node（v22）。
+- `$.command.register({name})` 注册的命令就叫 `/<name>`，不带插件名前缀。
+- 桌面版 `Svg` 开 `isInteractive: true` 时，沙箱框会被宿主不定时刷新，肉眼可见地闪（面板只画过 1 次也闪）；
+  不开时按图片显示，SVG 内的 CSS 关键帧动画照样播放且不闪，面板每 250 毫秒重画一次也不闪。
+- `Text` / `Box` 的颜色写主题键（`warning`、`success`、`error`、`suggestion`、`inactive`）在浅色与深色主题下由引擎各自取色。
+- 引擎的静态检查（`claude plugin validate`）要求接收 `$` 的函数声明在模块顶层，写在 `register` 里的闭包会被拒。
+- 桌面版经 `~/.claude/settings.json` 的 `env` 设 `CLAUDE_CODE_PLUGIN_DIRS`（另加 `CLAUDE_CODE_PLUGIN_DIR_WATCH=1`）后，新开的会话就加载该目录的插件，不必重启 App。
+- 观察面板检查点 B（watch-pane 分支，`watch` + `hooks/`）：用户在桌面版按 W1–W9 试过，报告通过（派单刷新、挂起转交、回合结束提示与卡片、
+  项目过滤、浅色深色、断线重连、终端版）。W5 自动打开在窄窗口下是否排队没有单独记录；W10（其他宿主读到只有 `modules` 的 `hooks/hooks.json`）未验证。
+
 ## Claude Code 侧（官方文档核对）
 
 - 插件可同时带 `skills/`、`bin/`（启用期间进 Bash 的 PATH）、`.mcp.json`；
@@ -335,6 +359,8 @@ coder-mcp-bridge 的审批策略：非 plan 档下 `requestPermission` 自动批
 exclusive 根之外），`requestUserInput` 只自动批 plan_approval。
 
 ## start plan 投递真机探针（2026-09-29，App 3.14.1，CLI 0.16.9）
+
+> `--start-plan` 已于 2026-10-02 整体撤除（decisions D21），下面是当时的实测记录。
 
 `send --start-plan` 全链路（T8）：授权推送、逐回合改道、宿主应答 runtime headers 全部按预期工作，但**回合被服务器挡在阿里云验证码上**。
 

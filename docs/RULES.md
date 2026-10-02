@@ -5,11 +5,12 @@
 
 ## 1. 语言与结构
 
-- Node ≥ 22，ESM，文件后缀 `.mjs`。不写 TypeScript，不加构建步骤。
+- Node ≥ 22，ESM，文件后缀 `.mjs`。不写 TypeScript，不加构建步骤。例外：`types/index.d.ts` 是观察面板 mod 的状态类型声明，只给 `claude plugin validate` 核对，不参与运行。
 - 零运行时依赖。要加依赖必须先在 decisions.md 写一条理由。测试也不加框架，用 `node --test`。
 - 文件按 AGENTS.md 的分层表放：协议层 `lib/appserver.mjs`、`lib/session.mjs`、`lib/providers.mjs`、`lib/offpeak-provider.mjs`、`lib/scrub.mjs`；
-  工作流层 `lib/config.mjs`、`lib/credentials.mjs`、`lib/offpeak.mjs`、`lib/offpeak-check.mjs`、`lib/offpeak-send.mjs`、`lib/offpeak-run.mjs`、`lib/registry.mjs`、`lib/tiers.mjs`、`lib/models.mjs`、`lib/runs.mjs`、`lib/queue.mjs`、`lib/run.mjs`、`lib/intent.mjs`；
-  闸门 `lib/gate.mjs`、`lib/pending.mjs`、`lib/review/`；外壳 `bin/`、`lib/cli/`、`skills/`、`templates/`。
+  工作流层 `lib/config.mjs`、`lib/credentials.mjs`、`lib/offpeak.mjs`、`lib/offpeak-check.mjs`、`lib/offpeak-send.mjs`、`lib/offpeak-run.mjs`、`lib/registry.mjs`、`lib/tiers.mjs`、`lib/models.mjs`、`lib/runs.mjs`、`lib/queue.mjs`、`lib/run.mjs`、`lib/intent.mjs`、`lib/tool-summary.mjs`、`lib/snapshot.mjs`；
+  闸门 `lib/gate.mjs`、`lib/pending.mjs`、`lib/review/`；外壳 `bin/`、`lib/cli/`、`skills/`、`templates/`、`hooks/`。
+  `hooks/` 是 Claude Code 的 mod，跑在引擎自己的环境里（没有 Node）：不 import `lib/`，数据只从 `watch` 子命令来；能测的纯函数放 `hooks/view.mjs`，用 `node --test` 测（decisions D22）。
   跨层共用的只有 `lib/errors.mjs`（`ExecutorError`）。新文件先想清楚归哪层再建。
 - 层间只能向下依赖：外壳 → 工作流 → 协议。闸门由工作流调用，闸门只依赖协议层。协议层不知道
   `runs/` 目录、登记簿、退出码。例外：外壳可以直接用闸门层的**纯函数**（`readPending`、`optionClass`、`questionResponse`），
@@ -62,7 +63,7 @@
 - `runs/`、`worktrees/` 不进仓库；测试用 `mkdtemp` 建临时目录并在 `after()` 里清掉。
 - `~/.zcode/v2/config.json` 只读不写；读到的 apiKey 只写进 mkdtemp 出来的 0600 临时个人 provider 文件
   （decisions D14），子进程收场即删，永不进 `runs/`、日志和任何输出。
-- `~/.zcode/v2/credentials.json` 同样只读不写；只解账号型 coding plan 要的那四个键，其余键一律不读不解；
+- `~/.zcode/v2/credentials.json` 同样只读不写；只解账号型 coding plan 要的那四个键，闲时投递另解 `zcodejwttoken`（D20，只进内存与 JSON-RPC 参数，不落盘），其余键一律不读不解；
   解出的 key 与 config.json 的 apiKey 同一待遇（decisions D19）。
 
 ## 7. 协议层
@@ -89,7 +90,7 @@
 
 - 每个外部行为一个用例，用例名写行为不写实现：「白名单外的 cwd 退出码 2」。
 - 断言三样：退出码、stdout 的 JSON、落盘文件和 mock 的记录文件。不断言内部函数被调了几次。
-- 只对 `test/mock-appserver.mjs` 跑。`npm test` 任何情况下不碰真机、不花额度。
+- 只对 `test/mock-appserver.mjs` 与 `test/mock-offpeak.mjs`（闲时服务）跑。`npm test` 任何情况下不碰真机、不花额度。
 - 真机脚本放 `scripts/`，名字带 `real-`；会花额度的脚本跑前打印「这次会花额度」并要求 `--yes`。
 - 起了后台进程的用例在 `after()` 里统一 SIGKILL，包括子进程的子进程；mock 靠 stdin EOF 自灭。
 - 测试用的剧本 JSON 就近放在用例里，不建 fixtures 目录。

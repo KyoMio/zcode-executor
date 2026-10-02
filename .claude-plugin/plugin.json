@@ -15,5 +15,14 @@
     "worktree",
     "code-review-gate"
   ],
-  "skills": "./skills"
+  "skills": "./skills",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "nodePath": {
+      "type": "string",
+      "title": "node 路径",
+      "description": "观察面板起 watch 子进程用的 node 可执行文件绝对路径。留空时按 PATH 找 node（bin/zcode-executor 的 shebang）；面板提示找不到 node 时再填。",
+      "default": ""
+    }
+  }
 }

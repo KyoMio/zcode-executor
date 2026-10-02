@@ -1,6 +1,6 @@
 # PRD — zcode-executor
 
-> 状态：第一版已实现（2026-09-08）；模型审批部分已按批准的 Jev 修订路线（`docs/jev-hardening-plan.md`，本地记录，不进仓库） 更新为目标合同，实施与验证进度以对应记录为准。需求于 2026-09-07 对齐（31 个问题一轮轮问完）。
+> 状态：第一版已实现（2026-09-08）；闲时投递与 `quota` 随 v0.3.5 发布（2026-10-02，D20），观察面板随 v0.4.0（D22）；模型审批部分已按批准的 Jev 修订路线（`docs/jev-hardening-plan.md`，本地记录，不进仓库） 更新为目标合同，实施与验证进度以对应记录为准。需求于 2026-09-07 对齐（31 个问题一轮轮问完）。
 > 术语以 [CONTEXT.md](CONTEXT.md) 为准；为什么这么定见 [decisions.md](decisions.md)；
 > 本机实测事实见 [verified.md](verified.md)；接手开发见 `docs/handoff/handoff-20260908.md`（本地记录，不进仓库）。
 
@@ -16,14 +16,14 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 
 ## 2. 形态
 
-一个 Claude Code 插件，仓库、插件、CLI、skill 同名 `zcode-executor`。
+一个 Claude Code 插件（skill 与 CLI 也给其他编码代理用），仓库、插件、CLI、skill 同名 `zcode-executor`。
 
 | 层 | 文件 | 干什么 |
 | --- | --- | --- |
-| 协议 | `lib/appserver.mjs` `lib/session.mjs` `lib/providers.mjs` `lib/scrub.mjs` | 拉起 `zcode app-server --stdio`，JSON-RPC 配对、反向请求路由、会话生命周期、回合结束判定、provider 表与脱敏 |
-| 工作流 | `lib/config.mjs` `lib/registry.mjs` `lib/tiers.mjs` `lib/models.mjs` `lib/runs.mjs` `lib/queue.mjs` `lib/run.mjs` `lib/intent.mjs` | 配置、登记簿、等级分配、队列与锁、runner 的一生、`runs/<id>/` 落盘、白名单、模型审批的素材 |
+| 协议 | `lib/appserver.mjs` `lib/session.mjs` `lib/providers.mjs` `lib/offpeak-provider.mjs` `lib/scrub.mjs` | 拉起 `zcode app-server --stdio`，JSON-RPC 配对、反向请求路由、会话生命周期、回合结束判定、provider 表与脱敏 |
+| 工作流 | `lib/config.mjs` `lib/credentials.mjs` `lib/registry.mjs` `lib/tiers.mjs` `lib/models.mjs` `lib/runs.mjs` `lib/queue.mjs` `lib/run.mjs` `lib/intent.mjs` `lib/offpeak.mjs` `lib/offpeak-check.mjs` `lib/offpeak-send.mjs` `lib/offpeak-run.mjs` `lib/tool-summary.mjs` `lib/snapshot.mjs` | 配置、凭据、登记簿、等级分配、队列与锁、runner 的一生、`runs/<id>/` 落盘、白名单、模型审批的素材、闲时投递、本回合解析与会话快照 |
 | 闸门 | `lib/gate.mjs` `lib/pending.mjs` `lib/review/` | 红线 → 模型审批 → 挂起 |
-| 外壳 | `bin/zcode-executor` `lib/cli/` `skills/zcode-executor/` `templates/task.md` | CLI、skill、任务单模板 |
+| 外壳 | `bin/zcode-executor` `lib/cli/` `skills/zcode-executor/` `templates/task.md` `hooks/` `types/` | CLI、skill、任务单模板；观察面板 mod 与它的状态类型声明（只在 Claude Code 里生效，D22） |
 
 **技术栈**：Node ≥ 22、ESM、纯 `.mjs`、零运行时依赖、无构建步骤、`node --test`。
 审批层的 TypeScript 原型手工去掉类型改成 `.mjs`。
@@ -57,13 +57,14 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 | `doctor [--offpeak] [--json]` | 自检五步，都不花额度：① `zcode.cjs` 旁边找得到 `config/provider/zcode-builtin.json`（3.12+ 判据，找不到提示升级 ZCode App）→ ② provider 两个来源各报状态（账号型 `credentials.json` 是否登录、`config.json` 备用来源）并报选中的 provider → ③ 真握手一次（零 token），报模型等级、provider key 状态 → ④ 新启动 runner 的审批链（可选 Jev 前筛 → ZCode 快筛 → 慢判；只读配置，不联网探测 Jev）→ ⑤ 闲时接口自检：会联网，并起一个带假号的闲时回合（服务器直接拒掉，零额度），见下面「闲时投递」。`--offpeak` 只跑 ⑤ |
 | `quota [--json]` | 今天的闲时取号情况，零额度、不起 app-server、不取号：本工具今天取过几次号（数 `runs/*/events.jsonl` 里机器本地今天 0 点以后的取号与重取号事件，修改时间早于今天的文件整个跳过，读不了的文件跳过并在 stderr 说一行；App 里用的不计入；每天约 3 次是观察值）+ 服务器现在能不能取（不能时给可再取的本地时间）。人读一行；`--json` 为 `{usedToday, estimatedDailyLimit, canTakeNumber, nextTakeAt, state, reason}`，`state` 同 doctor ⑤ 的四态。只有「接口变了」退出码 1，额度用完也是 0（见下面「闲时投递」） |
 | `models [--json]` | 从两个来源本地换算可用模型（账号型：`credentials.json` 解出的 key + 内置 provider 文件的模型表；legacy：`~/.zcode/v2/config.json`；3.12 起 `workspace/readState` 已删，不握手），显示每个模型的思考等级、自动分到哪个等级 |
-| `list [--project 关键字] [--json]` | 列登记簿里的会话：id、标题、cwd、等级、上次结果、是否挂起 |
+| `list [--project 关键字] [--json]` | 列登记簿里的会话：id、标题、cwd、等级、上次结果、是否挂起；`--json` 每行带所属仓库 `repo` |
 | `new --cwd <绝对路径> [--title T] [--tier fast\|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]` | 建会话。cwd 必须在白名单内；不是 worktree 只警告不拒 |
 | `send <id> <正文\|-> [--task 文件] [--wait] [--steer] [--timeout 秒] [--stream] [--json]` | 投递。默认排队；`--steer` 走 `v4/command` 的 `sendText`（guide）插进当前回合，在下一个工具边界生效、没有边界时排到回合结束后执行，不打断 |
 | `send <id> <正文\|-> --offpeak [--task 文件] [--wait] [--timeout 秒] [--stream] [--json]` | 闲时投递：当场取号，排到号才用免费闲时算力开跑，不占套餐额度（见下面「闲时投递」）。不和 `--steer` 同用 |
 | `send <id> --offpeak --resume [--wait] [--stream] [--json]` | 回合 exited 或 runner 崩了之后，只重新拉起 runner 接着跑队列里那次闲时投递，不入队、不取号 |
 | `follow <id> [--timeout 秒] [--stream] [--json]` | 跟看后台 runner，写出新结果就返回 |
-| `status <id> [--tools N] [--json]` | 只读快照：phase（`running` 在跑 / `idle` 队列空 / `pending` 挂起 / `exited` 正常收工 / `stale` runner 半路没了）、最近工具调用、队列长度、上次结果、挂起了多久 |
+| `status <id> [--tools N] [--json]` | 只读快照：phase（`running` 在跑 / `idle` 队列空 / `pending` 挂起 / `exited` 正常收工 / `stale` runner 半路没了）、最近工具调用、队列长度、上次结果、挂起了多久；`--json` 带所属仓库 `repo`，`tools[]` 每项带参数摘要 `summary` |
+| `watch [--json]` | 只读、常驻：盯所有会话，某条有变化就输出它的完整快照（阶段、回复末尾几行、当前工具、最近工具、挂起内容、闲时排队、所属仓库），同一会话最多每 300 毫秒一次；读的一方断开或父进程没了就退出。给观察面板用（decisions D22），不花额度 |
 | `cancel <id>` | 叫停：挂起的先答拒绝，再 `session/stop`，之后不再取队列 |
 | `approve <id>` | 应答当前挂起的审批请求，只回 `allow_once` |
 | `deny <id>` | 应答当前挂起的审批请求为拒绝 |
@@ -74,7 +75,7 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 | 码 | 含义 |
 | --- | --- |
 | 0 | 回合干完了，去验收 |
-| 1 | 用法错、zcode 起不来、版本过低 |
+| 1 | 用法错、zcode 起不来（含 ZCode App 早于 3.12：找不到内置 provider 文件） |
 | 2 | 被拒：白名单外、会话不在登记簿、等级或思考等级不合法；闲时投递取号前或取号时被拒（会话不空闲、模型不在闲时模型表、没登录或团队版、没有闲时资格、额度用完、取号时鉴权被拒（401/403，要在 App 里重新登录）、闲时服务暂时不可用、闲时接口可能变了）；闲时投递占着会话时的普通投递与排号中的 `--steer`；`--resume` 没有可恢复的闲时投递 |
 | 3 | `send --wait` 超时，当前回合已取消，会话还在可再投；`follow --timeout` 到点只是旁观者走了，不取消任何东西 |
 | 4 | 回合异常：`turn.failed`、被中止、撞输出上限 |
@@ -83,9 +84,10 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 - `--wait` 默认 1800 秒（config `waitTimeoutSec`），到点取消当前回合。挂起不算超时，一挂起立刻返回 5。
 - `--json` 输出里 `id` 是本地派单 id，`sessionId` 是 zcode 的 `sess_`（首回合前为 null），所有命令一致。
 - `send --wait` 与 `follow` 结束时打两块摘要：「闸门：放行 N 次（红线挂起 a、快筛 b、慢判 c、转人工 d）」与「改动：文件列表；Bash 条数」；`--json` 对应 `summary:{gate:{allow, ask, hard, fast, slow}, files:[…], bashCount}`。
-- `status` 的最近工具显示 `Write(文件名)` 形式；`list` 的挂起行末尾标「挂起: 工具名」。
+- `status` 的最近工具一次调用一项，带参数摘要：`Bash(npm test)`、`Edit(src/a.mjs)`，没有摘要的写工具名；`list` 的挂起行末尾标「挂起: 工具名」。
 - 一条会话同一时刻最多一个挂起（审批在回合内串行）。`approve` / `deny` / `answer` 应答的就是那一个。
 - `--thought` 的值在建会话前对着该模型的合法档位校验，不合法退出码 2（`session/create` 遇到非法值会静默忽略，不能靠它报错）。
+- `watch --json` 每行一个对象：开头 `{type:'hello', repo}`（启动目录的所属仓库），之后 `{type:'session', session}`；首轮全部输出完是 `{type:'synced'}`，会话从登记簿消失是 `{type:'removed', id}`。快照字段与 `status --json` 不同名的才是新含义（`activeTool`、`recentTools`、`pendingDetail`、`offpeakQueue`、`reply`、`since`、`lastEndedAt`、`lastEndOutcome`）。
 - 正文写 `-` 从 stdin 读。`--json` 给机器可读结构。
 - `doctor` 的退出码与 `--json.ok`：①–③ 有一步失败，或 ⑤ 的结论是「接口变了」（changed），`ok` 为 false、退出码 1；⑤ 的另外三种结论（正常、暂时不可用、不适用）不影响两者。⑤ 加进来之前 `ok` 只看 ①–③（2026-09-27 起才看 ⑤）。`--json` 加 `offpeak: {state, layer, expected, actual, reason, logid, appVersion, verifiedAppVersion}`；`doctor --offpeak --json` 只输出 `{ok, offpeak}`（另外，测试用的闲时服务地址环境变量 `ZCODE_EXECUTOR_OFFPEAK_ORIGIN` 配错时，`doctor --offpeak` 也以 1 退出）。
 
@@ -162,13 +164,14 @@ Flash 类模型思考等级不要往低调，效果差。
                                    preferredProvider、tiers 覆盖、environment、sensitive、
                                    review（enabled、model、thought 默认 low、fastMaxTokens 300、
                                    slowMaxTokens 2000、timeoutMs、jev.apiKey）。都可选；含 Jev key 时文件必须 0600
-  sessions.json                    登记簿：本地 id、zcode 的 sess_（首回合后）、标题、cwd、是否 worktree、等级、模型、思考等级、创建时间、上次结果
+  sessions.json                    登记簿：本地 id、zcode 的 sess_（首回合后）、标题、cwd、是否 worktree、原仓库 repoRoot（worktree 时）、等级、provider、模型、思考等级、创建时间、上次结果
   worktrees/<仓库名>/               执行副本，Claude 建
   runs/<本地 id>/
     state.json                     runner 状态、pid
     events.jsonl                   zcode 事件原样 + 本项目自己的动作（投递、闸门各段结果、approve/deny/answer）
     last.json                      上次回合结果
     pending.json                   挂起中的审批请求或提问，答完删除
+    offpeak.json                   闲时投递的状态：号、排位、阶段、截止时间、未结算的号（不含凭据）
     answer.json                    approve/deny/answer 写的应答，runner 消费后删
     cancel                         叫停当前回合的标记，runner 见到就发 session/stop 并替人拒答挂起，处理完删掉
     runner.log                     runner 的 stderr
@@ -209,7 +212,7 @@ Flash 类模型思考等级不要往低调，效果差。
 
 ## 10. 测试与验证
 
-- `npm test` 只对 `test/mock-appserver.mjs` 跑，不花额度。
+- `npm test` 只对 `test/mock-appserver.mjs` 与 `test/mock-offpeak.mjs` 跑，不花额度。
 - 真机分两类：零 token 的（握手、create（含模型表）、list、close）随手验；
   花额度的（`session/send`）每步只做一次，见 handoff 的完成判据。
 - ~~验收标准：新开一个 Claude Code 会话，只靠 skill 完成一次派单、挂起、审批、验收~~ 已达成（T4.2，2026-09-08）。

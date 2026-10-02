@@ -3,8 +3,8 @@
 Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给本机 ZCode（GLM），
 在 worktree 里隔离执行，用 git diff 和测试客观验收。
 
-**状态（2026-09-21）**：第一版完成并已适配 ZCode App 3.12.2（decisions D14）；对照 ZCode 开源源码 3.14.0 修正了 `session/stop`、回合结算与插话（插话改走 `v4/command`，D17），并接上账号型 Coding Plan（凭据文件来源，D19）；`npm test` 438 个用例，真机检查点 6b/6c 走通。
-术语在 [docs/CONTEXT.md](docs/CONTEXT.md)。本地开发记录（`docs/handoff/`、`docs/tasks/`、`docs/PLAN*.md`、`docs/archive/`、`docs/SPEC-offpeak.md`、`docs/jev-*-plan.md`、`docs/research/`）不进 GitHub，只在开发机上有；
+**状态（2026-10-02）**：第一版完成并已适配 ZCode App 3.12.2 起的版本（decisions D14）；插话改走 `v4/command`（D17）；接上账号型 Coding Plan（凭据文件来源，D19）；闲时投递与 `quota`（D20）随 v0.3.5 发布，start plan 投递已撤除（D21）；v0.4.0 加观察面板：`watch` 子命令加 Claude Code mod（`hooks/`，D22）。`npm test` 707 个用例。
+术语在 [docs/CONTEXT.md](docs/CONTEXT.md)。本地开发记录（`docs/handoff/`、`docs/tasks/`、`docs/PLAN*.md`、`docs/archive/`、`docs/SPEC-offpeak.md`、`docs/SPEC-watch-pane.md`、`docs/jev-*-plan.md`、`docs/research/`）不进 GitHub，只在开发机上有；
 有它们就从 `docs/PLAN-v4.md` 与 `docs/handoff/handoff-20260908.md` 接手，没有就从 README 与 docs/PRD.md 开始。
 
 ## 分层
@@ -12,9 +12,11 @@ Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给�
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
 | 协议 | `lib/appserver.mjs` `lib/session.mjs` `lib/providers.mjs` `lib/offpeak-provider.mjs` `lib/scrub.mjs` | 拉起 `zcode app-server --stdio`，JSON-RPC 请求配对与反向请求路由，会话生命周期，回合结束判定 |
-| 工作流 | `lib/config.mjs` `lib/credentials.mjs` `lib/offpeak.mjs` `lib/offpeak-check.mjs` `lib/offpeak-send.mjs` `lib/offpeak-run.mjs` `lib/registry.mjs` `lib/models.mjs` `lib/tiers.mjs` `lib/runs.mjs` `lib/queue.mjs` `lib/run.mjs` `lib/intent.mjs` | 配置、登记簿、等级分配、队列与锁、runner 的一生、`runs/<id>/` 落盘 |
+| 工作流 | `lib/config.mjs` `lib/credentials.mjs` `lib/offpeak.mjs` `lib/offpeak-check.mjs` `lib/offpeak-send.mjs` `lib/offpeak-run.mjs` `lib/registry.mjs` `lib/models.mjs` `lib/tiers.mjs` `lib/runs.mjs` `lib/queue.mjs` `lib/run.mjs` `lib/intent.mjs` `lib/tool-summary.mjs` `lib/snapshot.mjs` | 配置、登记簿、等级分配、队列与锁、runner 的一生、`runs/<id>/` 落盘、本回合解析与会话快照 |
 | 闸门 | `lib/gate.mjs` `lib/pending.mjs` `lib/review/` | 红线 → 模型审批（`workspace/generateText`）→ 挂起等人 |
-| 外壳 | `bin/zcode-executor` `lib/cli/` `skills/zcode-executor/` `templates/` | CLI 与 skill。MCP 外壳按需后加 |
+| 外壳 | `bin/zcode-executor` `lib/cli/` `skills/zcode-executor/` `templates/` `hooks/` `types/` | CLI 与 skill；`hooks/` 是只在 Claude Code 里生效的观察面板 mod（decisions D22），运行环境没有 Node、不 import `lib/`，数据只从 `watch` 子命令来；`types/` 是 mod 状态的类型声明，给 `claude plugin validate` 核对用。MCP 外壳按需后加 |
+
+跨层共用的只有 `lib/errors.mjs`（`ExecutorError`）。
 
 项目只接 zcode，协议层直接说 app-server 的 JSON-RPC，中间没有 ACP。
 
@@ -24,18 +26,19 @@ Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给�
 - 模型审批只产出放行或转人工；拒绝同样退回人工。人工由 Claude 用 AskUserQuestion 转交。
 - 用词照 `CONTEXT.md`：会话、任务单、投递、回合、审批请求、提问、红线、模型审批、挂起、模型等级、思考等级。
 - 纯 `.mjs`，零运行时依赖，不加构建。
-- `~/.zcode/v2/config.json` 与 `~/.zcode/v2/credentials.json` 只读：前者有明文 API key、App 会重写它；后者是 App 的加密凭据，只解账号型 coding plan 要的四个键（D19）和闲时任务要的 `zcodejwttoken`（D20）。两处读到的 key 只落 D14 的临时个人 provider 文件；JWT 只进内存与 JSON-RPC 参数，不落盘。
+- `~/.zcode/v2/config.json` 与 `~/.zcode/v2/credentials.json` 只读：前者有明文 API key、App 会重写它；后者是 App 的加密凭据，只解账号型 coding plan 要的四个键（D19）和闲时投递要的 `zcodejwttoken`（D20）。两处读到的 key 只落 D14 的临时个人 provider 文件；JWT 只进内存与 JSON-RPC 参数，不落盘。
 - 从 zcode-acp 搬来的代码保留 Apache-2.0 版权声明，记入 `NOTICE`。
 - 排障看 `~/.zcode/cli/log/zcode-YYYY-MM-DD.jsonl`。JSON-RPC 错误的细节在 `error.data.details`，`message` 只有一句概括。
 
 ## 发版
 
-版本号只在 `package.json` 里改，其余位置（两份 README 的版本徽章、`.claude-plugin/plugin.json`、
-`.codex-plugin/plugin.json`）由 `scripts/sync-doc-version.mjs` 同步，挂在 npm 的 `version` 生命周期脚本上；
-`npm test` 里的 `--check` 漏同步就挂。文档里的标记挪了位置要改那个脚本，找不到标记它直接非零退出。
+版本号只在 `package.json` 里改，其余位置（两份 README 的版本徽章、`.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、
+`.github/plugin/plugin.json`、`.grok-plugin/plugin.json`、`gemini-extension.json`、`plugin.yaml`）由 `scripts/sync-doc-version.mjs` 同步，
+挂在 npm 的 `version` 生命周期脚本上；`npm test` 里的 `--check` 漏同步就挂。文档里的标记挪了位置要改那个脚本，找不到标记它直接非零退出。
+两份 README 测试徽章里的用例数不在同步范围，用例数变了要手改（还有 README「开发」一节和本文件开头的状态行）。
 
 ```sh
-npm version patch      # 改 package.json + 同步版本号 + 建 commit 和 v* tag
+npm version patch      # 改 package.json + 同步版本号 + 建 commit 和 v* tag；加功能用 minor
 git push --follow-tags # 推 tag 才是触发器
 ```
 
