@@ -119,7 +119,10 @@ export function toastsFor(prev, next) {
   const out = [];
   if (next.phase === 'pending' && prev.phase !== 'pending') out.push(`zcode ${name} ${headOf(next).label}`);
   if (next.phase === 'stale' && prev.phase !== 'stale') out.push(`zcode ${name} 执行进程已中断`);
-  if (next.lastEndedAt && next.lastEndedAt !== prev.lastEndedAt) out.push(`zcode ${name} 回合结束：${outcomeOf(next).label}`);
+  if (next.lastEndedAt && next.lastEndedAt !== prev.lastEndedAt) {
+    // 结果取 last.json 的 lastEndOutcome：runner 先写 last.json 后改登记簿，取样落在两次写之间时 lastOutcome 还是旧的
+    out.push(`zcode ${name} 回合结束：${outcomeOf({ ...next, lastOutcome: next.lastEndOutcome ?? next.lastOutcome }).label}`);
+  }
   return out;
 }
 

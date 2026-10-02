@@ -13,6 +13,7 @@ export type ZcodeExecutorSnapshot = {
   task: string | null;
   since: string | null;
   lastEndedAt: string | null;
+  lastEndOutcome: string | null;
   reply: string[];
   activeTool: ZcodeExecutorTool | null;
   recentTools: ZcodeExecutorTool[];

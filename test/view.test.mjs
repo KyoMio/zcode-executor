@@ -119,6 +119,8 @@ test('提示：基线里没有的不弹；进入挂起、进入中断、回合�
   assert.deepEqual(toastsFor(running, { ...running, phase: 'idle', lastOutcome: 'done', lastEndedAt: ago(0) }), ['zcode W1 回合结束：已完成']);
   // 队列里连投：阶段一直是 running，只有 lastEndedAt 变了，照样算一回合结束
   assert.deepEqual(toastsFor({ ...running, lastEndedAt: ago(5) }, { ...running, lastOutcome: 'done', lastEndedAt: ago(0) }), ['zcode W1 回合结束：已完成']);
+  // 登记簿的 lastOutcome 还没跟上（runner 先写 last.json）：提示按 lastEndOutcome
+  assert.deepEqual(toastsFor(running, { ...running, phase: 'idle', lastOutcome: null, lastEndOutcome: 'failed', lastEndedAt: ago(0) }), ['zcode W1 回合结束：执行失败']);
   // 挂起期间快照再变（比如工具列表）不重复弹
   const pending = { ...running, phase: 'pending', pendingDetail: { kind: 'question', questionTexts: ['a'] } };
   assert.deepEqual(toastsFor(pending, { ...pending, recentTools: [{ toolName: 'Read', summary: 'a', ok: true }] }), []);
