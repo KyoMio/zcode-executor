@@ -11,8 +11,8 @@ Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给�
 
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
-| 协议 | `lib/appserver.mjs` `lib/session.mjs` `lib/providers.mjs` `lib/offpeak-provider.mjs` `lib/startplan-provider.mjs` `lib/scrub.mjs` | 拉起 `zcode app-server --stdio`，JSON-RPC 请求配对与反向请求路由，会话生命周期，回合结束判定 |
-| 工作流 | `lib/config.mjs` `lib/credentials.mjs` `lib/offpeak.mjs` `lib/offpeak-check.mjs` `lib/offpeak-send.mjs` `lib/offpeak-run.mjs` `lib/startplan-send.mjs` `lib/startplan-run.mjs` `lib/registry.mjs` `lib/models.mjs` `lib/tiers.mjs` `lib/runs.mjs` `lib/queue.mjs` `lib/run.mjs` `lib/intent.mjs` | 配置、登记簿、等级分配、队列与锁、runner 的一生、`runs/<id>/` 落盘 |
+| 协议 | `lib/appserver.mjs` `lib/session.mjs` `lib/providers.mjs` `lib/offpeak-provider.mjs` `lib/scrub.mjs` | 拉起 `zcode app-server --stdio`，JSON-RPC 请求配对与反向请求路由，会话生命周期，回合结束判定 |
+| 工作流 | `lib/config.mjs` `lib/credentials.mjs` `lib/offpeak.mjs` `lib/offpeak-check.mjs` `lib/offpeak-send.mjs` `lib/offpeak-run.mjs` `lib/registry.mjs` `lib/models.mjs` `lib/tiers.mjs` `lib/runs.mjs` `lib/queue.mjs` `lib/run.mjs` `lib/intent.mjs` | 配置、登记簿、等级分配、队列与锁、runner 的一生、`runs/<id>/` 落盘 |
 | 闸门 | `lib/gate.mjs` `lib/pending.mjs` `lib/review/` | 红线 → 模型审批（`workspace/generateText`）→ 挂起等人 |
 | 外壳 | `bin/zcode-executor` `lib/cli/` `skills/zcode-executor/` `templates/` | CLI 与 skill。MCP 外壳按需后加 |
 

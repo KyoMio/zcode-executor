@@ -53,7 +53,7 @@ export async function cleanupAll() {
 }
 
 // 造环境：mock app-server（带账号凭据夹具与 JWT）+ mock 闲时服务器 + 家目录（白名单指到 git 仓库）+ new 一条会话
-export async function setup(t, { script, offpeak = {}, credentials = { jwt: TEST_JWT }, provider = 'builtin:bigmodel-coding-plan', tier = 'strong', envExtra = {} } = {}) {
+export async function setup(t, { script, offpeak = {}, credentials = { jwt: TEST_JWT }, provider = 'builtin:bigmodel-coding-plan', envExtra = {} } = {}) {
   t.after(() => {
     killAll(runnerPids);
     killAll(mockPids);
@@ -86,7 +86,7 @@ export async function setup(t, { script, offpeak = {}, credentials = { jwt: TEST
     ...envExtra,
   };
   // new 不碰闲时服务器，可以同步跑
-  const created = spawnSync(process.execPath, [BIN, 'new', '--cwd', repo, '--provider', provider, '--tier', tier, '--json'], {
+  const created = spawnSync(process.execPath, [BIN, 'new', '--cwd', repo, '--provider', provider, '--tier', 'strong', '--json'], {
     encoding: 'utf8',
     env,
     timeout: 60_000,
@@ -97,9 +97,9 @@ export async function setup(t, { script, offpeak = {}, credentials = { jwt: TEST
   return { mock, server, home, env, entry, tmp, runsDir, zcodeConfigPath, recordPath: mock.env.MOCK_APPSERVER_RECORD };
 }
 
-/** 异步跑 bin，返回 {status, stdout, stderr}。envExtra 追加进环境（同名覆盖），测试换内置文件用。 */
-export async function runBin(env, args, envExtra = {}) {
-  const child = spawn(process.execPath, [BIN, ...args], { env: { ...env, ...envExtra } });
+/** 异步跑 bin，返回 {status, stdout, stderr}。 */
+export async function runBin(env, args) {
+  const child = spawn(process.execPath, [BIN, ...args], { env });
   let stdout = '';
   let stderr = '';
   child.stdout.on('data', (c) => { stdout += c; });

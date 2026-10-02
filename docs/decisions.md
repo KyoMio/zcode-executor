@@ -340,6 +340,10 @@ CLI 的 standalone 端口也因此只支持 individual-coding-plan。**结论：
 重开条件追加：服务器对账号型 start plan 放行验证码要求（比如像 coding plan 那样发平台 key），或提供无头宿主
 可复用的验证凭据。
 
+**撤除（2026-10-02）**：`--start-plan` 的代码、测试与 PRD/SKILL/CONTEXT 段落已整体拿掉（反向撤销 e26fedb）。
+原因是上面的验证码闸门：功能在无头宿主上必然失败，留着只增加维护面。旧实现在 git 历史里（e26fedb），
+重开条件满足时可以从那里拣回；上面的协议结论仍有效。
+
 ## 补记：模型审批的模型从已推的 provider 表里选，不再多一次 readState
 
 runner 起来时已经推了表，registry 里的模型清单与 readState 一致；省一次往返。代价是看不到后端的 `disabledReason`，

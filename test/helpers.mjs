@@ -101,28 +101,6 @@ export const BUILTIN_PROVIDER_FIXTURE = {
             api: { type: 'anthropic-messages', baseUrl: 'https://api.z.ai/api/anthropic' },
           },
         },
-        // start plan 条目（形状照真机 zcode-builtin.json，decisions D21，2026-09-29 本机 App 3.14.1）：
-        // 模型表与闲时不同——没有 GLM-5.3，多了 GLM-5.2 与 GLM-5-Turbo
-        {
-          providerId: 'account:bigmodel-start-plan',
-          providerName: 'Start Plan',
-          config: {
-            group: 'bigmodel-family',
-            builtinModelIds: ['GLM-5.3-Flash', 'GLM-5.2', 'GLM-5-Turbo'],
-            access: { type: 'zhipu-account', mode: 'start-plan', accountType: 'bigmodel' },
-            api: { type: 'anthropic-messages', baseUrl: 'https://zcode.z.ai/api/v1/zcode-plan/anthropic' },
-          },
-        },
-        {
-          providerId: 'account:zai-start-plan',
-          providerName: 'Start Plan',
-          config: {
-            group: 'zai-family',
-            builtinModelIds: ['GLM-5.3-Flash', 'GLM-5.2', 'GLM-5-Turbo'],
-            access: { type: 'zhipu-account', mode: 'start-plan', accountType: 'zai' },
-            api: { type: 'anthropic-messages', baseUrl: 'https://zcode.z.ai/api/v1/zcode-plan/anthropic' },
-          },
-        },
       ],
     },
     modelConfigRules: {

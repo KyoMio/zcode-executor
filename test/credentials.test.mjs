@@ -12,7 +12,6 @@ import {
   deriveCredentialKey,
   readCodingPlanKeys,
   readOffPeakAuth,
-  readStartPlanAuth,
 } from '../lib/credentials.mjs';
 
 const dirs = [];
@@ -363,57 +362,4 @@ test('闲时凭据：失败时返回值里查不到 JWT 与 key', async () => {
   assert.ok(out.error);
   assert.equal(JSON.stringify(out).includes(TEST_JWT), false);
   assert.equal(JSON.stringify(out).includes(teamValue), false);
-});
-
-// ---------- readStartPlanAuth（start plan 投递，decisions D21：只要 active_provider 与 JWT） ----------
-
-test('start plan 凭据：active_provider 与 JWT 都在 → 返回 family、jwt；user_info 与 coding plan key 缺席也能读', async () => {
-  const file = await writeCredentials({ 'oauth:active_provider': 'bigmodel', zcodejwttoken: TEST_JWT });
-  const out = readStartPlanAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
-  assert.deepEqual(out, { family: 'bigmodel', jwt: TEST_JWT });
-});
-
-test('start plan 凭据：zai 族照常读', async () => {
-  const file = await writeCredentials({ 'oauth:active_provider': 'zai', zcodejwttoken: TEST_JWT });
-  const out = readStartPlanAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
-  assert.deepEqual(out, { family: 'zai', jwt: TEST_JWT });
-});
-
-test('start plan 凭据：凭据文件不存在 → not-applicable，说没用账号登录', () => {
-  const file = path.join(os.tmpdir(), `zcode-cred-none-${Date.now()}.json`);
-  const out = readStartPlanAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
-  assert.equal(out.kind, 'not-applicable');
-  assert.match(out.error, /登录/);
-});
-
-test('start plan 凭据：没有 active_provider → not-applicable', async () => {
-  const file = await writeCredentials({ zcodejwttoken: TEST_JWT });
-  const out = readStartPlanAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
-  assert.equal(out.kind, 'not-applicable');
-  assert.match(out.error, /oauth:active_provider/);
-});
-
-test('start plan 凭据：active_provider 不是 zai 或 bigmodel → changed，error 不回显值', async () => {
-  const file = await writeCredentials({ 'oauth:active_provider': 'other-family', zcodejwttoken: TEST_JWT });
-  const out = readStartPlanAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
-  assert.equal(out.kind, 'changed');
-  assert.equal(JSON.stringify(out).includes('other-family'), false);
-});
-
-test('start plan 凭据：没有 zcodejwttoken → not-applicable', async () => {
-  const file = await writeCredentials({ 'oauth:active_provider': 'bigmodel' });
-  const out = readStartPlanAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
-  assert.equal(out.kind, 'not-applicable');
-  assert.match(out.error, /zcodejwttoken/);
-});
-
-test('start plan 凭据：JWT 解不开 → changed，error 里没有密文', async () => {
-  const sealed = encrypt(TEST_JWT, deriveCredentialKey({ env: { ZCODE_CREDENTIAL_SECRET: '另一个密钥' } }));
-  const file = await writeCredentials(
-    { 'oauth:active_provider': 'bigmodel', zcodejwttoken: sealed },
-    { encryptKeys: ['oauth:active_provider'] }, // zcodejwttoken 原样写入，别再包一层加密
-  );
-  const out = readStartPlanAuth({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
-  assert.equal(out.kind, 'changed');
-  assert.equal(JSON.stringify(out).includes(sealed), false);
 });

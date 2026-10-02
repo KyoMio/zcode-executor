@@ -140,18 +140,13 @@ const log = (msg) => process.stderr.write(`mock: ${msg}\n`);
 // 闲时授权的版本号照真机自己算（verified.md 闲时任务探针（2026-09-27））：CLI 哈希的是它看到的内置文件路径字符串，
 // 不是文件内容。故意不 import lib/offpeak-provider.mjs——mock 另写一份才能拦住客户端算法写错
 const OFFPEAK_PROVIDER_RE = /^account:[^:]+-offpeak-idle-plan$/;
-// start plan 的条目（decisions D21，2026-09-29 对照真机内置文件）：回合模型走它时宿主必须答
-// requestProviderRuntimeHeaders（CLI 只给 off-peak mode 用 send 参数里的 requestAuth）
-const START_PLAN_PROVIDER_RE = /^account:[^:]+-start-plan$/;
 const OFFPEAK_FAKE_TICKET = '1000000000000000000';
 const builtinOffPeak = { revision: undefined, providerIds: new Set() };
-const builtinStartPlan = { providerIds: new Set() };
 try {
   const builtin = JSON.parse(readFileSync(builtinFile, 'utf8'));
   builtinOffPeak.revision = builtin?.revision;
   for (const rule of builtin?.config?.providerConfigRules?.providerRules ?? []) {
     if (OFFPEAK_PROVIDER_RE.test(rule?.providerId ?? '')) builtinOffPeak.providerIds.add(rule.providerId);
-    if (START_PLAN_PROVIDER_RE.test(rule?.providerId ?? '')) builtinStartPlan.providerIds.add(rule.providerId);
   }
 } catch {
   // 内置文件内容坏了：闲时条目一个都没有，闲时回合全按 provider_not_found 走
@@ -236,7 +231,7 @@ const state = {
   // 权宜：单会话假设（与 activeTurn 同），多会话用例出现时改成 per-session
   stopRequested: false,
   generateTextCount: 0, // 第 n 次 workspace/generateText（T3.2：剧本按次序回，错误按次序插）
-  entitledAccount: new Set(), // updateAccountConfig 推成功（版本号对得上）的账号型 providerId（闲时与 start plan 共用）
+  entitledOffPeak: new Set(), // updateAccountConfig 推成功（版本号对得上）的闲时 providerId
 };
 const pendingAnswers = new Map(); // 信封 id → 反向请求条目（存引用，见 askServer）
 
@@ -380,30 +375,19 @@ function buildSettings(requestedThoughtLevel, requestedModel) {
 // params 形状照 docs/reference/zcode-app-server-protocol.md「3.12.2 变化」（从 zcode.cjs 3.12.2 源码读出，
 // 真机没抓到过实例）。客户端只依赖 providerId 与 requestId（去重键），其余字段是复刻不是契约。
 // 返回 null 表示头应用上了；否则返回失败原因——zcode.cjs 用 errorMessage ?? 那句固定原文
-async function requestRuntimeHeaders({ sessionId, modelSelection, accountAccess, force = false }) {
-  if (!force && script.runtimeHeaders !== true) return null;
+async function requestRuntimeHeaders({ sessionId, modelSelection }) {
+  if (script.runtimeHeaders !== true) return null;
   const params = {
     requestId: `${sessionId ?? 'workspace'}:provider-runtime-headers:${randomUUID()}`,
     workspace: state.workspace,
     modelSelection,
     providerId: modelSelection.providerId,
     reason: 'model-request',
-    ...(accountAccess ? { accountAccess } : {}),
   };
   if (sessionId !== undefined) params.sessionId = sessionId;
   const answer = await askServer(RUNTIME_HEADERS_METHOD, params);
   // 只记 headersApplied，不把整个应答打到 stderr：requestAuth.apiKey 不该出现在任何日志里
   log(`runtimeHeaders answered: headersApplied=${answer?.headersApplied}`);
-  // 应答本身不进记录文件（那只记收到的）。合成一条只带 key 长度的条目给测试断言
-  // 「宿主按哪个 providerId、答没答、答的 key 多长」——值不落盘
-  record({
-    recorded: 'runtimeHeaders',
-    providerId: modelSelection.providerId,
-    reason: params.reason,
-    hasAccountAccess: accountAccess !== undefined,
-    headersApplied: answer?.headersApplied === true,
-    apiKeyLength: typeof answer?.requestAuth?.apiKey === 'string' ? answer.requestAuth.apiKey.length : null,
-  });
   if (answer?.headersApplied === true) return null;
   return typeof answer?.errorMessage === 'string' ? answer.errorMessage : HEADERS_NOT_APPLIED;
 }
@@ -446,30 +430,10 @@ async function runTurn(sessionId, sendParams) {
     ev('turn.failed', { error: offPeakError, ...(offPeakError.code === 'provider_not_found' ? { turnPhase: 'model_creation' } : {}) });
     return;
   }
-  const startPlanError = startPlanTurnError(sendParams);
-  if (startPlanError) {
-    ev('turn.failed', { error: startPlanError, ...(startPlanError.code === 'provider_not_found' ? { turnPhase: 'model_creation' } : {}) });
-    return;
-  }
-  // 回合的模型：send 参数带了 modelSelection 就用它（闲时与 start plan 都靠它逐回合改道，
-  // zcode.cjs 的模型请求装配）；没带用会话 create 时记下的；resume 进来的会话 mock 没建过，
-  // 退到表里第一个（权宜：resume 不校验会话存在）
-  const model = sendParams?.modelSelection ?? state.sessions.find((s) => s.sessionId === sessionId)?.model ?? availableModels()[0]?.ref
+  // 会话的模型：create 时记下的；resume 进来的会话 mock 没建过，退到表里第一个（权宜：resume 不校验会话存在）
+  const model = state.sessions.find((s) => s.sessionId === sessionId)?.model ?? availableModels()[0]?.ref
     ?? { providerId: 'zcode-unconfigured', modelId: 'missing-model' };
-  // 鉴权来源按 provider 分道（zcode.cjs 模型请求装配处，2026-09-29 对照）：start plan（zhipu-account、
-  // 非 off-peak）每次模型请求前来反向请求要运行时头；off-peak 用 send 参数里的 requestAuth，不来这个请求；
-  // api-key 型不来（真机探针 2026-09-18），只有剧本开 runtimeHeaders 才发
-  const isStartPlan = START_PLAN_PROVIDER_RE.test(model?.providerId ?? '');
-  const headersError = isStartPlan
-    ? await requestRuntimeHeaders({
-        sessionId,
-        modelSelection: model,
-        force: true,
-        accountAccess: { type: 'zhipu-account', accountType: model.providerId.startsWith('account:zai-') ? 'zai' : 'bigmodel', mode: 'start-plan', entitled: true },
-      })
-    : OFFPEAK_PROVIDER_RE.test(model?.providerId ?? '')
-      ? null
-      : await requestRuntimeHeaders({ sessionId, modelSelection: model });
+  const headersError = await requestRuntimeHeaders({ sessionId, modelSelection: model });
   if (headersError !== null) {
     // 客户端没给可用的头，模型请求发不出去。payload.error.message 照 generateText 那条路
     // （errorMessage ?? 固定原文）；回合这条路真机没抓过（要花额度），code 也没有，先只带 message
@@ -557,7 +521,7 @@ async function runTurn(sessionId, sendParams) {
 function offPeakTurnError(sendParams) {
   const providerId = sendParams?.modelSelection?.providerId;
   if (!OFFPEAK_PROVIDER_RE.test(providerId ?? '')) return null;
-  if (!builtinOffPeak.providerIds.has(providerId) || !state.entitledAccount.has(providerId)) {
+  if (!builtinOffPeak.providerIds.has(providerId) || !state.entitledOffPeak.has(providerId)) {
     return { code: 'provider_not_found', message: `Provider Registry 中不存在 Provider: ${providerId}` };
   }
   if (script.offPeakTurnErrors) {
@@ -570,23 +534,6 @@ function offPeakTurnError(sendParams) {
   const headers = sendParams?.modelExecution?.requestAuth?.headers ?? {};
   const ticket = Object.entries(headers).find(([name]) => name.toLowerCase() === 'x-off-peak-ticket-id')?.[1];
   if (ticket === OFFPEAK_FAKE_TICKET) return { code: '3104', message: 'off-peak ticket is invalid' };
-  return null;
-}
-
-// start plan 回合的结局（decisions D21）：不是 start plan provider 返回 null。内置文件里没这个条目、
-// 没推过授权（或版本号对不上）→ provider_not_found，与闲时同款（provider_not_found 是 CLI 对
-// registry 里没有的 provider 的真实报法）。send 参数里不该出现 requestAuth（start plan 的鉴权走
-// 反向请求），出现了说明客户端把两条通道搞混了，也按 provider_not_found 拒——真实 CLI 的 strict
-// schema 会先在参数校验拒掉（见 session/send 分支），这里兜回合这条路。
-function startPlanTurnError(sendParams) {
-  const providerId = sendParams?.modelSelection?.providerId;
-  if (!START_PLAN_PROVIDER_RE.test(providerId ?? '')) return null;
-  if (sendParams?.modelExecution?.requestAuth) {
-    return { code: 'provider_not_found', message: `Provider Registry 中不存在 Provider: ${providerId}` };
-  }
-  if (!builtinStartPlan.providerIds.has(providerId) || !state.entitledAccount.has(providerId)) {
-    return { code: 'provider_not_found', message: `Provider Registry 中不存在 Provider: ${providerId}` };
-  }
   return null;
 }
 
@@ -780,12 +727,6 @@ function handleRequest(msg) {
       break;
     }
     case 'session/send': {
-      // start plan 回合的 send 参数 schema（zcode.cjs strict schema，2026-09-29）：modelExecution
-      // 给了就必须带 selectionScope:"execution"——客户端不带它会把 start plan 落成会话当前模型
-      if (START_PLAN_PROVIDER_RE.test(params.modelSelection?.providerId ?? '') && params.modelExecution?.selectionScope !== 'execution') {
-        respondError(id, -32602, 'Invalid params — (modelExecution): selectionScope must be "execution"', { name: 'ZodError' });
-        break;
-      }
       if (state.activeTurn) {
         // 2026-09-21 对照 ZCode 源码：3.12.2 起回合进行中再发 session/send 直接拒绝
         // （3.11 的排队插话没有了），code 与 message 是真机原文
@@ -812,7 +753,7 @@ function handleRequest(msg) {
       const revision = script.builtinRevision ?? builtinOffPeak.revision;
       const expected = `zcode-builtin:${revision}:${createHash('sha256').update(path.resolve(builtinFile)).digest('hex')}`;
       if (params.basedOnZCodeBuiltinRevision === expected) {
-        state.entitledAccount = new Set(
+        state.entitledOffPeak = new Set(
           Object.entries(params.providers ?? {}).filter(([, p]) => p?.access?.entitled === true).map(([providerId]) => providerId),
         );
       } else {
