@@ -32,7 +32,7 @@ const waitSvg = (size) => svgDoc(size, `<style>
 export const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 
 // Code 与 Markdown 只许制表符与换行两种控制字符、至多 10000 字，否则整棵树被拒（类型声明 CodeProps、MarkdownProps）
-const codeText = (text) => String(text).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').slice(0, 10000);
+const codeText = (text) => String(text).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '').slice(0, 10000);
 
 const hhmm = (iso) => {
   const d = new Date(iso);

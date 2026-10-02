@@ -148,8 +148,8 @@ test('布局：样稿数据在桌面与终端两种元素表下都能画出，�
       assert.ok(ALLOWED[type]?.has(k), `${type} 不认属性 ${k}`);
       assert.ok(['string', 'number', 'boolean'].includes(typeof v), `${type}.${k} 不是简单值`);
     }
-    if (type === 'Markdown') assert.ok(!/[\x00-\x08\x0b-\x1f\x7f]/.test(props.text) && props.text.length <= 10000, 'Markdown 内容有不许的控制字符或过长');
-    if (type === 'Code') assert.ok(!/[\x00-\x08\x0b-\x1f\x7f]/.test(props.source) && props.source.length <= 10000, 'Code 内容有不许的控制字符或过长');
+    if (type === 'Markdown') assert.ok(!/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(props.text) && props.text.length <= 10000, 'Markdown 内容有不许的控制字符或过长');
+    if (type === 'Code') assert.ok(!/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(props.source) && props.source.length <= 10000, 'Code 内容有不许的控制字符或过长');
     assert.equal(props?.isInteractive, undefined, 'Svg 不开交互框（桌面版会闪）');
     return { type, props: props ?? {}, kids: kids.flat() };
   };
