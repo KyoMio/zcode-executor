@@ -4,9 +4,9 @@
 
 <p align="center"><strong>Claude 规划，ZCode 写码，git 验收。</strong></p>
 
-<p align="center">一个 Claude Code（也支持 Codex）插件：把一件想清楚的开发任务派给本机的 <a href="https://zcode.z.ai">ZCode</a>（GLM）执行，在隔离的 git worktree 里跑，每一次写操作都过「红线 + 模型审批」两道闸，最后用 <code>git diff</code> 和测试验收，而不是听执行端的自述。</p>
+<p align="center">一个 Claude Code 等多个编码代理都能用的插件：把一件想清楚的开发任务派给本机的 <a href="https://zcode.z.ai">ZCode</a>（GLM）执行，在隔离的 git worktree 里跑，每一次写操作都过「红线 + 模型审批」两道闸，最后用 <code>git diff</code> 和测试验收，而不是听执行端的自述。</p>
 
-<p align="center"><img src="https://img.shields.io/badge/version-v0.3.5-5B4CF0" alt="v0.3.5"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-303%20passing-brightgreen" alt="Tests"></p>
+<p align="center"><img src="https://img.shields.io/badge/version-v0.3.5-5B4CF0" alt="v0.3.5"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-707%20passing-brightgreen" alt="Tests"></p>
 
 ## 为什么
 
@@ -82,6 +82,8 @@ claude plugin install zcode-executor@zcode-executor --scope user
 ```
 
 插件启用期间 `bin/zcode-executor` 自动进 Bash 的 `PATH`，skill 以 `/zcode-executor:zcode-executor` 出现；说「让 zcode 去做」就会触发。
+
+插件同时带一个 **Claude Code mod**（函数钩子模块，`hooks/`）：输入 `/zcode` 打开[观察面板](#观察面板只在-claude-code-里)，实时看本项目各 zcode 会话的进展；Claude 投递时它也会自动打开，并在状态栏汇总、关键变化时弹提示。不用额外配置；需要支持函数钩子 mod 的 Claude Code 版本（该接口目前为早期预览）。
 
 ### Codex
 
@@ -196,7 +198,7 @@ ln -s "$PWD/skills/zcode-executor" ~/.claude/skills/zcode-executor
 
 - macOS 或 Linux，**Windows 暂不支持**。ZCode App 的位置按各平台的惯例找（`/Applications/…`、`/opt/ZCode/…`、`/usr/share/zcode/…`），装在别处就用 `ZCODE_BIN` 指到 `zcode.cjs`。
 - Node ≥ 22（ZCode 的 app-server 要 `node:sqlite`）。
-- 装好并登录过 **3.12.2 及以上**的 ZCode 桌面 App（3.11 及以下不支持）。两种登录方式都行：账号（OAuth）登录的 Coding Plan——CLI 解出 App 存在 `~/.zcode/v2/credentials.json` 里的平台 key（个人版、团队版都认；只读它需要的四个键）；或 `~/.zcode/v2/config.json` 里的 API-key 型 provider。两个文件都只读，从不写回。
+- 装好并登录过 **3.12.2 及以上**的 ZCode 桌面 App（3.11 及以下不支持）。两种登录方式都行：账号（OAuth）登录的 Coding Plan——CLI 解出 App 存在 `~/.zcode/v2/credentials.json` 里的平台 key（个人版、团队版都认；只读它需要的四个键，闲时投递另读 `zcodejwttoken`）；或 `~/.zcode/v2/config.json` 里的 API-key 型 provider。两个文件都只读，从不写回。
 
 ## 推荐工作流
 
@@ -225,10 +227,13 @@ Claude 投递时面板会自动打开；状态栏汇总「N 个回合执行中�
 
 | 命令 | 作用 |
 | --- | --- |
-| `doctor [--json]` | 零 token 自检：找到 `zcode.cjs` 与内置 provider 文件（ZCode App ≥ 3.12.2）、确认配置存在、真握手一次、报模型等级及新启动 runner 将使用的审批链；不调用 Jev |
+| `doctor [--offpeak] [--json]` | 不花额度的自检：找到 `zcode.cjs` 与内置 provider 文件（ZCode App ≥ 3.12.2）、报两个 provider 来源、真握手一次、报模型等级及新启动 runner 将使用的审批链（不调用 Jev），再自检闲时接口——这一步会联网，并在 zcode 自己的会话库里留一条自检会话。`--offpeak` 只跑这一步 |
+| `quota [--json]` | 今天本工具取过几次闲时号、服务器现在能不能取；不花额度、不起 app-server |
 | `models [--json]` | 列可用模型：思考等级、分到哪个等级 |
 | `new --cwd <绝对路径> [--title T] [--tier fast\|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]` | 登记会话（返回本地 id `x_…`）；ZCode 会话在第一次 `send` 时才建 |
 | `send <id> <正文\|-> [--task 文件] [--wait] [--timeout 秒] [--steer] [--stream] [--json]` | 投递；`--wait` 跟到结束或挂起；`--task` 是模型审批拿来当授权依据的任务单；`--steer` 往正在跑的回合插话——插话在下一个工具边界生效，没有边界时排到回合结束后执行 |
+| `send <id> <正文\|-> --offpeak [--task 文件] [--wait] [--timeout 秒] [--stream] [--json]` | 闲时投递：当场取号，号就绪后用 Coding Plan 的免费闲时算力跑这一回合（见下面「闲时投递」） |
+| `send <id> --offpeak --resume [--wait] [--stream] [--json]` | 回合结束或 runner 崩了、闲时投递还没收尾时，重新拉起 runner 接着跑 |
 | `follow <id> [--timeout 秒] [--stream] [--json]` | 跟看后台 runner 直到有结果或挂起 |
 | `status <id> [--tools N] [--json]` | 只读快照：阶段、最近工具（带命令或路径摘要）、队列、挂起、上次结果 |
 | `list [--project 关键字] [--json]` | 登记簿里的会话：阶段、等级、上次结果；`--json` 带所属仓库 |
@@ -237,7 +242,11 @@ Claude 投递时面板会自动打开；状态栏汇总「N 个回合执行中�
 | `approve <id>` / `deny <id>` | 应答挂起的审批请求（放行只有 `allow_once`） |
 | `answer <id> [--] <值…>` | 应答挂起的提问：按序号、value 或 label；多选逗号分隔 |
 
-退出码：`0` 干完 · `1` 用法错 / 起不来 · `2` 被拒（白名单、会话不在、等级不合法） · `3` `--wait` 超时（回合已取消） · `4` 回合失败 / 被叫停 · `5` **挂起等人**（审批或提问）。
+退出码：`0` 干完 · `1` 用法错 / 起不来 · `2` 被拒（白名单、会话不在、等级不合法；闲时投递取号前或取号时被拒） · `3` `--wait` 超时（回合已取消） · `4` 回合失败 / 被叫停 · `5` **挂起等人**（审批或提问）。
+
+### 闲时投递
+
+闲时投递让这一回合用 Coding Plan 订阅的免费闲时算力跑，不占套餐额度；开跑时间由服务器决定：`send --offpeak` 先取号排队，号就绪才开跑，验收与普通投递相同。要求在 ZCode App 里用个人版 Coding Plan 账号登录，会话的模型在闲时模型表里。会话要空闲；闲时投递排号或运行期间，同一会话的普通投递会被拒，所以闲时活另开一条会话。号过期自动重取（一次投递最多 3 个号），`cancel` 在任何阶段都会结算号，`quota` 查今天用了几次（观察到每天约 3 次）。默认仍是普通投递，skill 会告诉你能不能改走闲时，你选了才切。
 
 ## 配置
 
@@ -331,11 +340,11 @@ zcode-executor doctor --json
 ## 开发
 
 ```bash
-npm test          # 303 个用例对剧本驱动的 mock app-server 跑，外加文档版本号一致性检查；不花 token
+npm test          # 707 个用例对剧本驱动的 mock app-server 与 mock 闲时服务跑，外加文档版本号一致性检查；不花 token
 node --check lib/**/*.mjs
 ```
 
-发版由 tag 驱动：`npm version patch` 改 `package.json`、把版本号同步进两份 README 和两份插件清单、建提交和 tag；`git push --follow-tags` 触发 workflow 跑测试、发 npm（Trusted Publishing，无令牌）、建 GitHub Release。提交信息就是 changelog。
+发版由 tag 驱动：`npm version patch` 改 `package.json`、把版本号同步进两份 README 和各宿主的插件清单、建提交和 tag；`git push --follow-tags` 触发 workflow 跑测试、发 npm（Trusted Publishing，无令牌）、建 GitHub Release。提交信息就是 changelog。
 
 纯 `.mjs`，零运行时依赖，无构建。设计文档在 `docs/`：[PRD](docs/PRD.md)、[SPEC](docs/SPEC.md)、[CONTEXT](docs/CONTEXT.md)（术语）、[RULES](docs/RULES.md)（开发规范）、[decisions](docs/decisions.md)、[verified](docs/verified.md)（对真 app-server 实测的事实）。给 agent 看的入口是 [AGENTS.md](AGENTS.md)。
 

@@ -109,7 +109,7 @@ chmod 600 ~/.zcode-executor/config.json
 | 码 | 含义 | 你该做什么 |
 | --- | --- | --- |
 | 0 | 回合干完了 | 去验收，别直接信它说完成了 |
-| 1 | 用法错、zcode 起不来、版本过低 | 看报错；环境问题跑 `zcode-executor doctor`（不花额度的自检）。它退出码 1 时先看是哪一步不过：只有 ⑤ 闲时接口变了的话，普通派单照常能用 |
+| 1 | 用法错、zcode 起不来（含 ZCode App 早于 3.12） | 看报错；环境问题跑 `zcode-executor doctor`（不花额度的自检）。它退出码 1 时先看是哪一步不过：只有 ⑤ 闲时接口变了的话，普通派单照常能用 |
 | 2 | 被拒：白名单外、会话不在登记簿、等级或思考等级不合法；闲时投递被拒 | 报错里写了原因，按原因处理，别原样重试；闲时的见「闲时投递」一节 |
 | 3 | `send --wait` 超时（默认 1800 秒，`--timeout` 可改），**当前回合已取消**，会话还在 | 直接再投一次接着做；`follow` 的超时不取消任何东西，只是旁观者到点走了 |
 | 4 | 回合异常：报错、被中止、撞输出上限 | 读 reason；撞上限就把任务拆小再投 |
@@ -223,7 +223,7 @@ App 版本和验证过的版本不同时，stderr 每次多一行提示；每跑
 ## 两种会话 id
 
 - 命令一律用**本地 id**（`x_` 开头，`new` 返回的那个）。
-- zcode 自己的 `sess_…` id 首回合之后才存在，只在 `list` 里和本地 id 并排显示，对账用，不敲命令。
+- zcode 自己的 `sess_…` id 首回合之后才存在，只在 `list` 和各命令的 `--json` 里和本地 id 并排显示，对账用，不敲命令。
 
 ## 别做的事
 
@@ -255,6 +255,9 @@ zcode-executor deny <id>                         # 应答挂起的审批请求�
 zcode-executor answer <id> <值…>                 # 应答挂起的提问：按序号/value/label，多选逗号分隔
 ```
 
+- 在 Claude Code 里，用户输入 `/zcode` 能打开观察面板，实时看本项目各会话的回复、工具、挂起与排队；你投递时它会自动打开。
+  面板只看不应答，挂起照样由你按上面的规矩转给用户。它背后是只读常驻的 `zcode-executor watch --json`，你不需要自己跑。
+
 - 正文写 `-` 从 stdin 读，长文本别跟命令行引号较劲：
 
   ```bash
@@ -266,4 +269,4 @@ zcode-executor answer <id> <值…>                 # 应答挂起的提问：�
 - `--deny` 建会话时物理拿掉工具（如 `--deny "WebSearch"`），任务不需要执行端上网时用。
 - `--json` 给机器可读结构，脚本化处理时用；输出里的 `id` 都是本地 id。
 - cwd 会解析成真实路径存进登记簿（macOS 的 `/tmp/x` 会变成 `/private/tmp/x`），`list --project` 按解析后的路径匹配。
-- 数据目录 `~/.zcode-executor/`（`ZCODE_EXECUTOR_HOME` 可改）：`sessions.json` 登记簿，`runs/<id>/` 里有 `events.jsonl`（zcode 事件与闸门决定）、`last.json`、`pending.json`、`runner.log`。
+- 数据目录 `~/.zcode-executor/`（`ZCODE_EXECUTOR_HOME` 可改）：`sessions.json` 登记簿，`runs/<id>/` 里有 `events.jsonl`（zcode 事件与闸门决定）、`last.json`、`pending.json`、`offpeak.json`（闲时投递时）、`runner.log`。

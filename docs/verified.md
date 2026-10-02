@@ -360,6 +360,8 @@ exclusive 根之外），`requestUserInput` 只自动批 plan_approval。
 
 ## start plan 投递真机探针（2026-09-29，App 3.14.1，CLI 0.16.9）
 
+> `--start-plan` 已于 2026-10-02 整体撤除（decisions D21），下面是当时的实测记录。
+
 `send --start-plan` 全链路（T8）：授权推送、逐回合改道、宿主应答 runtime headers 全部按预期工作，但**回合被服务器挡在阿里云验证码上**。
 
 | 项 | 结果 |

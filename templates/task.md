@@ -4,7 +4,7 @@
 > Claude 按这里的验收标准检查。写不清楚的部分，zcode 会自己发挥——那是返工的根源。
 >
 > 投递时必带这个文件的路径：
-> `zcode-executor send <id> "执行 tasks/T-XXX.md" --task tasks/T-XXX.md --wait`
+> `zcode-executor send <id> "执行 tasks/T-XXX.md" --task "$WT/tasks/T-XXX.md" --wait`（`--task` 用绝对路径：它按 Claude 的当前目录解析，任务单在执行副本 `$WT` 里）
 > 模型审批把这份文件当授权依据：验收标准里没写的操作，不会自动放行。
 
 ## 要做什么

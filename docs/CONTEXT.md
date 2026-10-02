@@ -103,8 +103,8 @@ _Avoid_: 模型名、型号
 _Avoid_: effort、reasoning、思考档位
 
 **个人 provider 文件（personal provider config file）**：
-我们写给 app-server 子进程的一份只含一个 provider 的 JSON，内容从 `~/.zcode/v2/config.json` 里选中的
-provider 换算而来，路径经环境变量 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 传给子进程（decisions D14）。
+我们写给 app-server 子进程的一份只含一个 provider 的 JSON，内容从选中的 provider 换算而来
+（来源是 `~/.zcode/v2/config.json`，或账号型 provider 从凭据文件解出的平台 key，D19），路径经环境变量 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 传给子进程（decisions D14）。
 _Avoid_: provider 表、registry
 
 **内置 provider 文件（builtin provider config file）**：
@@ -119,7 +119,7 @@ _Avoid_: OAuth provider、zhipu-account
 
 **凭据文件（credentials file）**：
 `~/.zcode/v2/credentials.json`，ZCode App 存登录凭据的平面 JSON，值多为 `enc:v1:` 加密（AES-256-GCM）。
-本项目只读、只解四个键（active provider、user_info、两把 coding plan api-key），闲时任务另解 `zcodejwttoken`（D20），其余键一律不读不解。
+本项目只读、只解四个键（active provider、user_info、两把 coding plan api-key），闲时投递另解 `zcodejwttoken`（D20），其余键一律不读不解。
 _Avoid_: 密钥库、keychain
 
 ### 观察

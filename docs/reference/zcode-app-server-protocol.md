@@ -1,5 +1,5 @@
 <!-- 来源：zcode-acp-server 0.27.3 docs/PROTOCOL.md（https://github.com/william0wang/zcode-acp，Apache-2.0，作者 William Wang）。
-     原样复制作为 ZCode app-server 协议参考，2026-09-07。未经本项目改动。 -->
+     复制作为 ZCode app-server 协议参考，2026-09-07。本项目改动：加了「3.12.2 变化」一节，并在失效的段落段首加了标注；其余原文未改。 -->
 
 # ZCode JSON-RPC Protocol
 

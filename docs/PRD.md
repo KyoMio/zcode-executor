@@ -1,6 +1,6 @@
 # PRD — zcode-executor
 
-> 状态：第一版已实现（2026-09-08）；模型审批部分已按批准的 Jev 修订路线（`docs/jev-hardening-plan.md`，本地记录，不进仓库） 更新为目标合同，实施与验证进度以对应记录为准。需求于 2026-09-07 对齐（31 个问题一轮轮问完）。
+> 状态：第一版已实现（2026-09-08）；闲时投递与 `quota` 随 v0.3.5 发布（2026-10-02，D20），观察面板随 v0.4.0（D22）；模型审批部分已按批准的 Jev 修订路线（`docs/jev-hardening-plan.md`，本地记录，不进仓库） 更新为目标合同，实施与验证进度以对应记录为准。需求于 2026-09-07 对齐（31 个问题一轮轮问完）。
 > 术语以 [CONTEXT.md](CONTEXT.md) 为准；为什么这么定见 [decisions.md](decisions.md)；
 > 本机实测事实见 [verified.md](verified.md)；接手开发见 `docs/handoff/handoff-20260908.md`（本地记录，不进仓库）。
 
@@ -16,14 +16,14 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 
 ## 2. 形态
 
-一个 Claude Code 插件，仓库、插件、CLI、skill 同名 `zcode-executor`。
+一个 Claude Code 插件（skill 与 CLI 也给其他编码代理用），仓库、插件、CLI、skill 同名 `zcode-executor`。
 
 | 层 | 文件 | 干什么 |
 | --- | --- | --- |
-| 协议 | `lib/appserver.mjs` `lib/session.mjs` `lib/providers.mjs` `lib/scrub.mjs` | 拉起 `zcode app-server --stdio`，JSON-RPC 配对、反向请求路由、会话生命周期、回合结束判定、provider 表与脱敏 |
-| 工作流 | `lib/config.mjs` `lib/registry.mjs` `lib/tiers.mjs` `lib/models.mjs` `lib/runs.mjs` `lib/queue.mjs` `lib/run.mjs` `lib/intent.mjs` | 配置、登记簿、等级分配、队列与锁、runner 的一生、`runs/<id>/` 落盘、白名单、模型审批的素材 |
+| 协议 | `lib/appserver.mjs` `lib/session.mjs` `lib/providers.mjs` `lib/offpeak-provider.mjs` `lib/scrub.mjs` | 拉起 `zcode app-server --stdio`，JSON-RPC 配对、反向请求路由、会话生命周期、回合结束判定、provider 表与脱敏 |
+| 工作流 | `lib/config.mjs` `lib/credentials.mjs` `lib/registry.mjs` `lib/tiers.mjs` `lib/models.mjs` `lib/runs.mjs` `lib/queue.mjs` `lib/run.mjs` `lib/intent.mjs` `lib/offpeak.mjs` `lib/offpeak-check.mjs` `lib/offpeak-send.mjs` `lib/offpeak-run.mjs` `lib/tool-summary.mjs` `lib/snapshot.mjs` | 配置、凭据、登记簿、等级分配、队列与锁、runner 的一生、`runs/<id>/` 落盘、白名单、模型审批的素材、闲时投递、本回合解析与会话快照 |
 | 闸门 | `lib/gate.mjs` `lib/pending.mjs` `lib/review/` | 红线 → 模型审批 → 挂起 |
-| 外壳 | `bin/zcode-executor` `lib/cli/` `skills/zcode-executor/` `templates/task.md` | CLI、skill、任务单模板 |
+| 外壳 | `bin/zcode-executor` `lib/cli/` `skills/zcode-executor/` `templates/task.md` `hooks/` `types/` | CLI、skill、任务单模板；观察面板 mod 与它的状态类型声明（只在 Claude Code 里生效，D22） |
 
 **技术栈**：Node ≥ 22、ESM、纯 `.mjs`、零运行时依赖、无构建步骤、`node --test`。
 审批层的 TypeScript 原型手工去掉类型改成 `.mjs`。
@@ -75,7 +75,7 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 | 码 | 含义 |
 | --- | --- |
 | 0 | 回合干完了，去验收 |
-| 1 | 用法错、zcode 起不来、版本过低 |
+| 1 | 用法错、zcode 起不来（含 ZCode App 早于 3.12：找不到内置 provider 文件） |
 | 2 | 被拒：白名单外、会话不在登记簿、等级或思考等级不合法；闲时投递取号前或取号时被拒（会话不空闲、模型不在闲时模型表、没登录或团队版、没有闲时资格、额度用完、取号时鉴权被拒（401/403，要在 App 里重新登录）、闲时服务暂时不可用、闲时接口可能变了）；闲时投递占着会话时的普通投递与排号中的 `--steer`；`--resume` 没有可恢复的闲时投递 |
 | 3 | `send --wait` 超时，当前回合已取消，会话还在可再投；`follow --timeout` 到点只是旁观者走了，不取消任何东西 |
 | 4 | 回合异常：`turn.failed`、被中止、撞输出上限 |
@@ -164,13 +164,14 @@ Flash 类模型思考等级不要往低调，效果差。
                                    preferredProvider、tiers 覆盖、environment、sensitive、
                                    review（enabled、model、thought 默认 low、fastMaxTokens 300、
                                    slowMaxTokens 2000、timeoutMs、jev.apiKey）。都可选；含 Jev key 时文件必须 0600
-  sessions.json                    登记簿：本地 id、zcode 的 sess_（首回合后）、标题、cwd、是否 worktree、等级、模型、思考等级、创建时间、上次结果
+  sessions.json                    登记簿：本地 id、zcode 的 sess_（首回合后）、标题、cwd、是否 worktree、原仓库 repoRoot（worktree 时）、等级、provider、模型、思考等级、创建时间、上次结果
   worktrees/<仓库名>/               执行副本，Claude 建
   runs/<本地 id>/
     state.json                     runner 状态、pid
     events.jsonl                   zcode 事件原样 + 本项目自己的动作（投递、闸门各段结果、approve/deny/answer）
     last.json                      上次回合结果
     pending.json                   挂起中的审批请求或提问，答完删除
+    offpeak.json                   闲时投递的状态：号、排位、阶段、截止时间、未结算的号（不含凭据）
     answer.json                    approve/deny/answer 写的应答，runner 消费后删
     cancel                         叫停当前回合的标记，runner 见到就发 session/stop 并替人拒答挂起，处理完删掉
     runner.log                     runner 的 stderr
@@ -211,7 +212,7 @@ Flash 类模型思考等级不要往低调，效果差。
 
 ## 10. 测试与验证
 
-- `npm test` 只对 `test/mock-appserver.mjs` 跑，不花额度。
+- `npm test` 只对 `test/mock-appserver.mjs` 与 `test/mock-offpeak.mjs` 跑，不花额度。
 - 真机分两类：零 token 的（握手、create（含模型表）、list、close）随手验；
   花额度的（`session/send`）每步只做一次，见 handoff 的完成判据。
 - ~~验收标准：新开一个 Claude Code 会话，只靠 skill 完成一次派单、挂起、审批、验收~~ 已达成（T4.2，2026-09-08）。

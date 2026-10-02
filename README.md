@@ -4,9 +4,9 @@
 
 <p align="center"><strong>Claude plans. ZCode codes. Git verifies.</strong></p>
 
-<p align="center">A plugin for Claude Code (and Codex) that hands a well-specified development task to the local <a href="https://zcode.z.ai">ZCode</a> agent (GLM), runs it in an isolated git worktree, guards every write with a hard-rule check plus a model-based review, and lets you verify the result with <code>git diff</code> and tests instead of trusting the agent's own report.</p>
+<p align="center">A plugin for Claude Code and other coding agents that hands a well-specified development task to the local <a href="https://zcode.z.ai">ZCode</a> agent (GLM), runs it in an isolated git worktree, guards every write with a hard-rule check plus a model-based review, and lets you verify the result with <code>git diff</code> and tests instead of trusting the agent's own report.</p>
 
-<p align="center"><img src="https://img.shields.io/badge/version-v0.3.5-5B4CF0" alt="v0.3.5"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-303%20passing-brightgreen" alt="Tests"></p>
+<p align="center"><img src="https://img.shields.io/badge/version-v0.3.5-5B4CF0" alt="v0.3.5"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-707%20passing-brightgreen" alt="Tests"></p>
 
 ## Why
 
@@ -84,6 +84,8 @@ claude plugin install zcode-executor@zcode-executor --scope user
 ```
 
 `bin/zcode-executor` is added to Bash's `PATH` while the plugin is enabled; the skill appears as `/zcode-executor:zcode-executor`. Saying "let zcode do it" triggers it.
+
+The plugin also ships a **Claude Code mod** (a module of function hooks, `hooks/`): type `/zcode` to open the [watch pane](#watch-pane-claude-code-only), a live view of this project's zcode sessions. It also opens by itself when Claude sends a task, and adds a status-line summary and toasts. Nothing to configure; it needs a Claude Code version with function-hook mods (the API is in early access).
 
 ### Codex
 
@@ -198,7 +200,7 @@ Swap in your agent's directory from the table in the npm section above.
 
 - macOS or Linux. **Windows is not supported yet.** The ZCode app bundle is looked up where each platform puts it (`/Applications/…`, `/opt/ZCode/…`, `/usr/share/zcode/…`); installed anywhere else, point `ZCODE_BIN` at `zcode.cjs`.
 - Node ≥ 22 (ZCode's app-server needs `node:sqlite`).
-- ZCode desktop app **≥ 3.12.2** installed and logged in (3.11 and earlier are not supported). Both login styles work: an account (OAuth) Coding Plan — the CLI decrypts the platform key the App stores in `~/.zcode/v2/credentials.json` (individual and team plans; only the four keys it needs are ever read) — or an API-key provider in `~/.zcode/v2/config.json`. Both files are read-only; nothing is ever written back.
+- ZCode desktop app **≥ 3.12.2** installed and logged in (3.11 and earlier are not supported). Both login styles work: an account (OAuth) Coding Plan — the CLI decrypts the platform key the App stores in `~/.zcode/v2/credentials.json` (individual and team plans; only the four keys it needs are ever read, plus `zcodejwttoken` for off-peak sends) — or an API-key provider in `~/.zcode/v2/config.json`. Both files are read-only; nothing is ever written back.
 
 ## Recommended workflow
 
@@ -227,10 +229,13 @@ Other agents ignore the pane and keep using the skill and the CLI.
 
 | Command | What it does |
 | --- | --- |
-| `doctor [--json]` | Zero-token self-check: finds `zcode.cjs` and the bundled `zcode-builtin.json` (ZCode App ≥ 3.12.2), confirms the config exists, does one real handshake, reports model tiers and the review pipeline for a newly started runner; it does not call Jev |
+| `doctor [--offpeak] [--json]` | Self-check that spends no quota: finds `zcode.cjs` and the bundled `zcode-builtin.json` (ZCode App ≥ 3.12.2), reports both provider sources, does one real handshake, reports model tiers and the review pipeline for a newly started runner (it does not call Jev), and checks the off-peak interface — that step goes online and leaves one self-check session in zcode's own session store. `--offpeak` runs only that step |
+| `quota [--json]` | How many off-peak tickets this tool took today and whether the server would hand one out now; no quota spent, no app-server |
 | `models [--json]` | Lists available models with thought levels and tier assignment |
 | `new --cwd <abs> [--title T] [--tier fast\|strong] [--thought L] [--deny "Tool…"] [--provider id] [--json]` | Registers a session (returns a local id `x_…`); the ZCode session is created on first `send` |
 | `send <id> <text\|-> [--task file] [--wait] [--timeout s] [--steer] [--stream] [--json]` | Queues a message; `--wait` follows until done or blocked; `--task` is the task file the review uses as your authorization; `--steer` injects into a running turn — it takes effect at the next tool boundary, or after the turn ends if there is none |
+| `send <id> <text\|-> --offpeak [--task file] [--wait] [--timeout s] [--stream] [--json]` | Off-peak send: takes a ticket on the spot and runs the turn on the Coding Plan's free off-peak capacity once the ticket is ready (see below) |
+| `send <id> --offpeak --resume [--wait] [--stream] [--json]` | Restarts the runner for an off-peak send left unfinished after the turn exited or the runner died |
 | `follow <id> [--timeout s] [--stream] [--json]` | Follows a background runner until a result or a pending request |
 | `status <id> [--tools N] [--json]` | Read-only snapshot: phase, recent tools (with command or path), queue, pending, last result |
 | `list [--project kw] [--json]` | Registered sessions with phase, tier and last outcome; `--json` adds the owning repository |
@@ -239,7 +244,11 @@ Other agents ignore the pane and keep using the skill and the CLI.
 | `approve <id>` / `deny <id>` | Answers the pending permission request (allow is `allow_once` only) |
 | `answer <id> [--] <values…>` | Answers the pending question by index, value or label; multi-select comma-separated |
 
-Exit codes: `0` done · `1` usage / cannot start · `2` refused (whitelist, unknown session, bad tier) · `3` `--wait` timed out (turn cancelled) · `4` turn failed / cancelled · `5` **blocked, waiting for a human** (permission or question).
+Exit codes: `0` done · `1` usage / cannot start · `2` refused (whitelist, unknown session, bad tier; an off-peak send refused before or while taking a ticket) · `3` `--wait` timed out (turn cancelled) · `4` turn failed / cancelled · `5` **blocked, waiting for a human** (permission or question).
+
+### Off-peak sends
+
+An off-peak send runs the turn on the Coding Plan subscription's free off-peak capacity instead of your plan quota. The server decides when it starts: `send --offpeak` takes a ticket and queues, and the turn runs once the ticket is ready. Acceptance is the same as a normal send. Requirements: an individual Coding Plan account login in the ZCode app, and a session model on the off-peak model list. The session must be idle; while an off-peak send is queued or running, normal sends to that session are refused, so use a separate session for off-peak work. Expired tickets are retaken automatically (up to three tickets per send), `cancel` settles the ticket at any stage, and `quota` shows today's usage (roughly three tickets a day observed). Normal sends stay the default; the skill tells you when off-peak is available and only switches when you ask.
 
 ## Configuration
 
@@ -333,11 +342,11 @@ Newly started runners read the configuration; existing runners do not hot-reload
 ## Development
 
 ```bash
-npm test          # 303 cases against a scripted mock app-server, plus a doc-version drift check; no tokens spent
+npm test          # 707 cases against a scripted mock app-server and mock off-peak server, plus a doc-version drift check; no tokens spent
 node --check lib/**/*.mjs
 ```
 
-Releases are tag-driven: `npm version patch` bumps `package.json`, syncs the version into both READMEs and both plugin manifests, and commits and tags; `git push --follow-tags` triggers the workflow that runs the tests, publishes to npm (Trusted Publishing, no token) and creates the GitHub Release. Commit messages are the changelog.
+Releases are tag-driven: `npm version patch` bumps `package.json`, syncs the version into both READMEs and every host's plugin manifest, and commits and tags; `git push --follow-tags` triggers the workflow that runs the tests, publishes to npm (Trusted Publishing, no token) and creates the GitHub Release. Commit messages are the changelog.
 
 Pure `.mjs`, zero runtime dependencies, no build step. Design documents live in `docs/`: [PRD](docs/PRD.md), [SPEC](docs/SPEC.md), [CONTEXT](docs/CONTEXT.md) (glossary), [RULES](docs/RULES.md) (coding rules), [decisions](docs/decisions.md), [verified](docs/verified.md) (facts measured against the real app-server). Agent-facing entry point: [AGENTS.md](AGENTS.md).
 
