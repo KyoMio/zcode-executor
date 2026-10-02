@@ -311,6 +311,26 @@ zcode-open-bridge 称此模式不读配置里的模型，要环境变量注入�
 - 拿源码：`npm pack zcode-acp-server@0.27.3`，或 npx 缓存里的 0.17.1
   `~/.npm/_npx/c904e5833c2b97e0/node_modules/zcode-acp-server`。
 
+## 工具参数位置与 Bash 成败字段（2026-10-02，App 3.14.1，零 token，读本机 runs/）
+
+- `tool.updated` 的 scheduled 行带 `inputOmitted:true`、`inputRef:"model_stream"`，不带 `input`；参数在同一 `toolCallId` 的
+  `model.streaming` 事件里：`kind:'tool_call'` 的 `payload.input` 是完整参数（之前还有 `tool_input_start/delta/end` 流式分片）。
+  所以 `status` 原先只在 `tool.updated` 里找 `file_path`，3.12 起 `file` 恒为 null。
+- `tool.updated` 的 result 行 `result.success` 对 Bash 退出码非 0 也是 true（x_af149b61 的 122 条结果全为 true，最近 30 个会话没见过 false）；
+  真实成败在 `result.perf.detail.command`：`exitCode`、`status:"failed"`。
+- 回复文字是 `model.streaming` 的 `kind:'text_delta'`，思考是 `reasoning_delta`（量约为回复的十几倍）；`last.json` 的 `lastText`
+  把一回合里多条消息首尾直接相连，没有分隔。
+- `events.jsonl` 九成以上是 `v4/telemetry/event` 遥测行；本机最大的事件文件 121MB。
+
+## Claude Code mod（2026-10-02，Claude Code 桌面版，引擎 2.1.286）
+
+- 函数钩子插件（mod）的 `$.process.run` / `$.process.spawn` 在桌面版 Code 标签页可用（类型文件标着 "CLI only"）；
+  桌面版进程的 PATH 含 `~/.local/bin`，`/usr/bin/env node` 找得到 node（v22）。
+- `$.command.register({name})` 注册的命令就叫 `/<name>`，不带插件名前缀。
+- 桌面版 `Svg` 开 `isInteractive: true` 时，沙箱框会被宿主不定时刷新，肉眼可见地闪（面板只画过 1 次也闪）；
+  不开时按图片显示，SVG 内的 CSS 关键帧动画照样播放且不闪，面板每 250 毫秒重画一次也不闪。
+- `Text` / `Box` 的颜色写主题键（`warning`、`success`、`error`、`suggestion`、`inactive`）在浅色与深色主题下由引擎各自取色。
+
 ## Claude Code 侧（官方文档核对）
 
 - 插件可同时带 `skills/`、`bin/`（启用期间进 Bash 的 PATH）、`.mcp.json`；

@@ -121,3 +121,15 @@ _Avoid_: OAuth provider、zhipu-account
 `~/.zcode/v2/credentials.json`，ZCode App 存登录凭据的平面 JSON，值多为 `enc:v1:` 加密（AES-256-GCM）。
 本项目只读、只解四个键（active provider、user_info、两把 coding plan api-key），闲时任务另解 `zcodejwttoken`（D20），其余键一律不读不解。
 _Avoid_: 密钥库、keychain
+
+### 观察
+
+**观察面板（watch pane）**：
+Claude Code 里实时显示本项目各条会话进展的面板：执行端的回复、正在用的工具、挂起内容、闲时排队进度。
+用 `/zcode` 打开，Claude 投递时也会自动打开。只用来看，不在上面应答挂起，挂起仍由 Claude 转交给人。
+_Avoid_: 监控面板、dashboard、仪表盘
+
+**所属仓库（repo）**：
+会话的执行副本对应的主仓库根目录，用 git 的共同数据目录判定，不按目录名猜。执行副本被删、查不到时为空。
+和登记簿里的 `repoRoot` 不同：`repoRoot` 是 `new` 时记下的原仓库，只在 cwd 是 worktree 时才有；所属仓库在 cwd 就是主仓库时也有值（就是它自己）。
+_Avoid_: 项目名、工作区

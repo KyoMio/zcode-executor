@@ -12,9 +12,9 @@ Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给�
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
 | 协议 | `lib/appserver.mjs` `lib/session.mjs` `lib/providers.mjs` `lib/offpeak-provider.mjs` `lib/scrub.mjs` | 拉起 `zcode app-server --stdio`，JSON-RPC 请求配对与反向请求路由，会话生命周期，回合结束判定 |
-| 工作流 | `lib/config.mjs` `lib/credentials.mjs` `lib/offpeak.mjs` `lib/offpeak-check.mjs` `lib/offpeak-send.mjs` `lib/offpeak-run.mjs` `lib/registry.mjs` `lib/models.mjs` `lib/tiers.mjs` `lib/runs.mjs` `lib/queue.mjs` `lib/run.mjs` `lib/intent.mjs` | 配置、登记簿、等级分配、队列与锁、runner 的一生、`runs/<id>/` 落盘 |
+| 工作流 | `lib/config.mjs` `lib/credentials.mjs` `lib/offpeak.mjs` `lib/offpeak-check.mjs` `lib/offpeak-send.mjs` `lib/offpeak-run.mjs` `lib/registry.mjs` `lib/models.mjs` `lib/tiers.mjs` `lib/runs.mjs` `lib/queue.mjs` `lib/run.mjs` `lib/intent.mjs` `lib/tool-summary.mjs` `lib/snapshot.mjs` | 配置、登记簿、等级分配、队列与锁、runner 的一生、`runs/<id>/` 落盘、本回合解析与会话快照 |
 | 闸门 | `lib/gate.mjs` `lib/pending.mjs` `lib/review/` | 红线 → 模型审批（`workspace/generateText`）→ 挂起等人 |
-| 外壳 | `bin/zcode-executor` `lib/cli/` `skills/zcode-executor/` `templates/` | CLI 与 skill。MCP 外壳按需后加 |
+| 外壳 | `bin/zcode-executor` `lib/cli/` `skills/zcode-executor/` `templates/` `hooks/` | CLI 与 skill；`hooks/` 是只在 Claude Code 里生效的观察面板 mod（decisions D22），运行环境没有 Node、不 import `lib/`，数据只从 `watch` 子命令来。MCP 外壳按需后加 |
 
 项目只接 zcode，协议层直接说 app-server 的 JSON-RPC，中间没有 ACP。
 

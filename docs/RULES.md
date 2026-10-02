@@ -8,8 +8,9 @@
 - Node ≥ 22，ESM，文件后缀 `.mjs`。不写 TypeScript，不加构建步骤。
 - 零运行时依赖。要加依赖必须先在 decisions.md 写一条理由。测试也不加框架，用 `node --test`。
 - 文件按 AGENTS.md 的分层表放：协议层 `lib/appserver.mjs`、`lib/session.mjs`、`lib/providers.mjs`、`lib/offpeak-provider.mjs`、`lib/scrub.mjs`；
-  工作流层 `lib/config.mjs`、`lib/credentials.mjs`、`lib/offpeak.mjs`、`lib/offpeak-check.mjs`、`lib/offpeak-send.mjs`、`lib/offpeak-run.mjs`、`lib/registry.mjs`、`lib/tiers.mjs`、`lib/models.mjs`、`lib/runs.mjs`、`lib/queue.mjs`、`lib/run.mjs`、`lib/intent.mjs`；
-  闸门 `lib/gate.mjs`、`lib/pending.mjs`、`lib/review/`；外壳 `bin/`、`lib/cli/`、`skills/`、`templates/`。
+  工作流层 `lib/config.mjs`、`lib/credentials.mjs`、`lib/offpeak.mjs`、`lib/offpeak-check.mjs`、`lib/offpeak-send.mjs`、`lib/offpeak-run.mjs`、`lib/registry.mjs`、`lib/tiers.mjs`、`lib/models.mjs`、`lib/runs.mjs`、`lib/queue.mjs`、`lib/run.mjs`、`lib/intent.mjs`、`lib/tool-summary.mjs`、`lib/snapshot.mjs`；
+  闸门 `lib/gate.mjs`、`lib/pending.mjs`、`lib/review/`；外壳 `bin/`、`lib/cli/`、`skills/`、`templates/`、`hooks/`。
+  `hooks/` 是 Claude Code 的 mod，跑在引擎自己的环境里（没有 Node）：不 import `lib/`，数据只从 `watch` 子命令来；能测的纯函数放 `hooks/view.mjs`，用 `node --test` 测（decisions D22）。
   跨层共用的只有 `lib/errors.mjs`（`ExecutorError`）。新文件先想清楚归哪层再建。
 - 层间只能向下依赖：外壳 → 工作流 → 协议。闸门由工作流调用，闸门只依赖协议层。协议层不知道
   `runs/` 目录、登记簿、退出码。例外：外壳可以直接用闸门层的**纯函数**（`readPending`、`optionClass`、`questionResponse`），
