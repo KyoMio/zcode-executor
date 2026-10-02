@@ -423,6 +423,31 @@ test('snapshotOf：turnEvents 为 null 时 reply 取 lastText 末尾 800 字，�
   assert.deepEqual(blank.reply, []);
 });
 
+test('snapshotOf：replyMarkdown 有 turnEvents 取最后一条消息，为 null 取 lastText，都没有为空串', async (t) => {
+  const home = await makeHome();
+  await makeSession(home, 'x_00000011', {
+    state: { sessionId: 'sess_11', pid: DEAD_PID, phase: 'exited', startedAt: T(0), updatedAt: T(2), current: null },
+    events: [
+      SEND,
+      { type: 'model.streaming', payload: { assistantMessageId: 'm1', kind: 'text_delta', delta: '# 第一条' } },
+      { type: 'model.streaming', payload: { assistantMessageId: 'm2', kind: 'text_delta', delta: '## 第二条\n\n正文' } },
+    ],
+  });
+  const { events } = createTurnReader(path.join(home, 'runs', 'x_00000011', 'events.jsonl')).read();
+  const withTurn = snapshotOf({ home, entry: mkEntry('x_00000011', home), repo: null, turnEvents: events });
+  assert.equal(withTurn.replyMarkdown, '## 第二条\n\n正文'); // 只留最后一条消息的原文
+
+  await makeSession(home, 'x_00000012', {
+    state: { sessionId: 'sess_12', pid: DEAD_PID, phase: 'exited', startedAt: T(0), updatedAt: T(2), current: null },
+    last: { outcome: 'done', lastText: '# 标题\n\n结尾的话', startedAt: T(0), endedAt: T(1), task: null },
+  });
+  const fromLast = snapshotOf({ home, entry: mkEntry('x_00000012', home), repo: null, turnEvents: null });
+  assert.equal(fromLast.replyMarkdown, '# 标题\n\n结尾的话'); // lastText 整段当一条
+
+  const bare = snapshotOf({ home, entry: mkEntry('x_00000013', home), repo: null, turnEvents: null });
+  assert.equal(bare.replyMarkdown, ''); // 什么都没有
+});
+
 test('snapshotOf：pending.json 坏 JSON 时快照照出，pendingDetail 为 null', async (t) => {
   const home = await makeHome();
   await makeSession(home, 'x_0000000d', {
