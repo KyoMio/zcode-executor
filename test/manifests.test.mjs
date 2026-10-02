@@ -80,5 +80,5 @@ test('观察面板 mod 的清单：hooks.json 指向 register.mjs，plugin.json 
   const base = JSON.parse(read('.claude-plugin/plugin.json'));
   assert.equal(base.types, './types/index.d.ts');
   assert.equal(base.userConfig?.nodePath?.type, 'string');
-  assert.match(read('types/index.d.ts'), /'zcode-executor': \{ panel: ZcodeExecutorPanel; frame: number \}/);
+  assert.match(read('types/index.d.ts'), /'zcode-executor': \{ panel: ZcodeExecutorPanel; frame: number; expanded: Record<string, boolean> \}/);
 });

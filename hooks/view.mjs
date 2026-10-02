@@ -181,3 +181,14 @@ export function startFailure(reason) {
   const noNode = /env: .?node|ENOENT|No such file|not found/i.test(text);
   return `启动 watch 失败：${text}${noNode ? '。可在插件配置里填写 node 路径（nodePath）' : ''}`;
 }
+
+/** 收起时回复区的一行预览：第一行有内容的文字，去掉开头的 Markdown 记号（标题、列表、引用、表格竖线）与加粗。 */
+export function previewLine(markdown) {
+  for (const raw of String(markdown ?? '').split('\n')) {
+    const line = raw.trim();
+    if (!line || line === '…' || /^(```|~~~)/.test(line) || /^\|?[\s|:-]+\|?$/.test(line)) continue;
+    const text = line.replace(/^(#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s*)/, '').replace(/^\||\|$/g, '').replace(/\*\*|__/g, '').trim();
+    if (text) return text;
+  }
+  return '';
+}

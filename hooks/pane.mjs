@@ -1,7 +1,7 @@
 // hooks/pane.mjs —— 观察面板的布局（decisions D22）：拿 view.mjs 算好的分段与文案，用引擎给的元素表画一棵树。
 // 不取数据、不和引擎打交道（hooks/register.mjs），不 import lib/。元素用全局 h(...) 构造（mod 不编译 JSX）。
 // 颜色只写主题键（warning/success/error/suggestion/inactive），浅色与深色主题由引擎各自取色；动态图标除外，见下。
-import { cornerOf, headOf, outcomeOf, repoName, scopeNote, sectionsOf } from './view.mjs';
+import { cornerOf, headOf, outcomeOf, previewLine, repoName, scopeNote, sectionsOf } from './view.mjs';
 
 // 动态图标：SVG 内的 CSS 关键帧动画，按图片显示（不开 isInteractive），浏览器自己播放，不用重画。
 // verified.md 2026-10-02：isInteractive 的沙箱框会被宿主不定时刷新、明显闪烁；图片模式照播不闪。
@@ -47,9 +47,11 @@ const hhmm = (iso) => {
  *   link       'live' 实时 / 'down' 断开等重连 / 'failed' 起不来；message 是 down/failed 时的说明
  *   now        毫秒时间戳，算时长用
  *   frame      终端转圈字符的帧号
+ *   expanded   展开了回复的会话 id → true
+ *   onToggle   按「展开回复 / 收起」时调用，参数是会话 id
  */
-export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message = null, now, frame = 0 }) {
-  const { Box, Text, Code, Svg, Markdown } = el;
+export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message = null, now, frame = 0, expanded = {}, onToggle }) {
+  const { Box, Text, Code, Svg, Markdown, Button } = el;
   const T = (props, ...kids) => h(Text, { wrap: 'truncate-end', ...props }, ...kids);
   const showRepo = repo === null || repo === undefined; // 显示全部项目时才标仓库名
   const sections = sectionsOf(sessions, now);
@@ -68,11 +70,22 @@ export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message
         h(Text, { color, bold: true }, label),
         T({ bold: true }, ` ${s.title || s.id}`)),
       corner && h(Text, { dimColor: true }, corner));
-  // 回复：快照带 replyMarkdown（v0.4.1 起，最新一条消息的原文）就按 Markdown 画，像 Claude 自己的回复一样；
-  // 旧版 watch 没有这个字段时退回逐行显示
-  const replyOf = (s, lastLines) => (s.replyMarkdown && Markdown
-    ? h(Box, { marginTop: 1, paddingLeft: 2 }, h(Markdown, { text: codeText(s.replyMarkdown) }))
-    : replyBlock(lastLines ? (s.reply ?? []).slice(-lastLines) : (s.reply ?? [])));
+  // 回复：快照带 replyMarkdown（v0.4.1 起，最新一条消息的原文）时默认收起成一行预览加「展开回复」按钮，
+  // 展开后按 Markdown 画，像 Claude 自己的回复一样；旧版 watch 没有这个字段时退回逐行显示
+  const toggle = (s, label) => Button && onToggle
+    && h(Button, { key: `reply-${s.id}`, label, plain: true, dimColor: true, onPress: () => onToggle(s.id) });
+  const replyOf = (s, lastLines) => {
+    if (!(s.replyMarkdown && Markdown)) return replyBlock(lastLines ? (s.reply ?? []).slice(-lastLines) : (s.reply ?? []));
+    if (expanded[s.id] || !Button || !onToggle) {
+      return h(Box, { flexDirection: 'column', marginTop: 1 },
+        h(Box, { paddingLeft: 2 }, h(Markdown, { text: codeText(s.replyMarkdown) })),
+        toggle(s, '收起'));
+    }
+    return h(Box, { flexDirection: 'row', marginTop: 1, gap: 1 },
+      h(Text, { color: 'success' }, '┃'),
+      h(Box, { flexShrink: 1 }, T({ dimColor: true }, previewLine(s.replyMarkdown))),
+      toggle(s, '展开回复'));
+  };
   const replyBlock = (lines) => lines.length > 0 && h(Box, { flexDirection: 'column', marginTop: 1 },
     ...lines.map((line) => h(Box, { flexDirection: 'row' },
       h(Text, { color: 'success' }, '┃ '),

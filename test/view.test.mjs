@@ -10,6 +10,7 @@ import {
   headOf,
   outcomeOf,
   repoName,
+  previewLine,
   scopeNote,
   sectionsOf,
   startFailure,
@@ -142,11 +143,13 @@ test('布局：样稿数据在桌面与终端两种元素表下都能画出，�
     Svg: new Set(['source', 'alt', 'width', 'height', 'isInteractive']),
     Code: new Set(['source', 'language', 'path', 'startLine', 'format']),
     Markdown: new Set(['key', 'text', 'dimColor']),
+    Button: new Set(['key', 'label', 'hotkey', 'action', 'plain', 'dimColor', 'variant', 'role', 'autoFocus', 'onPress']),
   };
   globalThis.h = (type, props, ...kids) => {
     for (const [k, v] of Object.entries(props ?? {})) {
       assert.ok(ALLOWED[type]?.has(k), `${type} 不认属性 ${k}`);
-      assert.ok(['string', 'number', 'boolean'].includes(typeof v), `${type}.${k} 不是简单值`);
+      if (k === 'onPress') assert.equal(typeof v, 'function');
+      else assert.ok(['string', 'number', 'boolean'].includes(typeof v), `${type}.${k} 不是简单值`);
     }
     if (type === 'Markdown') assert.ok(!/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(props.text) && props.text.length <= 10000, 'Markdown 内容有不许的控制字符或过长');
     if (type === 'Code') assert.ok(!/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(props.source) && props.source.length <= 10000, 'Code 内容有不许的控制字符或过长');
@@ -245,5 +248,35 @@ test('布局：快照带 replyMarkdown 时回复按 Markdown 画，没有时退�
     assert.ok(!texts.includes('旧的逐行回复')); // 有 Markdown 就不再画逐行
     assert.ok(texts.includes('二') && !texts.includes('"一"')); // 刚结束卡片退回逐行，只留最后 4 行
   }
+  delete globalThis.h;
+});
+
+test('收起时的预览行：第一行有内容的文字，去掉 Markdown 记号', () => {
+  assert.equal(previewLine('…\n\n## 完成情况\n\n- 改了 a'), '完成情况');
+  assert.equal(previewLine('**W4 完成**：加了字段'), 'W4 完成：加了字段');
+  assert.equal(previewLine('```js\nconst a = 1;\n```'), 'const a = 1;');
+  assert.equal(previewLine('| 项 | 结果 |\n| --- | --- |'), '项 | 结果');
+  assert.equal(previewLine(''), '');
+});
+
+test('回复默认收起成一行预览加「展开回复」按钮，按下后改由 Markdown 显示全文并给「收起」', async () => {
+  globalThis.h = (type, props, ...kids) => ({ type, props: props ?? {}, kids: kids.flat() });
+  const { drawPane } = await import('../hooks/pane.mjs');
+  const find = (node, type) => (node && typeof node === 'object'
+    ? (node.type === type ? [node] : []).concat(node.kids.flatMap((k) => find(k, type))) : []);
+  const s = snap({ id: 'r', phase: 'running', since: ago(1), replyMarkdown: '## 完成\n\n- 第一条' });
+  const el = { Box: 'Box', Text: 'Text', Code: 'Code', Markdown: 'Markdown', Button: 'Button' };
+  const toggled = [];
+  const onToggle = (id) => toggled.push(id);
+  const closed = drawPane(el, { sessions: [s], repo: '/repo/app', updatedAt: null, now: NOW, onToggle });
+  assert.equal(find(closed, 'Markdown').length, 0);
+  const [open] = find(closed, 'Button');
+  assert.equal(open.props.label, '展开回复');
+  assert.ok(JSON.stringify(closed).includes('完成'));
+  open.props.onPress();
+  assert.deepEqual(toggled, ['r']);
+  const opened = drawPane(el, { sessions: [s], repo: '/repo/app', updatedAt: null, now: NOW, onToggle, expanded: { r: true } });
+  assert.equal(find(opened, 'Markdown')[0].props.text, '## 完成\n\n- 第一条');
+  assert.equal(find(opened, 'Button')[0].props.label, '收起');
   delete globalThis.h;
 });

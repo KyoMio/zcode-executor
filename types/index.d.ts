@@ -36,6 +36,6 @@ export type ZcodeExecutorPanel = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'zcode-executor': { panel: ZcodeExecutorPanel; frame: number };
+    'zcode-executor': { panel: ZcodeExecutorPanel; frame: number; expanded: Record<string, boolean> };
   }
 }
