@@ -333,7 +333,7 @@ zcode-open-bridge 称此模式不读配置里的模型，要环境变量注入�
 - 引擎的静态检查（`claude plugin validate`）要求接收 `$` 的函数声明在模块顶层，写在 `register` 里的闭包会被拒。
 - 桌面版经 `~/.claude/settings.json` 的 `env` 设 `CLAUDE_CODE_PLUGIN_DIRS`（另加 `CLAUDE_CODE_PLUGIN_DIR_WATCH=1`）后，新开的会话就加载该目录的插件，不必重启 App。
 - 观察面板检查点 B（watch-pane 分支，`watch` + `hooks/`）：用户在桌面版按 W1–W9 试过，报告通过（派单刷新、挂起转交、回合结束提示与卡片、
-  项目过滤、浅色深色、断线重连、终端版）。W5 自动打开在窄窗口下是否排队没有单独记录；W10（其他宿主读到只有 `modules` 的 `hooks/hooks.json`）未验证。
+  项目过滤、浅色深色、断线重连、终端版）。W5：Claude 执行 `zcode-executor send` 时面板自动打开，宽度正常（桌面版，用户观察）；W10（其他宿主读到只有 `modules` 的 `hooks/hooks.json`）未验证。
 
 ## Claude Code 侧（官方文档核对）
 

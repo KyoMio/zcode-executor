@@ -360,11 +360,11 @@ CLI 的 standalone 端口也因此只支持 individual-coding-plan。**结论：
 - 桌面版的动态图标用 `Svg` 的图片模式加 SVG 内的 CSS 动画：2026-10-02 实测 `isInteractive` 的沙箱框会被宿主不定时刷新、明显闪烁，图片模式照播不闪（verified.md）。
 
 风险与边界：mod 接口在 Claude Code 里标着早期预览，可能随版本变；所以 mod 只用少数接口，逻辑都在 CLI。只有 Claude Code 认 mod，
-Codex、Gemini、Copilot、Grok 照旧只有 skill 与 CLI。函数钩子在正式安装的插件里是否默认启用、非人手打开的面板在窄窗口是否排队，以检查点实测为准。
+Codex、Gemini、Copilot、Grok 照旧只有 skill 与 CLI。函数钩子在正式安装的插件里是否默认启用，以检查点实测为准。
 
 重开条件：Claude Code 撤掉或大改函数钩子接口；或需要在面板上应答挂起（要先改 AGENTS.md 的硬约束）。
 
-实测（2026-10-02，verified.md「Claude Code mod」）：桌面版检查点 W1–W9 用户报告通过；`watch` 首轮对本机 219 条会话约 0.4 秒、稳态 CPU 约 4%。
+实测（2026-10-02，verified.md「Claude Code mod」）：桌面版检查点 W1–W9 用户报告通过，Claude 投递时面板自动打开、宽度正常；`watch` 首轮对本机 219 条会话约 0.4 秒、稳态 CPU 约 4%。
 未验证：其他宿主读到只有 `modules` 的 `hooks/hooks.json` 会不会报错（Codex、Copilot CLI 若按 Claude 的 hooks 约定读这个文件）；有人报错再改清单。
 
 ## 补记：模型审批的模型从已推的 provider 表里选，不再多一次 readState
