@@ -218,8 +218,10 @@ The split keeps the expensive model on judgment and the cheap one on typing.
 In Claude Code (terminal or the desktop Code tab), type `/zcode` to open a live pane showing what this project's zcode sessions are doing:
 
 - **Needs you**: pending permission requests (full command and reason), questions, runners that died;
-- **Running**: the executor's latest reply lines, the tool it is running with its arguments, recently finished tools (failures in red), and queue position for off-peak sends;
-- **Finished**: sessions that ended in the last 10 minutes show the outcome and the last reply lines; older ones take one line each.
+- **Running**: the executor's latest message rendered as Markdown, the tool it is running with its arguments, recently finished tools (failures in red), and queue position for off-peak sends;
+- **Finished**: sessions that ended in the last 10 minutes show the outcome and their last message; older ones take one line each.
+
+A message longer than two lines is folded to its first two; press **Expand reply** to read it in full and **Collapse** to fold it again.
 
 The pane opens by itself when Claude sends a task. The status line sums up running turns and pending requests, and a toast pops on a pending request, a finished turn, or a dead runner. The pane is read-only: pending requests still go through Claude.
 It reads `zcode-executor watch --json` (read-only, long-running, no quota) and shows only sessions of the repository the Claude session is in. If the pane says node cannot be found, set `nodePath` in the plugin's settings.

@@ -15,6 +15,7 @@ export type ZcodeExecutorSnapshot = {
   lastEndedAt: string | null;
   lastEndOutcome: string | null;
   reply: string[];
+  replyMarkdown?: string;
   activeTool: ZcodeExecutorTool | null;
   recentTools: ZcodeExecutorTool[];
   pendingDetail:
@@ -35,6 +36,6 @@ export type ZcodeExecutorPanel = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'zcode-executor': { panel: ZcodeExecutorPanel; frame: number };
+    'zcode-executor': { panel: ZcodeExecutorPanel; frame: number; expanded: Record<string, boolean> };
   }
 }

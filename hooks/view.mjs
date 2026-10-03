@@ -181,3 +181,28 @@ export function startFailure(reason) {
   const noNode = /env: .?node|ENOENT|No such file|not found/i.test(text);
   return `启动 watch 失败：${text}${noNode ? '。可在插件配置里填写 node 路径（nodePath）' : ''}`;
 }
+
+/**
+ * 回复的一行文字（收起时用）：只去掉纯排版的 Markdown 记号，内容里的符号一个不动。
+ * 行首的标题 `# `、无序列表 `- ` `* ` `+ `、引用 `> `（记号后面必须跟空格才算）；表格行（以 `|` 开头）首尾的竖线；
+ * 反引号代码以外成对的 `**加粗**` 记号。有序列表的编号保留（表示步骤顺序）；`__` 一律不动（常是 `__init__` 这类内容）。
+ * 纯排版的行返回 ''：空行、`…`、代码块围栏、表格分隔行、整行分隔线（`---` `***` `___`）。
+ */
+export function plainLine(raw) {
+  const line = String(raw ?? '').trim();
+  if (!line || line === '…' || /^(```|~~~)/.test(line)) return '';
+  if (line.startsWith('|') && /^[\s|:-]+$/.test(line)) return ''; // 表格分隔行 | --- | :-: |
+  if (/^([-*_])(\s*\1){2,}\s*$/.test(line)) return ''; // 分隔线
+  let text = line.replace(/^(#{1,6}|[-*+]|>)\s+/, '');
+  if (line.startsWith('|')) text = text.replace(/^\|/, '').replace(/\|$/, '');
+  return text.split(/(`[^`]*`)/).map((part, i) => (i % 2 === 1 ? part : part.replace(/\*\*(?=\S)(.+?)(?<=\S)\*\*/g, '$1'))).join('').trim();
+}
+
+/**
+ * 回复要不要折叠：按原文里有内容的行（plainLine 非空）数，超过 limit 行才折叠。
+ * 返回 { fold, lines }：fold 为 false 时整段按 Markdown 显示、不出按钮；为 true 时 lines 是收起时显示的前 limit 行。
+ */
+export function replyFold(markdown, limit = 2) {
+  const lines = String(markdown ?? '').split('\n').map(plainLine).filter(Boolean);
+  return { fold: lines.length > limit, lines: lines.slice(0, limit) };
+}

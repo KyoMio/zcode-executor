@@ -16,6 +16,7 @@ const SEND_RE = /\bzcode-executor['"]?\s+send\b/; // 绝对路径带引号时是
 
 const panel = atom({ plugin: 'zcode-executor', key: 'panel' }, EMPTY_PANEL);
 const frame = atom({ plugin: 'zcode-executor', key: 'frame' }, 0);
+const expanded = atom({ plugin: 'zcode-executor', key: 'expanded' }, {}); // 展开了回复的会话 id → true
 
 const clock = () => new Date().toTimeString().slice(0, 8);
 
@@ -136,7 +137,10 @@ export const register = (on, options) => {
       f = await read($, frame);
       if (!frameTimer && sessions.some((s) => s.phase === 'running')) frameTimer = $.clock.every(FRAME_MS, () => void nextFrame($));
     }
+    const open = await read($, expanded);
     return drawPane(el, {
+      expanded: open,
+      onToggle: (id) => update($, expanded, (m) => ({ ...m, [id]: !m?.[id] })),
       sessions,
       repo: p.repo,
       updatedAt: p.updatedAt,

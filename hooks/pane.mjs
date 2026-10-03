@@ -1,7 +1,7 @@
 // hooks/pane.mjs —— 观察面板的布局（decisions D22）：拿 view.mjs 算好的分段与文案，用引擎给的元素表画一棵树。
 // 不取数据、不和引擎打交道（hooks/register.mjs），不 import lib/。元素用全局 h(...) 构造（mod 不编译 JSX）。
 // 颜色只写主题键（warning/success/error/suggestion/inactive），浅色与深色主题由引擎各自取色；动态图标除外，见下。
-import { cornerOf, headOf, outcomeOf, repoName, scopeNote, sectionsOf } from './view.mjs';
+import { cornerOf, headOf, outcomeOf, replyFold, repoName, scopeNote, sectionsOf } from './view.mjs';
 
 // 动态图标：SVG 内的 CSS 关键帧动画，按图片显示（不开 isInteractive），浏览器自己播放，不用重画。
 // verified.md 2026-10-02：isInteractive 的沙箱框会被宿主不定时刷新、明显闪烁；图片模式照播不闪。
@@ -31,8 +31,8 @@ const waitSvg = (size) => svgDoc(size, `<style>
 // 终端没有 Svg：执行中用转圈字符，由 register.mjs 定时换帧（frame 递增）
 export const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 
-// Code 只许制表符与换行两种控制字符、至多 10000 字，否则整棵树被拒（类型声明 CodeProps）
-const codeText = (text) => String(text).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').slice(0, 10000);
+// Code 与 Markdown 只许制表符与换行两种控制字符、至多 10000 字，否则整棵树被拒（类型声明 CodeProps、MarkdownProps）
+const codeText = (text) => String(text).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '').slice(0, 10000);
 
 const hhmm = (iso) => {
   const d = new Date(iso);
@@ -47,9 +47,11 @@ const hhmm = (iso) => {
  *   link       'live' 实时 / 'down' 断开等重连 / 'failed' 起不来；message 是 down/failed 时的说明
  *   now        毫秒时间戳，算时长用
  *   frame      终端转圈字符的帧号
+ *   expanded   展开了回复的会话 id → true
+ *   onToggle   按「展开回复 / 收起」时调用，参数是会话 id
  */
-export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message = null, now, frame = 0 }) {
-  const { Box, Text, Code, Svg } = el;
+export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message = null, now, frame = 0, expanded = {}, onToggle }) {
+  const { Box, Text, Code, Svg, Markdown, Button } = el;
   const T = (props, ...kids) => h(Text, { wrap: 'truncate-end', ...props }, ...kids);
   const showRepo = repo === null || repo === undefined; // 显示全部项目时才标仓库名
   const sections = sectionsOf(sessions, now);
@@ -68,6 +70,24 @@ export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message
         h(Text, { color, bold: true }, label),
         T({ bold: true }, ` ${s.title || s.id}`)),
       corner && h(Text, { dimColor: true }, corner));
+  // 回复：快照带 replyMarkdown（v0.4.1 起，最新一条消息的原文）时按 Markdown 画，像 Claude 自己的回复一样。
+  // 有内容的行不超过两行就整段显示、不出按钮；超过两行默认收起成前两行（第二行末尾接 …）加「展开回复」，
+  // 展开后显示全文与「收起」。旧版 watch 没有这个字段时退回逐行显示。
+  const markdownBox = (s) => h(Box, { paddingLeft: 2 }, h(Markdown, { text: codeText(s.replyMarkdown) }));
+  const toggle = (s, label) => h(Box, { paddingLeft: 2 },
+    h(Button, { key: `reply-${s.id}`, label, plain: true, dimColor: true, onPress: () => onToggle(s.id) }));
+  const replyOf = (s, lastLines) => {
+    if (!(s.replyMarkdown && Markdown)) return replyBlock(lastLines ? (s.reply ?? []).slice(-lastLines) : (s.reply ?? []));
+    const { fold, lines } = replyFold(s.replyMarkdown);
+    const canToggle = Boolean(Button && onToggle);
+    if (!fold || !canToggle) return h(Box, { flexDirection: 'column', marginTop: 1 }, markdownBox(s));
+    if (expanded[s.id]) return h(Box, { flexDirection: 'column', marginTop: 1 }, markdownBox(s), toggle(s, '收起'));
+    return h(Box, { flexDirection: 'column', marginTop: 1 },
+      ...lines.map((line, i) => h(Box, { flexDirection: 'row' },
+        h(Text, { color: 'success' }, '┃ '),
+        h(Box, { flexShrink: 1 }, T({}, i === lines.length - 1 ? `${line} …` : line)))),
+      toggle(s, '展开回复'));
+  };
   const replyBlock = (lines) => lines.length > 0 && h(Box, { flexDirection: 'column', marginTop: 1 },
     ...lines.map((line) => h(Box, { flexDirection: 'row' },
       h(Text, { color: 'success' }, '┃ '),
@@ -96,7 +116,7 @@ export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message
     return card('success',
       headRow(icon('pulse', 16), head.label, head.color, s, cornerOf(s, now)),
       meta(s),
-      replyBlock(s.reply ?? []),
+      replyOf(s),
       s.activeTool && h(Box, { flexDirection: 'row', marginTop: 1 },
         h(Text, { color: 'success', bold: true }, `▸ ${s.activeTool.toolName}  `),
         T({}, s.activeTool.summary ?? '')),
@@ -110,7 +130,7 @@ export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message
     return card(o.color,
       headRow(h(Text, { color: o.color, bold: true }, o.glyph), o.label, o.color, s, s.since ? hhmm(s.since) : null),
       meta(s),
-      replyBlock((s.reply ?? []).slice(-4)));
+      replyOf(s, 4));
   };
 
   const doneRow = (s) => {

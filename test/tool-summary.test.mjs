@@ -4,7 +4,7 @@
 // tool_call / text_delta / reasoning_delta。不碰文件系统，全是内存事件数组。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseTurn, replyLines, toolSummary, pendingSummary, turnEvents } from '../lib/tool-summary.mjs';
+import { lastMessageMarkdown, markdownTail, parseTurn, replyLines, toolSummary, pendingSummary, turnEvents } from '../lib/tool-summary.mjs';
 
 const CWD = '/repo';
 
@@ -216,6 +216,91 @@ test('replyLines：总长超 800 字从最前面丢行、最前一行截掉开�
   const tail = 'y'.repeat(750);
   const kept = replyLines([{ assistantMessageId: 'm1', delta: `${'z'.repeat(100)}\n${tail}` }]);
   assert.deepEqual(kept, ['z'.repeat(50), tail]); // 850 字：丢整行会低于 800，改截最前一行的开头
+});
+
+// ---------- replyMarkdown ----------
+
+test('lastMessageMarkdown：只取最后一条消息，前面消息的文字不出现；空行与 Markdown 结构原样', () => {
+  const lastBody = '## 第二条\n\n- 甲\n- 乙\n\n| 一 | 二 |\n| --- | --- |\n| 三 | 四 |';
+  const deltas = [
+    { assistantMessageId: 'm1', delta: '# 第一条' },
+    { assistantMessageId: 'm1', delta: '旧文字' },
+    { assistantMessageId: 'm2', delta: lastBody },
+  ];
+  assert.equal(lastMessageMarkdown(deltas), lastBody);
+});
+
+test('markdownTail：不超长原样返回；超长以 … 开头、截断点挪到整行开头；找不到换行就不挪', () => {
+  const short = '# 标题\n\n正文两行\n第二行';
+  assert.equal(markdownTail(short), short);
+  assert.equal(markdownTail(short, { maxChars: short.length }), short); // 恰好等于上限也算不超
+
+  const text = `${'x'.repeat(30)}\n${'y'.repeat(5)}\n${'z'.repeat(25)}`; // 长 62
+  // maxChars 30：截断点落在 y 行中间，往后挪到换行之后，从 z 行整行开始（宁可少于 30 字）
+  assert.equal(markdownTail(text, { maxChars: 30 }), `…\n\n${'z'.repeat(25)}`);
+  // 全程没有换行：不挪，末尾 30 字原样保住
+  assert.equal(markdownTail('a'.repeat(100), { maxChars: 30 }), `…\n\n${'a'.repeat(30)}`);
+});
+
+test('markdownTail：截断点正好在整行开头时不再多丢一行', () => {
+  // cut=4 正好是 bbb 行首：旧实现会从 4 往后找到 ccc 行首，把 bbb 也丢了
+  assert.equal(markdownTail('aaa\nbbb\nccc', { maxChars: 7 }), '…\n\nbbb\nccc');
+});
+
+test('markdownTail：截断点落在代理对后半时再让一个字，结果里没有孤立的半个代理对', () => {
+  // 40 个码元、cut=35 落在一个 😀 的后半：再让一个码元，从下一个 😀 整字开始
+  assert.equal(markdownTail('😀'.repeat(20), { maxChars: 5 }), `…\n\n${'😀'.repeat(2)}`);
+});
+
+test('markdownTail：截在表格中间补回表头与分隔行；截在表格外、表头已在保留部分时不补', () => {
+  const table = '前文一段\n\n| 甲 | 乙 |\n| --- | --- |\n| 一 | 二 |\n| 三 | 四 |';
+  // 截断点落在数据行里：保留的是没头没尾的两行数据，补回表头与分隔行
+  assert.equal(markdownTail(table, { maxChars: 20 }), '…\n\n| 甲 | 乙 |\n| --- | --- |\n| 一 | 二 |\n| 三 | 四 |');
+  // 截在表格后面的正文里：保留首行不是 | 开头，不补
+  const outside = '前文一段\n\n| 甲 | 乙 |\n| --- | --- |\n| 一 | 二 |\n\n结尾还有很多内容撑长它';
+  assert.equal(markdownTail(outside, { maxChars: 8 }), '…\n\n有很多内容撑长它');
+  // 截断点正好在表头行首：表头本来就在保留部分里，不重复补
+  assert.equal(markdownTail(table, { maxChars: table.length - 6 }), `…\n\n${table.slice(6)}`);
+});
+
+test('markdownTail：截断点落在代码块里补原围栏行（含语言名），落在代码块外不补', () => {
+  // 被截掉的部分恰含一个开启围栏 ```js（奇数）→ 在 … 之后补回 ```js 重新打开代码块
+  const inCode = `引言\n\n\`\`\`js\n${'y'.repeat(40)}\n结尾`;
+  assert.equal(markdownTail(inCode, { maxChars: 10 }), '…\n\n```js\n结尾');
+  // 围栏成对（偶数）→ 截断点在代码块外，不补
+  const outCode = `引言\n\n\`\`\`js\ncode\n\`\`\`\n\n${'y'.repeat(40)}\n结尾`;
+  assert.equal(markdownTail(outCode, { maxChars: 10 }), '…\n\n结尾');
+});
+
+test('markdownTail：\\r\\n 归一成 \\n、单独 \\r 也是，控制字符删掉，制表符保留，首尾空白去掉', () => {
+  const raw = '# 标题\r\n\r\n- 甲\t乙\r- 丙\u0007\n';
+  assert.equal(markdownTail(raw), '# 标题\n\n- 甲\t乙\n- 丙');
+  assert.equal(markdownTail('a\u009bb'), 'ab'); // C1 控制字符（\x80-\x9f）一并删掉
+});
+
+test('lastMessageMarkdown：没有 delta 返回空串', () => {
+  assert.equal(lastMessageMarkdown([]), '');
+  assert.equal(lastMessageMarkdown(undefined), '');
+});
+
+test('parseTurn：replyMarkdown 取最新一条消息，reasoning_delta 不进来；reply 取法不变', () => {
+  const events = [
+    { type: 'model.streaming', payload: { assistantMessageId: 'm1', kind: 'text_delta', delta: '# 旧消息' } },
+    { type: 'model.streaming', payload: { assistantMessageId: 'm2', kind: 'text_delta', delta: '## 新消息\n\n正文' } },
+    { type: 'model.streaming', payload: { assistantMessageId: 'm2', kind: 'reasoning_delta', delta: '思考' } },
+  ];
+  const { reply, replyMarkdown } = parseTurn(events, { cwd: CWD });
+  assert.deepEqual(reply, ['# 旧消息', '## 新消息', '正文']);
+  assert.equal(replyMarkdown, '## 新消息\n\n正文');
+  assert.equal(parseTurn([], { cwd: CWD }).replyMarkdown, '');
+});
+
+test('parseTurn：最新一条消息只有 tool_call 没有文字时，replyMarkdown 仍是上一条有文字的消息', () => {
+  const events = [
+    { type: 'model.streaming', payload: { assistantMessageId: 'm1', kind: 'text_delta', delta: '先说结论' } },
+    { type: 'model.streaming', payload: { assistantMessageId: 'm2', kind: 'tool_call', toolCallId: 't1', toolName: 'Bash', input: { command: 'ls' } } },
+  ];
+  assert.equal(parseTurn(events, { cwd: CWD }).replyMarkdown, '先说结论'); // tool_call 不进 textDeltas，最后一条有文字的还是 m1
 });
 
 // ---------- 本回合边界 ----------

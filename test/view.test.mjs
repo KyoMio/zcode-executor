@@ -10,6 +10,8 @@ import {
   headOf,
   outcomeOf,
   repoName,
+  plainLine,
+  replyFold,
   scopeNote,
   sectionsOf,
   startFailure,
@@ -141,13 +143,17 @@ test('布局：样稿数据在桌面与终端两种元素表下都能画出，�
     Text: new Set(['color', 'backgroundColor', 'dimColor', 'bold', 'italic', 'underline', 'strikethrough', 'inverse', 'wrap']),
     Svg: new Set(['source', 'alt', 'width', 'height', 'isInteractive']),
     Code: new Set(['source', 'language', 'path', 'startLine', 'format']),
+    Markdown: new Set(['key', 'text', 'dimColor']),
+    Button: new Set(['key', 'label', 'hotkey', 'action', 'plain', 'dimColor', 'variant', 'role', 'autoFocus', 'onPress']),
   };
   globalThis.h = (type, props, ...kids) => {
     for (const [k, v] of Object.entries(props ?? {})) {
       assert.ok(ALLOWED[type]?.has(k), `${type} 不认属性 ${k}`);
-      assert.ok(['string', 'number', 'boolean'].includes(typeof v), `${type}.${k} 不是简单值`);
+      if (k === 'onPress') assert.equal(typeof v, 'function');
+      else assert.ok(['string', 'number', 'boolean'].includes(typeof v), `${type}.${k} 不是简单值`);
     }
-    if (type === 'Code') assert.ok(!/[\x00-\x08\x0b-\x1f\x7f]/.test(props.source) && props.source.length <= 10000, 'Code 内容有不许的控制字符或过长');
+    if (type === 'Markdown') assert.ok(!/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(props.text) && props.text.length <= 10000, 'Markdown 内容有不许的控制字符或过长');
+    if (type === 'Code') assert.ok(!/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(props.source) && props.source.length <= 10000, 'Code 内容有不许的控制字符或过长');
     assert.equal(props?.isInteractive, undefined, 'Svg 不开交互框（桌面版会闪）');
     return { type, props: props ?? {}, kids: kids.flat() };
   };
@@ -224,4 +230,71 @@ test('watch 起不来的说明：看得出找不到 node 才提 nodePath', () =>
   assert.equal(startFailure('env: node: No such file or directory'), '启动 watch 失败：env: node: No such file or directory。可在插件配置里填写 node 路径（nodePath）');
   assert.equal(startFailure('zcode-executor: 不认识的命令 watch'), '启动 watch 失败：zcode-executor: 不认识的命令 watch');
   assert.equal(startFailure(''), '启动 watch 失败：watch 没有输出就退出了');
+});
+
+test('布局：快照带 replyMarkdown 时回复按 Markdown 画，没有时退回逐行；终端与桌面一样', async () => {
+  globalThis.h = (type, props, ...kids) => ({ type, props: props ?? {}, kids: kids.flat() });
+  const { drawPane } = await import('../hooks/pane.mjs');
+  const find = (node, type) => (node && typeof node === 'object'
+    ? (node.type === type ? [node] : []).concat(node.kids.flatMap((k) => find(k, type))) : []);
+  const md = '## 完成情况\n\n- 改了 `a.mjs`\r\n- 测试 **707** 全过\x1b';
+  const running = snap({ id: 'r', phase: 'running', since: ago(1), reply: ['旧的逐行回复'], replyMarkdown: md });
+  const ended = snap({ id: 'e', phase: 'exited', lastOutcome: 'done', since: ago(2), reply: ['一', '二', '三', '四', '五'] });
+  for (const el of [{ Box: 'Box', Text: 'Text', Code: 'Code', Svg: 'Svg', Markdown: 'Markdown' }, { Box: 'Box', Text: 'Text', Code: 'Code', Markdown: 'Markdown' }]) {
+    const tree = drawPane(el, { sessions: [running, ended], repo: '/repo/app', updatedAt: '12:00:00', now: NOW });
+    const mds = find(tree, 'Markdown');
+    assert.equal(mds.length, 1); // 只有带 replyMarkdown 的执行中卡片
+    assert.equal(mds[0].props.text, '## 完成情况\n\n- 改了 `a.mjs`\n- 测试 **707** 全过'); // CR 与控制字符清掉
+    const texts = JSON.stringify(tree);
+    assert.ok(!texts.includes('旧的逐行回复')); // 有 Markdown 就不再画逐行
+    assert.ok(texts.includes('二') && !texts.includes('"一"')); // 刚结束卡片退回逐行，只留最后 4 行
+  }
+  delete globalThis.h;
+});
+
+test('收起用的一行文字：只去纯排版记号，内容里的符号不动；纯排版的行为空', () => {
+  for (const [raw, want] of [
+    ['## 完成情况', '完成情况'], ['**W4 完成**：加了字段', 'W4 完成：加了字段'], ['| 项 | 结果 |', '项 | 结果'],
+    ['改了 `__init__.py` 与 `**kwargs`', '改了 `__init__.py` 与 `**kwargs`'], ['Python 的 __name__ 判断', 'Python 的 __name__ 判断'],
+    ['**加粗** 与 `**代码里**`', '加粗 与 `**代码里**`'], ['1. 先读任务单', '1. 先读任务单'], ['a | b 两种写法', 'a | b 两种写法'],
+    ['#123 已修', '#123 已修'], ['-1 度、->、*重要*、C++', '-1 度、->、*重要*、C++'], ['> 引用的话', '引用的话'], ['- 列表项', '列表项'],
+    ['--- 之后的说明', '--- 之后的说明'],
+    ['', ''], ['…', ''], ['```js', ''], ['| --- | :-: |', ''], ['---', ''], ['* * *', ''],
+  ]) assert.equal(plainLine(raw), want, raw);
+});
+
+test('回复超过两行有内容的行才折叠，收起时给前两行', () => {
+  assert.deepEqual(replyFold('一句话就完'), { fold: false, lines: ['一句话就完'] });
+  assert.deepEqual(replyFold('## 标题\n\n正文一行\n\n---'), { fold: false, lines: ['标题', '正文一行'] }); // 空行与分隔线不算
+  assert.deepEqual(replyFold('…\n\n第一\n第二\n第三'), { fold: true, lines: ['第一', '第二'] });
+  assert.deepEqual(replyFold('```js\nconst a = 1;\nconst b = 2;\n```\n结束'), { fold: true, lines: ['const a = 1;', 'const b = 2;'] });
+  assert.deepEqual(replyFold(''), { fold: false, lines: [] });
+});
+
+test('回复超过两行默认收起成前两行加「展开回复」，按下后显示全文与「收起」；不超过两行直接显示、没有按钮', async () => {
+  globalThis.h = (type, props, ...kids) => ({ type, props: props ?? {}, kids: kids.flat() });
+  const { drawPane } = await import('../hooks/pane.mjs');
+  const find = (node, type) => (node && typeof node === 'object'
+    ? (node.type === type ? [node] : []).concat(node.kids.flatMap((k) => find(k, type))) : []);
+  const long = snap({ id: 'r', phase: 'running', since: ago(1), replyMarkdown: '## 完成\n\n- 第一条\n- 第二条' });
+  const short = snap({ id: 's', phase: 'running', since: ago(1), replyMarkdown: '**好了**，全部通过。' });
+  const el = { Box: 'Box', Text: 'Text', Code: 'Code', Markdown: 'Markdown', Button: 'Button' };
+  const toggled = [];
+  const onToggle = (id) => toggled.push(id);
+  const draw = (sessions, expanded) => drawPane(el, { sessions, repo: '/repo/app', updatedAt: null, now: NOW, onToggle, expanded });
+  const closed = draw([long]);
+  assert.equal(find(closed, 'Markdown').length, 0);
+  const all = JSON.stringify(closed);
+  assert.ok(all.includes('"完成"') && all.includes('"第一条 …"') && !all.includes('第二条')); // 前两行，多出来的成省略号
+  const [open] = find(closed, 'Button');
+  assert.equal(open.props.label, '展开回复');
+  open.props.onPress();
+  assert.deepEqual(toggled, ['r']);
+  const opened = draw([long], { r: true });
+  assert.equal(find(opened, 'Markdown')[0].props.text, '## 完成\n\n- 第一条\n- 第二条');
+  assert.equal(find(opened, 'Button')[0].props.label, '收起');
+  const plain = draw([short]);
+  assert.equal(find(plain, 'Button').length, 0); // 不超两行不折叠、不出按钮
+  assert.equal(find(plain, 'Markdown')[0].props.text, '**好了**，全部通过。');
+  delete globalThis.h;
 });
