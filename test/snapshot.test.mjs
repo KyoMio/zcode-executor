@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, writeFile, appendFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { readLast, readState } from '../lib/runs.mjs';
 import { createTurnReader, findTurnStart, snapshotOf } from '../lib/snapshot.mjs';
 
 const dirs = [];
@@ -488,4 +489,39 @@ test('snapshotOf：有当前投递时 task 只认 current.task（纯文字投递
   });
   const fromLast = snapshotOf({ home, entry: mkEntry('x_00000010', home), repo: null, turnEvents: null });
   assert.equal(fromLast.task, 'docs/old-turn.md'); // 没有当前投递才取 last.task
+});
+
+test('snapshotOf：按 watch 的顺序先读 state/last 再读事件，runner 夹在中间结束回合也不出「已结束 + 旧回复」', async (t) => {
+  const home = await makeHome();
+  const id = 'x_00000011';
+  const entry = mkEntry(id, home);
+  const running = { sessionId: 'sess_11', pid: process.pid, phase: 'running', startedAt: T(0), updatedAt: T(0), current: { text: '干活', task: null, startedAt: T(0) } };
+  const delta = (text) => ({ type: 'model.streaming', payload: { assistantMessageId: 'm1', kind: 'text_delta', delta: text } });
+  const runsDir = await makeSession(home, id, { lock: { pid: process.pid }, state: running, events: [SEND, delta('旧的一行\n')] });
+  const eventsPath = path.join(runsDir, 'events.jsonl');
+  const reader = createTurnReader(eventsPath);
+  reader.read(); // 上一轮已经读过旧事件
+
+  // 这一轮：先读 state 与 last……
+  const state = readState(home, id);
+  const last = readLast(home, id);
+  // ……runner 恰好在此刻结束回合：追加最后的事件 → 写 last.json → 改 state
+  await appendFile(eventsPath, `${JSON.stringify(delta('最后一行\n'))}\n`);
+  await writeFile(path.join(runsDir, 'last.json'), JSON.stringify({ outcome: 'done', lastText: '旧的一行\n最后一行', startedAt: T(0), endedAt: T(3), task: null }));
+  await writeFile(path.join(runsDir, 'state.json'), JSON.stringify({ ...running, phase: 'exited', updatedAt: T(3), current: null }));
+  // ……再读事件
+  const mid = snapshotOf({ home, entry, repo: null, turnEvents: reader.read().events, state, last });
+  assert.equal(mid.phase, 'running'); // phase 跟着先读的那份 state，不被磁盘上已改的 exited 盖掉
+  assert.equal(mid.lastEndedAt, null); // last 也是先读的那份
+  assert.equal(mid.since, T(0));
+  assert.deepEqual(mid.reply, ['旧的一行', '最后一行']); // 事件比 state 新：回复已经完整
+
+  // 下一轮读到已结束的 state：回复同样完整
+  const next = snapshotOf({ home, entry, repo: null, turnEvents: reader.read().events, state: readState(home, id), last: readLast(home, id) });
+  assert.equal(next.phase, 'exited');
+  assert.equal(next.lastEndedAt, T(3));
+  assert.deepEqual(next.reply, ['旧的一行', '最后一行']);
+
+  // 显式给 null 也算给了，不回头再读磁盘
+  assert.equal(snapshotOf({ home, entry, repo: null, turnEvents: null, state: null, last: null }).phase, 'idle');
 });
