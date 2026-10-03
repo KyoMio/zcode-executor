@@ -1,7 +1,7 @@
 // hooks/pane.mjs —— 观察面板的布局（decisions D22）：拿 view.mjs 算好的分段与文案，用引擎给的元素表画一棵树。
 // 不取数据、不和引擎打交道（hooks/register.mjs），不 import lib/。元素用全局 h(...) 构造（mod 不编译 JSX）。
 // 颜色只写主题键（warning/success/error/suggestion/inactive），浅色与深色主题由引擎各自取色；动态图标除外，见下。
-import { cornerOf, headOf, outcomeOf, previewLine, repoName, scopeNote, sectionsOf } from './view.mjs';
+import { cornerOf, headOf, outcomeOf, replyFold, repoName, scopeNote, sectionsOf } from './view.mjs';
 
 // 动态图标：SVG 内的 CSS 关键帧动画，按图片显示（不开 isInteractive），浏览器自己播放，不用重画。
 // verified.md 2026-10-02：isInteractive 的沙箱框会被宿主不定时刷新、明显闪烁；图片模式照播不闪。
@@ -70,20 +70,22 @@ export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message
         h(Text, { color, bold: true }, label),
         T({ bold: true }, ` ${s.title || s.id}`)),
       corner && h(Text, { dimColor: true }, corner));
-  // 回复：快照带 replyMarkdown（v0.4.1 起，最新一条消息的原文）时默认收起成一行预览加「展开回复」按钮，
-  // 展开后按 Markdown 画，像 Claude 自己的回复一样；旧版 watch 没有这个字段时退回逐行显示
-  const toggle = (s, label) => Button && onToggle
-    && h(Button, { key: `reply-${s.id}`, label, plain: true, dimColor: true, onPress: () => onToggle(s.id) });
+  // 回复：快照带 replyMarkdown（v0.4.1 起，最新一条消息的原文）时按 Markdown 画，像 Claude 自己的回复一样。
+  // 有内容的行不超过两行就整段显示、不出按钮；超过两行默认收起成前两行（第二行末尾接 …）加「展开回复」，
+  // 展开后显示全文与「收起」。旧版 watch 没有这个字段时退回逐行显示。
+  const markdownBox = (s) => h(Box, { paddingLeft: 2 }, h(Markdown, { text: codeText(s.replyMarkdown) }));
+  const toggle = (s, label) => h(Box, { paddingLeft: 2 },
+    h(Button, { key: `reply-${s.id}`, label, plain: true, dimColor: true, onPress: () => onToggle(s.id) }));
   const replyOf = (s, lastLines) => {
     if (!(s.replyMarkdown && Markdown)) return replyBlock(lastLines ? (s.reply ?? []).slice(-lastLines) : (s.reply ?? []));
-    if (expanded[s.id] || !Button || !onToggle) {
-      return h(Box, { flexDirection: 'column', marginTop: 1 },
-        h(Box, { paddingLeft: 2 }, h(Markdown, { text: codeText(s.replyMarkdown) })),
-        toggle(s, '收起'));
-    }
-    return h(Box, { flexDirection: 'row', marginTop: 1, gap: 1 },
-      h(Text, { color: 'success' }, '┃'),
-      h(Box, { flexShrink: 1 }, T({ dimColor: true }, previewLine(s.replyMarkdown))),
+    const { fold, lines } = replyFold(s.replyMarkdown);
+    const canToggle = Boolean(Button && onToggle);
+    if (!fold || !canToggle) return h(Box, { flexDirection: 'column', marginTop: 1 }, markdownBox(s));
+    if (expanded[s.id]) return h(Box, { flexDirection: 'column', marginTop: 1 }, markdownBox(s), toggle(s, '收起'));
+    return h(Box, { flexDirection: 'column', marginTop: 1 },
+      ...lines.map((line, i) => h(Box, { flexDirection: 'row' },
+        h(Text, { color: 'success' }, '┃ '),
+        h(Box, { flexShrink: 1 }, T({}, i === lines.length - 1 ? `${line} …` : line)))),
       toggle(s, '展开回复'));
   };
   const replyBlock = (lines) => lines.length > 0 && h(Box, { flexDirection: 'column', marginTop: 1 },

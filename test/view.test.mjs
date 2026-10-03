@@ -10,7 +10,8 @@ import {
   headOf,
   outcomeOf,
   repoName,
-  previewLine,
+  plainLine,
+  replyFold,
   scopeNote,
   sectionsOf,
   startFailure,
@@ -251,44 +252,49 @@ test('布局：快照带 replyMarkdown 时回复按 Markdown 画，没有时退�
   delete globalThis.h;
 });
 
-test('收起时的预览行：第一行有内容的文字，去掉 Markdown 记号', () => {
-  assert.equal(previewLine('…\n\n## 完成情况\n\n- 改了 a'), '完成情况');
-  assert.equal(previewLine('**W4 完成**：加了字段'), 'W4 完成：加了字段');
-  assert.equal(previewLine('```js\nconst a = 1;\n```'), 'const a = 1;');
-  assert.equal(previewLine('| 项 | 结果 |\n| --- | --- |'), '项 | 结果');
-  assert.equal(previewLine(''), '');
-  // 内容里的符号不能去掉
-  assert.equal(previewLine('改了 `__init__.py` 与 `**kwargs`'), '改了 `__init__.py` 与 `**kwargs`');
-  assert.equal(previewLine('Python 的 __name__ 判断'), 'Python 的 __name__ 判断');
-  assert.equal(previewLine('**加粗** 与 `**代码里**`'), '加粗 与 `**代码里**`');
-  assert.equal(previewLine('1. 先读任务单'), '1. 先读任务单'); // 有序编号保留
-  assert.equal(previewLine('a | b 两种写法'), 'a | b 两种写法'); // 不是表格行，竖线不动
-  assert.equal(previewLine('#123 已修'), '#123 已修'); // # 后没空格不是标题
-  assert.equal(previewLine('-1 度、->、*重要*、C++'), '-1 度、->、*重要*、C++');
-  assert.equal(previewLine('> 引用的话'), '引用的话');
-  assert.equal(previewLine('- 列表项'), '列表项');
-  assert.equal(previewLine('---\n正文'), '正文'); // 整行分隔线是排版，跳过
-  assert.equal(previewLine('--- 之后的说明'), '--- 之后的说明'); // 后面有字就是内容
+test('收起用的一行文字：只去纯排版记号，内容里的符号不动；纯排版的行为空', () => {
+  for (const [raw, want] of [
+    ['## 完成情况', '完成情况'], ['**W4 完成**：加了字段', 'W4 完成：加了字段'], ['| 项 | 结果 |', '项 | 结果'],
+    ['改了 `__init__.py` 与 `**kwargs`', '改了 `__init__.py` 与 `**kwargs`'], ['Python 的 __name__ 判断', 'Python 的 __name__ 判断'],
+    ['**加粗** 与 `**代码里**`', '加粗 与 `**代码里**`'], ['1. 先读任务单', '1. 先读任务单'], ['a | b 两种写法', 'a | b 两种写法'],
+    ['#123 已修', '#123 已修'], ['-1 度、->、*重要*、C++', '-1 度、->、*重要*、C++'], ['> 引用的话', '引用的话'], ['- 列表项', '列表项'],
+    ['--- 之后的说明', '--- 之后的说明'],
+    ['', ''], ['…', ''], ['```js', ''], ['| --- | :-: |', ''], ['---', ''], ['* * *', ''],
+  ]) assert.equal(plainLine(raw), want, raw);
 });
 
-test('回复默认收起成一行预览加「展开回复」按钮，按下后改由 Markdown 显示全文并给「收起」', async () => {
+test('回复超过两行有内容的行才折叠，收起时给前两行', () => {
+  assert.deepEqual(replyFold('一句话就完'), { fold: false, lines: ['一句话就完'] });
+  assert.deepEqual(replyFold('## 标题\n\n正文一行\n\n---'), { fold: false, lines: ['标题', '正文一行'] }); // 空行与分隔线不算
+  assert.deepEqual(replyFold('…\n\n第一\n第二\n第三'), { fold: true, lines: ['第一', '第二'] });
+  assert.deepEqual(replyFold('```js\nconst a = 1;\nconst b = 2;\n```\n结束'), { fold: true, lines: ['const a = 1;', 'const b = 2;'] });
+  assert.deepEqual(replyFold(''), { fold: false, lines: [] });
+});
+
+test('回复超过两行默认收起成前两行加「展开回复」，按下后显示全文与「收起」；不超过两行直接显示、没有按钮', async () => {
   globalThis.h = (type, props, ...kids) => ({ type, props: props ?? {}, kids: kids.flat() });
   const { drawPane } = await import('../hooks/pane.mjs');
   const find = (node, type) => (node && typeof node === 'object'
     ? (node.type === type ? [node] : []).concat(node.kids.flatMap((k) => find(k, type))) : []);
-  const s = snap({ id: 'r', phase: 'running', since: ago(1), replyMarkdown: '## 完成\n\n- 第一条' });
+  const long = snap({ id: 'r', phase: 'running', since: ago(1), replyMarkdown: '## 完成\n\n- 第一条\n- 第二条' });
+  const short = snap({ id: 's', phase: 'running', since: ago(1), replyMarkdown: '**好了**，全部通过。' });
   const el = { Box: 'Box', Text: 'Text', Code: 'Code', Markdown: 'Markdown', Button: 'Button' };
   const toggled = [];
   const onToggle = (id) => toggled.push(id);
-  const closed = drawPane(el, { sessions: [s], repo: '/repo/app', updatedAt: null, now: NOW, onToggle });
+  const draw = (sessions, expanded) => drawPane(el, { sessions, repo: '/repo/app', updatedAt: null, now: NOW, onToggle, expanded });
+  const closed = draw([long]);
   assert.equal(find(closed, 'Markdown').length, 0);
+  const all = JSON.stringify(closed);
+  assert.ok(all.includes('"完成"') && all.includes('"第一条 …"') && !all.includes('第二条')); // 前两行，多出来的成省略号
   const [open] = find(closed, 'Button');
   assert.equal(open.props.label, '展开回复');
-  assert.ok(JSON.stringify(closed).includes('完成'));
   open.props.onPress();
   assert.deepEqual(toggled, ['r']);
-  const opened = drawPane(el, { sessions: [s], repo: '/repo/app', updatedAt: null, now: NOW, onToggle, expanded: { r: true } });
-  assert.equal(find(opened, 'Markdown')[0].props.text, '## 完成\n\n- 第一条');
+  const opened = draw([long], { r: true });
+  assert.equal(find(opened, 'Markdown')[0].props.text, '## 完成\n\n- 第一条\n- 第二条');
   assert.equal(find(opened, 'Button')[0].props.label, '收起');
+  const plain = draw([short]);
+  assert.equal(find(plain, 'Button').length, 0); // 不超两行不折叠、不出按钮
+  assert.equal(find(plain, 'Markdown')[0].props.text, '**好了**，全部通过。');
   delete globalThis.h;
 });
