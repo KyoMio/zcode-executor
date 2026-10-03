@@ -138,7 +138,7 @@ test('布局：样稿数据在桌面与终端两种元素表下都能画出，�
   // 桩 h 按引擎类型声明（BoxProps、TextProps、SvgProps、CodeProps）核对属性名与取值：多一个不认的属性，引擎会整树拒画
   const ALLOWED = {
     Box: new Set(['key', 'flexDirection', 'flexGrow', 'flexShrink', 'alignItems', 'justifyContent', 'gap', 'width', 'height',
-      'margin', 'marginX', 'marginY', 'marginTop', 'marginBottom', 'marginLeft', 'marginRight', 'padding', 'paddingX', 'paddingY',
+      'minWidth', 'margin', 'marginX', 'marginY', 'marginTop', 'marginBottom', 'marginLeft', 'marginRight', 'padding', 'paddingX', 'paddingY',
       'paddingTop', 'paddingBottom', 'paddingLeft', 'paddingRight', 'borderStyle', 'borderColor', 'borderDimColor', 'backgroundColor', 'overflow', 'display']),
     Text: new Set(['color', 'backgroundColor', 'dimColor', 'bold', 'italic', 'underline', 'strikethrough', 'inverse', 'wrap']),
     Svg: new Set(['source', 'alt', 'width', 'height', 'isInteractive']),
@@ -319,6 +319,7 @@ test('布局：工具行左边的记号与工具名固定不缩，长命令只�
     assert.equal(label.props.flexShrink, 0, '工具名那一段不许缩');
     assert.match(JSON.stringify(label), /Bash/);
     assert.equal(rest.props.flexShrink, 1);
+    assert.equal(rest.props.minWidth, 0, '不设 minWidth 0 弹性项不会缩到比内容窄，长命令撑破边框');
     assert.equal(rest.kids[0].props.wrap, 'truncate-end'); // 命令超长截断
   }
   delete globalThis.h;

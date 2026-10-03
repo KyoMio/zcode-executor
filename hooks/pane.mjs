@@ -61,14 +61,15 @@ export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message
     return Svg ? h(Svg, { source: waitSvg(size), alt: '排队中', width: size, height: size }) : h(Text, { color: 'suggestion' }, '◷');
   };
   const meta = (s) => T({ dimColor: true }, [s.id, showRepo ? repoName(s) : null, s.task].filter(Boolean).join(' · '));
-  // 并排的一行：左边的记号与名字固定不缩（否则长命令会把 `✓ Bash` 挤成两行、错位），右边占剩下的宽度、超长截断
+  // 并排的一行：左边的记号与名字固定不缩（否则长命令会把 `✓ Bash` 挤成两行、错位），右边占剩下的宽度、超长截断。
+  // 右边要 minWidth 0：弹性项默认不缩到比内容还窄，长命令会把卡片边框撑破（v0.4.2 桌面版实测）；overflow 兜底裁掉
   const fixed = (node) => h(Box, { flexShrink: 0 }, node);
-  const fill = (node) => h(Box, { flexShrink: 1, flexGrow: 1 }, node);
+  const fill = (node) => h(Box, { flexShrink: 1, flexGrow: 1, minWidth: 0, overflow: 'hidden' }, node);
   const card = (color, ...kids) =>
     h(Box, { flexDirection: 'column', borderStyle: 'round', borderColor: color, paddingX: 1, marginBottom: 1 }, ...kids);
   const headRow = (lead, label, color, s, corner) =>
     h(Box, { flexDirection: 'row', justifyContent: 'space-between' },
-      h(Box, { flexDirection: 'row', flexShrink: 1, alignItems: 'center', gap: 1 },
+      h(Box, { flexDirection: 'row', flexShrink: 1, minWidth: 0, alignItems: 'center', gap: 1 },
         fixed(lead),
         fixed(h(Text, { color, bold: true }, label)),
         fill(T({ bold: true }, ` ${s.title || s.id}`))),
@@ -88,7 +89,7 @@ export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message
     return h(Box, { flexDirection: 'column', marginTop: 1 },
       ...lines.map((line, i) => h(Box, { flexDirection: 'row' },
         h(Text, { color: 'success' }, '┃ '),
-        h(Box, { flexShrink: 1 }, T({}, i === lines.length - 1 ? `${line} …` : line)))),
+        fill(T({}, i === lines.length - 1 ? `${line} …` : line)))),
       toggle(s, '展开回复'));
   };
   const replyBlock = (lines) => lines.length > 0 && h(Box, { flexDirection: 'column', marginTop: 1 },
@@ -139,7 +140,7 @@ export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message
   const doneRow = (s) => {
     const o = outcomeOf(s);
     return h(Box, { flexDirection: 'row', justifyContent: 'space-between' },
-      h(Box, { flexDirection: 'row', flexShrink: 1 },
+      h(Box, { flexDirection: 'row', flexShrink: 1, minWidth: 0 },
         fixed(h(Text, { color: o.color }, `${o.glyph} ${o.label}`.padEnd(6, '　'))),
         fill(T({}, `  ${s.title || s.id}`)),
         fixed(T({ dimColor: true }, `  ${repoName(s)}`))),
