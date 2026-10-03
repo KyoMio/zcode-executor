@@ -6,7 +6,7 @@
 
 <p align="center">A plugin for Claude Code and other coding agents that hands a well-specified development task to the local <a href="https://zcode.z.ai">ZCode</a> agent (GLM), runs it in an isolated git worktree, guards every write with a hard-rule check plus a model-based review, and lets you verify the result with <code>git diff</code> and tests instead of trusting the agent's own report.</p>
 
-<p align="center"><img src="https://img.shields.io/badge/version-v0.4.4-5B4CF0" alt="v0.4.4"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-724%20passing-brightgreen" alt="Tests"></p>
+<p align="center"><img src="https://img.shields.io/badge/version-v0.4.4-5B4CF0" alt="v0.4.4"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-725%20passing-brightgreen" alt="Tests"></p>
 
 ## Why
 
@@ -344,7 +344,7 @@ Newly started runners read the configuration; existing runners do not hot-reload
 ## Development
 
 ```bash
-npm test          # 724 cases against a scripted mock app-server and mock off-peak server, plus a doc-version drift check; no tokens spent
+npm test          # 725 cases against a scripted mock app-server and mock off-peak server, plus a doc-version drift check; no tokens spent
 node --check lib/**/*.mjs
 ```
 
