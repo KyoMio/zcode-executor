@@ -365,6 +365,7 @@ Codex、Gemini、Copilot、Grok 照旧只有 skill 与 CLI。函数钩子在正�
 重开条件：Claude Code 撤掉或大改函数钩子接口；或需要在面板上应答挂起（要先改 AGENTS.md 的硬约束）。
 
 实测（2026-10-02，verified.md「Claude Code mod」）：桌面版检查点 W1–W9 用户报告通过，Claude 投递时面板自动打开、宽度正常；`watch` 首轮对本机 219 条会话约 0.4 秒、稳态 CPU 约 4%。
+v0.4.1（2026-10-03）：回复按 Markdown 显示最新一条消息（快照新增 `replyMarkdown`，截断时补回代码块围栏与表格表头），超过两行默认收起、按钮展开。
 未验证：其他宿主读到只有 `modules` 的 `hooks/hooks.json` 会不会报错（Codex、Copilot CLI 若按 Claude 的 hooks 约定读这个文件）；有人报错再改清单。
 
 ## 补记：模型审批的模型从已推的 provider 表里选，不再多一次 readState
