@@ -298,3 +298,28 @@ test('回复超过两行默认收起成前两行加「展开回复」，按下�
   assert.equal(find(plain, 'Markdown')[0].props.text, '**好了**，全部通过。');
   delete globalThis.h;
 });
+
+test('布局：工具行左边的记号与工具名固定不缩，长命令只在右边截断（不会把 ✓ Bash 挤成两行）', async () => {
+  globalThis.h = (type, props, ...kids) => ({ type, props: props ?? {}, kids: kids.flat() });
+  const { drawPane } = await import('../hooks/pane.mjs');
+  const long = 'cd /Volumes/MacData/Users/kyomio/.zcode-executor/worktrees/codex-executor && '.repeat(4);
+  const s = snap({ id: 'r', phase: 'running', since: ago(1),
+    activeTool: { toolName: 'Bash', summary: long }, recentTools: [{ toolName: 'Bash', summary: long, ok: false }] });
+  const tree = drawPane({ Box: 'Box', Text: 'Text', Code: 'Code' }, { sessions: [s], repo: '/repo/app', updatedAt: null, now: NOW });
+  const rows = [];
+  const walk = (n) => {
+    if (!n || typeof n !== 'object') return;
+    if (n.type === 'Box' && n.props.flexDirection === 'row' && n.kids.length === 2 && JSON.stringify(n).includes(long.slice(0, 30))) rows.push(n);
+    n.kids.forEach(walk);
+  };
+  walk(tree);
+  assert.equal(rows.length, 2); // 当前工具一行、最近工具一行
+  for (const row of rows) {
+    const [label, rest] = row.kids;
+    assert.equal(label.props.flexShrink, 0, '工具名那一段不许缩');
+    assert.match(JSON.stringify(label), /Bash/);
+    assert.equal(rest.props.flexShrink, 1);
+    assert.equal(rest.kids[0].props.wrap, 'truncate-end'); // 命令超长截断
+  }
+  delete globalThis.h;
+});

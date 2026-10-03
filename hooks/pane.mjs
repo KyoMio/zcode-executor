@@ -61,15 +61,18 @@ export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message
     return Svg ? h(Svg, { source: waitSvg(size), alt: '排队中', width: size, height: size }) : h(Text, { color: 'suggestion' }, '◷');
   };
   const meta = (s) => T({ dimColor: true }, [s.id, showRepo ? repoName(s) : null, s.task].filter(Boolean).join(' · '));
+  // 并排的一行：左边的记号与名字固定不缩（否则长命令会把 `✓ Bash` 挤成两行、错位），右边占剩下的宽度、超长截断
+  const fixed = (node) => h(Box, { flexShrink: 0 }, node);
+  const fill = (node) => h(Box, { flexShrink: 1, flexGrow: 1 }, node);
   const card = (color, ...kids) =>
     h(Box, { flexDirection: 'column', borderStyle: 'round', borderColor: color, paddingX: 1, marginBottom: 1 }, ...kids);
   const headRow = (lead, label, color, s, corner) =>
     h(Box, { flexDirection: 'row', justifyContent: 'space-between' },
       h(Box, { flexDirection: 'row', flexShrink: 1, alignItems: 'center', gap: 1 },
-        lead,
-        h(Text, { color, bold: true }, label),
-        T({ bold: true }, ` ${s.title || s.id}`)),
-      corner && h(Text, { dimColor: true }, corner));
+        fixed(lead),
+        fixed(h(Text, { color, bold: true }, label)),
+        fill(T({ bold: true }, ` ${s.title || s.id}`))),
+      corner && fixed(h(Text, { dimColor: true }, corner)));
   // 回复：快照带 replyMarkdown（v0.4.1 起，最新一条消息的原文）时按 Markdown 画，像 Claude 自己的回复一样。
   // 有内容的行不超过两行就整段显示、不出按钮；超过两行默认收起成前两行（第二行末尾接 …）加「展开回复」，
   // 展开后显示全文与「收起」。旧版 watch 没有这个字段时退回逐行显示。
@@ -118,11 +121,11 @@ export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message
       meta(s),
       replyOf(s),
       s.activeTool && h(Box, { flexDirection: 'row', marginTop: 1 },
-        h(Text, { color: 'success', bold: true }, `▸ ${s.activeTool.toolName}  `),
-        T({}, s.activeTool.summary ?? '')),
+        fixed(h(Text, { color: 'success', bold: true }, `▸ ${s.activeTool.toolName}  `)),
+        fill(T({}, s.activeTool.summary ?? ''))),
       ...(s.recentTools ?? []).map((t) => h(Box, { flexDirection: 'row' },
-        h(Text, { color: t.ok === false ? 'error' : 'inactive' }, `${t.ok === false ? '✕' : '✓'} ${t.toolName}  `),
-        T({ dimColor: true }, t.summary ?? ''))));
+        fixed(h(Text, { color: t.ok === false ? 'error' : 'inactive' }, `${t.ok === false ? '✕' : '✓'} ${t.toolName}  `)),
+        fill(T({ dimColor: true }, t.summary ?? '')))));
   };
 
   const recentCard = (s) => {
@@ -137,10 +140,10 @@ export function drawPane(el, { sessions, repo, updatedAt, link = 'live', message
     const o = outcomeOf(s);
     return h(Box, { flexDirection: 'row', justifyContent: 'space-between' },
       h(Box, { flexDirection: 'row', flexShrink: 1 },
-        h(Text, { color: o.color }, `${o.glyph} ${o.label}`.padEnd(6, '　')),
-        T({}, `  ${s.title || s.id}`),
-        T({ dimColor: true }, `  ${repoName(s)}`)),
-      s.since && h(Text, { dimColor: true }, hhmm(s.since)));
+        fixed(h(Text, { color: o.color }, `${o.glyph} ${o.label}`.padEnd(6, '　'))),
+        fill(T({}, `  ${s.title || s.id}`)),
+        fixed(T({ dimColor: true }, `  ${repoName(s)}`))),
+      s.since && fixed(h(Text, { dimColor: true }, hhmm(s.since))));
   };
 
   const { counts } = sections;
