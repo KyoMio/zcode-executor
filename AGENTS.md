@@ -3,7 +3,7 @@
 Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给本机 ZCode（GLM），
 在 worktree 里隔离执行，用 git diff 和测试客观验收。
 
-**状态（2026-10-03）**：第一版完成并已适配 ZCode App 3.12.2 起的版本（decisions D14）；插话改走 `v4/command`（D17）；接上账号型 Coding Plan（凭据文件来源，D19）；闲时投递与 `quota`（D20）随 v0.3.5 发布，start plan 投递已撤除（D21）；v0.4.0 加观察面板：`watch` 子命令加 Claude Code mod（`hooks/`，D22），v0.4.1 回复按 Markdown 显示、超过两行可展开。`npm test` 722 个用例。
+**状态（2026-10-03）**：第一版完成并已适配 ZCode App 3.12.2 起的版本（decisions D14）；插话改走 `v4/command`（D17）；接上账号型 Coding Plan（凭据文件来源，D19）；闲时投递与 `quota`（D20）随 v0.3.5 发布，start plan 投递已撤除（D21）；v0.4.0 加观察面板：`watch` 子命令加 Claude Code mod（`hooks/`，D22），v0.4.1 回复按 Markdown 显示、超过两行可展开，v0.4.2 修长命令把工具名挤成两行。`npm test` 723 个用例。
 术语在 [docs/CONTEXT.md](docs/CONTEXT.md)。本地开发记录（`docs/handoff/`、`docs/tasks/`、`docs/PLAN*.md`、`docs/archive/`、`docs/SPEC-offpeak.md`、`docs/SPEC-watch-pane.md`、`docs/jev-*-plan.md`、`docs/research/`）不进 GitHub，只在开发机上有；
 有它们就从 `docs/PLAN-v4.md` 与 `docs/handoff/handoff-20260908.md` 接手，没有就从 README 与 docs/PRD.md 开始。
 
