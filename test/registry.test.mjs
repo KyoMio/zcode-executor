@@ -5,7 +5,7 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ExecutorError } from '../lib/errors.mjs';
-import { loadRegistry, saveSession, getSession } from '../lib/registry.mjs';
+import { loadRegistry, saveSession, getSession, updateSession } from '../lib/registry.mjs';
 
 const tmp = async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-registry-test-'));
@@ -80,6 +80,27 @@ test('getSession：存在的返回条目，不存在的抛 ExecutorError(2) 并�
       assert.match(err.message, /list/);
       return true;
     });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('原型链上的名字当 id 也报退出码 2', async () => {
+  const home = await tmp();
+  try {
+    saveSession(home, ENTRY);
+    for (const id of ['constructor', '__proto__', 'toString']) {
+      for (const call of [() => getSession(home, id), () => updateSession(home, id, { lastOutcome: 'done' })]) {
+        assert.throws(call, (err) => {
+          assert.ok(err instanceof ExecutorError);
+          assert.equal(err.exitCode, 2);
+          return true;
+        });
+      }
+    }
+    // 没写进垃圾记录（修之前会多出键为 "undefined" 的一条）
+    const registry = JSON.parse(await readFile(path.join(home, 'sessions.json'), 'utf8'));
+    assert.deepEqual(Object.keys(registry.sessions), ['x_test1ab']);
   } finally {
     await rm(home, { recursive: true, force: true });
   }
