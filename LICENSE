@@ -1,0 +1,40 @@
+MIT License
+
+Copyright (c) 2026 dsh-zcode-executor contributors
+Copyright (c) 2026 zcode-executor contributors — src/client/view.ts 逐字搬自其 hooks/view.mjs、
+skills/zcode-executor/SKILL.md 以其同名 skill 为底稿（上游 Apache-2.0）
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+NOTICE — 上游出处：
+
+* `src/client/view.ts` 自 zcode-executor（Apache-2.0，projects/zcode-executor）的
+  `hooks/view.mjs` 逐字搬入，只加 TypeScript 类型不改逻辑。
+* `skills/zcode-executor/SKILL.md` 以 zcode-executor 的同名 skill 为底稿改写（AskUserQuestion
+  段改为对话内转述、`/zcode` 改为右栏 tab、删 Claude 专属措辞）。
+
+其余为本仓库原创。
+
+---
+
+授权说明：`src/client/view.ts` 与 `skills/zcode-executor/SKILL.md` 衍生自 zcode-executor
+（Apache-2.0，github.com/kyomio/zcode-executor），这两件继续按 Apache-2.0 授权，许可证全文见
+该仓库 LICENSE；本文件其余部分为 MIT。

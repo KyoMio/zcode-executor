@@ -1,0 +1,1 @@
+{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../../../../src/client/pane/index.tsx"],"names":[],"mappings":"AAQA,OAAO,KAAK,EAAE,YAAY,EAAE,MAAM,OAAO,CAAC;AAC1C,OAAO,KAAK,EAAE,aAAa,EAAsB,MAAM,aAAa,CAAC;AAMrE,sDAAsD;AACtD,eAAO,MAAM,eAAe,KAAK,CAAC;AAkIlC;;;;GAIG;AACH,wBAAgB,IAAI,CAAC,KAAK,EAAE;IAAE,KAAK,EAAE,aAAa,CAAA;CAAE,GAAG,YAAY,CAmHlE"}

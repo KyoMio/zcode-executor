@@ -1,0 +1,6 @@
+# pnpm 11 只从这里读 pnpm 设置（.npmrc 留着同一开关给 pnpm <= 10）。
+# autoInstallPeers 必须关：开着会把 peerDependencies 自动装成包自己的
+# 依赖（T1 实测把 react 18.3.1 装进了 dependencies），link: 进 profile 时
+# 遮蔽宿主提供的 react（dsh-plugins 工作区 AGENTS.md 的「依赖遮蔽」坑）。
+# peer 全部声明在 package.json 里，由宿主运行时提供。
+autoInstallPeers: false

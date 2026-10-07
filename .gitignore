@@ -1,0 +1,6 @@
+node_modules/
+.client-build/
+.preview/
+.DS_Store
+
+# lib/ 是构建产物但刻意入库（SPEC「打包与形态」：lib/ 产物入库），不要加进这里。
