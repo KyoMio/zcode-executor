@@ -87,6 +87,16 @@ claude plugin install zcode-executor@zcode-executor --scope user
 
 The plugin also ships a **Claude Code mod** (a module of function hooks, `hooks/`): type `/zcode` to open the [watch pane](#watch-pane-claude-code-only), a live view of this project's zcode sessions. It also opens by itself when Claude sends a task, and adds a status-line summary and toasts. Nothing to configure; it needs a Claude Code version with function-hook mods (the API is in early access).
 
+### Kimi Work
+
+The repo root ships a native `kimi.plugin.json` (skills only; the Claude Code mod above is Claude-only and not included). Register it into the personal market once, then install from the 个人 tab:
+
+```bash
+kimi-daimon kimi-plugin register-personal /path/to/zcode-executor
+```
+
+Like the agents below, Kimi Work does not put the plugin's `bin/` on `PATH` — the skill falls back to `bin/zcode-executor` relative to the plugin root, or `npx zcode-executor`. Saying 「让 zcode 去做」「派给 zcode」 triggers the skill.
+
 ### Codex
 
 ```bash

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://catalog.msh.team/misc/kimi.plugin.schema.json",
+  "name": "zcode-executor",
+  "version": "0.4.4",
+  "description": "把想清楚的开发任务派给本机 ZCode（GLM）执行，隔离在 worktree 里跑，红线加模型审批把关，用 git diff 和测试验收",
+  "keywords": [
+    "zcode",
+    "glm",
+    "executor",
+    "worktree",
+    "code-review-gate"
+  ],
+  "author": "kyomio",
+  "license": "Apache-2.0",
+  "interface": {
+    "displayName": "ZCode Executor",
+    "shortDescription": "把开发任务派给本机 ZCode 执行：worktree 隔离、红线审批、git diff 验收",
+    "longDescription": "把一件已经想清楚的开发任务交给本机 ZCode（GLM）执行。zcode 在隔离的执行副本（git worktree）里改代码，红线变更加模型审批把关，用 git diff 和测试客观验收。也支持闲时投递、查看会话状态、给正在跑的回合插话、应答挂起的审批请求。",
+    "developerName": "kyomio",
+    "category": "DEVELOPER",
+    "hostKind": "local",
+    "platforms": [
+      "macos",
+      "linux",
+      "windows"
+    ],
+    "defaultLocale": "zh-CN",
+    "locales": "./locales/",
+    "tryPrompts": [
+      "把修复登录页面崩溃的任务派给 zcode 去做",
+      "看看 zcode 现在的会话跑到哪了",
+      "应答 zcode 挂起的审批请求"
+    ],
+    "skillOverrides": {
+      "zcode-executor": {
+        "displayName": "ZCode 任务派发",
+        "description": "把开发任务派给本机 ZCode 执行，worktree 隔离、红线审批、git diff 验收"
+      }
+    }
+  },
+  "skills": "./skills/"
+}

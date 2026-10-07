@@ -1,0 +1,17 @@
+{
+  "displayName": "ZCode Executor",
+  "shortDescription": "Dispatch development tasks to local ZCode: worktree isolation, red-line review, git diff acceptance.",
+  "longDescription": "Hand a well-specified development task to local ZCode (GLM). ZCode edits code in an isolated working copy (git worktree), model approval gates red-line changes, and git diff plus tests provide objective acceptance. Also supports deferred dispatch, session status checks, interrupting running turns, and answering pending approvals.",
+  "developerName": "kyomio",
+  "tryPrompts": [
+    "Dispatch the login-page crash fix to zcode",
+    "Check where the zcode session is right now",
+    "Answer zcode's pending approval request"
+  ],
+  "skillOverrides": {
+    "zcode-executor": {
+      "displayName": "ZCode Task Dispatch",
+      "description": "Dispatch development tasks to local ZCode: worktree isolation, red-line review, git diff acceptance"
+    }
+  }
+}
