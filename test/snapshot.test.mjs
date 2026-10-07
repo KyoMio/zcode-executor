@@ -422,6 +422,15 @@ test('snapshotOf：turnEvents 为 null 时 reply 取 lastText 末尾 800 字，�
   });
   const blank = snapshotOf({ home, entry: mkEntry('x_0000000c', home), repo: null, turnEvents: null });
   assert.deepEqual(blank.reply, []);
+
+  // lastMessageText（最终回复原文，新字段）优先于 lastText：lastText 是整回合拼接，面板要的是最终回复
+  await makeSession(home, 'x_0000000d2', {
+    state: { sessionId: 'sess_d2', pid: DEAD_PID, phase: 'exited', startedAt: T(0), updatedAt: T(2), current: null },
+    last: { outcome: 'done', lastText: '中途的话。改完了，测试全绿。', lastMessageText: '改完了，测试全绿。', startedAt: T(0), endedAt: T(1), task: null },
+  });
+  const final = snapshotOf({ home, entry: mkEntry('x_0000000d2', home), repo: null, turnEvents: null });
+  assert.deepEqual(final.reply, ['改完了，测试全绿。']);
+  assert.equal(final.replyMarkdown, '改完了，测试全绿。');
 });
 
 test('snapshotOf：replyMarkdown 有 turnEvents 取最后一条消息，为 null 取 lastText，都没有为空串', async (t) => {

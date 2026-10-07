@@ -63,7 +63,7 @@ async function withSession(script, opts, fn) {
   }
 }
 
-test('settleTurn：completed → done，lastText 拼接 text_delta，usage 透传', () => {
+test('settleTurn：completed → done，lastText 拼接 text_delta，usage 透传；无 assistantMessageId 时 lastMessageText 与 lastText 相等', () => {
   const settled = settleTurn([
     { type: 'turn.started', payload: {} },
     { type: 'model.streaming', payload: { kind: 'text_delta', delta: '你好' } },
@@ -71,7 +71,24 @@ test('settleTurn：completed → done，lastText 拼接 text_delta，usage 透�
     { type: 'model.streaming', payload: { kind: 'text_delta', delta: '，世界' } },
     { type: 'turn.completed', payload: { resultType: 'success', usage: { totalTokens: 42 } } },
   ]);
-  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '你好，世界', usage: { totalTokens: 42 }, errorCode: null, errorReason: null });
+  assert.deepEqual(settled, {
+    outcome: 'done', reason: null, lastText: '你好，世界', lastMessageText: '你好，世界',
+    usage: { totalTokens: 42 }, errorCode: null, errorReason: null,
+  }); // 事件没有 assistantMessageId（旧形状）：全部 delta 算同一条消息，两字段相等
+});
+
+test('settleTurn：lastMessageText 只取最后一个 assistantMessageId 的 delta（最终回复），lastText 仍是整回合拼接', () => {
+  const settled = settleTurn([
+    { type: 'turn.started', payload: {} },
+    { type: 'model.streaming', payload: { assistantMessageId: 'm1', kind: 'text_delta', delta: '我先读任务单。' } },
+    { type: 'model.streaming', payload: { assistantMessageId: 'm1', kind: 'text_delta', delta: '开始改代码。' } },
+    { type: 'model.streaming', payload: { assistantMessageId: 'm2', kind: 'text_delta', delta: '改完了，' } },
+    { type: 'model.streaming', payload: { assistantMessageId: 'm2', kind: 'text_delta', delta: '测试全绿。' } },
+    { type: 'turn.completed', payload: { resultType: 'success' } },
+  ]);
+  assert.equal(settled.lastText, '我先读任务单。开始改代码。改完了，测试全绿。');
+  assert.equal(settled.lastMessageText, '改完了，测试全绿。');
+  assert.equal(settleTurn([]).lastMessageText, ''); // 空回合两字段都是空串
 });
 
 test('settleTurn：failed 的 error.code 统一成字符串放进 errorCode，没有 code 为 null', () => {
@@ -93,17 +110,17 @@ test('settleTurn：failed 带 error.message', () => {
 // 结束事件只有这两个）
 test('settleTurn：resultType 缺省 → done', () => {
   const settled = settleTurn([{ type: 'turn.completed', payload: { usage: { totalTokens: 3 } } }]);
-  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 3 }, errorCode: null, errorReason: null });
+  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', lastMessageText: '', usage: { totalTokens: 3 }, errorCode: null, errorReason: null });
 });
 
 test('settleTurn：resultType null 也算缺省 → done', () => {
   const settled = settleTurn([{ type: 'turn.completed', payload: { resultType: null, usage: { totalTokens: 3 } } }]);
-  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 3 }, errorCode: null, errorReason: null });
+  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', lastMessageText: '', usage: { totalTokens: 3 }, errorCode: null, errorReason: null });
 });
 
 test('settleTurn：resultType success → done', () => {
   const settled = settleTurn([{ type: 'turn.completed', payload: { resultType: 'success', usage: { totalTokens: 4 } } }]);
-  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', usage: { totalTokens: 4 }, errorCode: null, errorReason: null });
+  assert.deepEqual(settled, { outcome: 'done', reason: null, lastText: '', lastMessageText: '', usage: { totalTokens: 4 }, errorCode: null, errorReason: null });
 });
 
 test('settleTurn：resultType cancelled → outcome cancelled，reason 说明被叫停', () => {
@@ -112,6 +129,7 @@ test('settleTurn：resultType cancelled → outcome cancelled，reason 说明被
     outcome: 'cancelled',
     reason: '回合被叫停（resultType=cancelled）',
     lastText: '',
+    lastMessageText: '',
     usage: { totalTokens: 0 },
     errorCode: null,
     errorReason: null,
