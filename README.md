@@ -18,7 +18,7 @@ DSH（DeepSeek Harness）插件：把本机的 [zcode-executor](../../../../zcod
 
 ## 安装
 
-v1 只以 `link:` 装本机 desktop profile 本地使用，**不发 npm**。装法（手工两处登记）：
+源码仓:Gitea `kyomio/dsh-zcode-executor`(私人,`https://openwrt.kyomio.top:3773/kyomio/dsh-zcode-executor.git`,remote 名 `gitea`)。v1 只以 `link:` 装本机 desktop profile 本地使用,**不发 npm**。装法(手工两处登记):
 
 1. `~/.dsh/profiles/desktop/package.json` 的 `dependencies` 加：
 
