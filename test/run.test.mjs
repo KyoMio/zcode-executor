@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, writeFile, readFile, readdir, rm } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -317,6 +317,50 @@ test('剧本 v4CommandStatus: rejected → executor.steer_failed + steerUnavaila
   trackRunnerPids(env.runsDir);
 });
 
+// 审计 D9-①：执行端可控的文本夹终端转义就能清屏、改写人正在看的挂起行。原样出现在输出里的只该有换行和制表
+const RAW_CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+
+test('send --wait：挂起回显里的终端控制字符换成看得见的转义，--json 解析回来一字不差（审计 D9-①）', async (t) => {
+  const ESC = '\u001b';
+  // 理由里夹「清行 + 回车 + 改窗口标题」再伪造一行结果；工具名带颜色码；参数里有 8 位 CSI 和反向排版符
+  const reason = `有副作用${ESC}[2K\r${ESC}]0;pwned\u0007send: done`;
+  const toolName = `Wri${ESC}[31mte`;
+  const input = { file_path: 'a\u009b2Jb.txt', note: '\u202egnp.exe' };
+  const env = await setupSend(t, { script: { turns: [{ permission: { toolName, input, reason } }] } });
+  const run = runBin(env.env, ['send', env.entry.id, '写文件', '--wait']);
+  assert.equal(run.status, 5, `stdout: ${run.stdout} stderr: ${run.stderr}`);
+  trackRunnerPids(env.runsDir);
+  assert.match(run.stdout, /挂起·审批/);
+  assert.doesNotMatch(run.stdout + run.stderr, RAW_CONTROLS, '控制字符不该原样上屏');
+  // 内容不丢：换成看得见的转义，人能看出这里被塞了东西
+  assert.ok(run.stdout.includes('有副作用\\u001b[2K\\u000d\\u001b]0;pwned\\u0007send: done'), run.stdout);
+  assert.ok(run.stdout.includes('Wri\\u001b[31mte'), run.stdout);
+  assert.ok(run.stdout.includes('a\\u009b2Jb.txt') && run.stdout.includes('\\u202egnp.exe'), run.stdout);
+
+  // 机器读的 --json：转义落在 JSON 字符串里，解析回来还是原字符
+  const followed = runBin(env.env, ['follow', env.entry.id, '--json']);
+  assert.equal(followed.status, 5, followed.stderr);
+  assert.doesNotMatch(followed.stdout, RAW_CONTROLS);
+  const pending = JSON.parse(followed.stdout.trim().split('\n').at(-1));
+  assert.equal(pending.reason, reason);
+  assert.equal(pending.toolName, toolName);
+  assert.deepEqual(pending.input, input);
+});
+
+test('send --wait --stream：回复原文与流式行里的控制字符同样中和，换行与制表留着（审计 D9-①）', async (t) => {
+  const ESC = '\u001b';
+  const delta = `第一行\t带制表\r\n第二行${ESC}[1A${ESC}[2K盖掉上一行\n`;
+  const env = await setupSend(t, {
+    script: { turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta } }] }] },
+  });
+  const run = runBin(env.env, ['send', env.entry.id, '说两句', '--wait', '--stream']);
+  assert.equal(run.status, 0, `stdout: ${run.stdout} stderr: ${run.stderr}`);
+  trackRunnerPids(env.runsDir);
+  assert.doesNotMatch(run.stdout + run.stderr, RAW_CONTROLS, '控制字符不该原样上屏');
+  assert.ok(run.stdout.includes('第一行\t带制表\n第二行\\u001b[1A\\u001b[2K盖掉上一行'), run.stdout);
+  assert.ok(run.stderr.includes('stream: 第二行\\u001b[1A\\u001b[2K盖掉上一行'), run.stderr);
+});
+
 test('send --wait：审批挂起 → 5 且 runner 活着；带 requestId 的 answer → 继续到 done', async (t) => {
   const env = await setupSend(t, {
     script: { turns: [{ permission: { toolName: 'Write', input: { file_path: 'hello.txt' }, reason: '有副作用' } }] },
@@ -552,6 +596,32 @@ test('runner.log 不含明文密钥（评审 T2.3b 第 10 条）', async (t) => 
   assert.ok(log.length > 0); // 日志确实有内容
   assert.equal(log.includes('sk-test-plain'), false);
   assert.equal(log.includes('sk-test-plan'), false);
+});
+
+test('runs 目录只给当前用户：目录 0700、落盘文件 0600，旧版本留下的宽权限目录在 runner 起来时收紧（审计 D5）', { skip: process.platform === 'win32' && 'Windows 没有 POSIX 权限位' }, async (t) => {
+  const env = await setupSend(t);
+  // 模拟升级前建好的目录：0755
+  await mkdir(env.runsDir, { recursive: true });
+  chmodSync(path.dirname(env.runsDir), 0o755);
+  chmodSync(env.runsDir, 0o755);
+  const run = runBin(env.env, ['send', env.entry.id, '干活', '--wait', '--json']);
+  assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+  const mode = (p) => statSync(p).mode & 0o777;
+  assert.equal(mode(path.dirname(env.runsDir)), 0o700, 'runs/');
+  assert.equal(mode(env.runsDir), 0o700, 'runs/<id>/');
+  assert.equal(mode(path.join(env.runsDir, 'queue')), 0o700, 'queue/');
+  for (const name of ['events.jsonl', 'state.json', 'last.json', 'runner.log']) {
+    assert.equal(mode(path.join(env.runsDir, name)), 0o600, name);
+  }
+  assert.equal(mode(path.join(env.home, 'sessions.json')), 0o600, '登记簿');
+});
+
+test('send --task：不是普通文件（目录）退出码 1，不入队', async (t) => {
+  const env = await setupSend(t);
+  const run = runBin(env.env, ['send', env.entry.id, '干活', '--task', env.home]);
+  assert.equal(run.status, 1, `stderr: ${run.stderr}`);
+  assert.match(run.stderr, /--task 不是文件/);
+  assert.equal(existsSync(path.join(env.runsDir, 'queue')), false);
 });
 
 test('send --task：不存在退出码 1；存在则队列项、state.current、last 都是绝对路径', async (t) => {
