@@ -56,8 +56,8 @@ const envFor = (home, mock, zcodeConfigPath) => ({
   ZCODE_EXECUTOR_HOME: home,
   ZCODE_CONFIG_PATH: zcodeConfigPath,
   TMPDIR: home,
-  // 测试压时长（T2.6b 第 10 条）：applied 等尾 1.5 秒、cancel 宽限 0.6 秒
-  ZCODE_EXECUTOR_ANSWER_WAIT_MS: '1500',
+  // cancel 宽限压到 0.6 秒（T2.6b 第 10 条）。应答等待不压：挂起轮询 300ms 一轮，
+  // 1.5 秒在 CI 上经常赶不上第一次消费，approve 会如实报 applied:false。
   ZCODE_EXECUTOR_CANCEL_GRACE_MS: '600',
   ...mock.env,
 });
@@ -412,13 +412,14 @@ test('applied:false：runner 被挂起（SIGSTOP）活着但不消费 → approv
   const { pid } = JSON.parse(readFileSync(path.join(env.runsDir, 'lock'), 'utf8'));
   process.kill(pid, 'SIGSTOP'); // 活着但不消费
   const started = Date.now();
-  const approve = runBin(env.env, ['approve', env.entry.id, '--json']);
+  // 只这条压短等尾：runner 已被冻住，不会消费，不必干等默认 5 秒
+  const approve = runBin({ ...env.env, ZCODE_EXECUTOR_ANSWER_WAIT_MS: '500' }, ['approve', env.entry.id, '--json']);
   const elapsed = Date.now() - started;
   process.kill(pid, 'SIGKILL');
   assert.equal(approve.status, 0, approve.stderr);
   const out = JSON.parse(approve.stdout);
-  assert.equal(out.applied, false); // 等到 ANSWER_WAIT_MS 也没消费
-  assert.ok(elapsed >= 1400, `应等满 ANSWER_WAIT_MS(1500ms)，实际 ${elapsed}ms`);
+  assert.equal(out.applied, false); // 等到压短的等尾也没消费
+  assert.ok(elapsed >= 400, `应等满压短的等尾（500ms），实际 ${elapsed}ms`);
   assert.ok(elapsed < 6000, `不该等更久，实际 ${elapsed}ms`);
   assert.equal(existsSync(path.join(env.runsDir, 'pending.json')), true); // 挂起还在，可重新处理
 });
