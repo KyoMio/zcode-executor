@@ -737,7 +737,14 @@ test('结束摘要：闸门计数与文件/Bash 统计进人读输出（T2.8 第
     { type: 'tool.updated', payload: { kind: 'batch' } },
   ];
   await appendFile(path.join(env.runsDir, 'events.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
-  const pending = JSON.parse(await readFile(path.join(env.runsDir, 'pending.json'), 'utf8'));
+  // 轮询 300ms 才看 answer.json。CI 上 pending 可能还没落盘，不能假设它已经在。
+  const pending = JSON.parse(await waitFor(async () => {
+    try {
+      return await readFile(path.join(env.runsDir, 'pending.json'), 'utf8');
+    } catch {
+      return undefined;
+    }
+  }));
   await writeFile(path.join(env.runsDir, 'answer.json'), JSON.stringify({ requestId: pending.requestId, decision: 'allow' }));
   // 等挂起被消费（pending 消失）再起 follow：有 completeDelayMs 的时间窗，赶得上本回合的 last
   await waitFor(async () => (existsSync(path.join(env.runsDir, 'pending.json')) ? undefined : true));

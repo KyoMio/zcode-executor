@@ -408,8 +408,12 @@ test('连发两条不 --wait：队列按时间戳顺序投递，两条都进 eve
   });
   const sends = readEvents(env.runsDir).filter((e) => e.type === 'executor.send');
   assert.deepEqual(sends.map((e) => e.text), ['第一件', '第二件']); // 顺序正确
-  const queueFiles = await readdir(path.join(env.runsDir, 'queue'));
-  assert.equal(queueFiles.filter((f) => f.endsWith('.json')).length, 0);
+  // executor.result 写在出队之前。慢机器上结果齐了，队列文件可能还在。
+  const queueDir = path.join(env.runsDir, 'queue');
+  await waitFor(async () => {
+    const left = (await readdir(queueDir)).filter((f) => f.endsWith('.json'));
+    return left.length === 0 ? true : undefined;
+  });
   trackRunnerPids(env.runsDir);
 });
 
