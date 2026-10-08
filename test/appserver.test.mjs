@@ -235,6 +235,77 @@ test('spawn：显式 personalProviderFile 压过 env 里的（模型表按显式
   }
 });
 
+test('spawn：宿主代理自己的凭据环境变量不带给子进程，经 opts.env 整份转交的也一样，别的变量照常（审计 D4）', async () => {
+  const withheld = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'GEMINI_API_KEY', 'XAI_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN'];
+  const kept = ['ZCX_TEST_ORDINARY_VAR', 'PATH'];
+  const saved = Object.fromEntries([...withheld, 'ZCX_TEST_ORDINARY_VAR'].map((name) => [name, process.env[name]]));
+  for (const name of withheld) process.env[name] = `host-secret-${name}`;
+  process.env.ZCX_TEST_ORDINARY_VAR = '1';
+  const mock = await startMock({ script: { reportEnv: [...withheld, ...kept] } });
+  mockDirs.push(mock.dir);
+  try {
+    // 两种来路都要剔：不给 env（runner，继承 process.env）；把 process.env 整份当 opts.env 传进来（doctor、闲时自检）
+    for (const env of [mock.env, { ...process.env, ...mock.env }]) {
+      const stderrLines = [];
+      let client = null;
+      try {
+        client = await AppServerClient.spawn({ zcodePath: mock.zcodePath, cwd: mock.dir, env, onStderr: (line) => stderrLines.push(line) });
+        pids.push(client.pid);
+        await create(client); // 等 mock 起来把那几行打完
+        const reported = (name) => stderrLines.find((l) => l.includes(`mock: env ${name}=`))?.split('=').pop();
+        for (const name of withheld) assert.equal(reported(name), 'unset', name);
+        for (const name of kept) assert.equal(reported(name), 'set', name);
+        // 没带过去的名字在本进程 stderr 说一行（只有名字），排障时看得到
+        const note = stderrLines.find((l) => l.startsWith('appserver: ') && l.includes('GITHUB_TOKEN'));
+        assert.ok(note, `stderr 应有一行列出没带的变量名，实际：${stderrLines.join(' | ')}`);
+        assert.equal(stderrLines.some((l) => l.includes('host-secret-')), false, '值不进任何输出');
+      } finally {
+        if (client) await client.close({ timeoutMs: 2000 }).catch(() => {});
+      }
+    }
+  } finally {
+    await mock.cleanup();
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
+test('没有 requestId 的反向请求：参数不同就是两个请求，各过各的处理器，不共用一个应答（审计 D9-③）', async () => {
+  // 早先的退路键是「方法|会话」：同会话里第二个没有 requestId 的审批请求会并进第一个，拿到它的放行
+  const seen = [];
+  const ask = (command) => ({
+    method: 'interaction/requestPermission',
+    omitRequestId: true,
+    params: { sessionId: 'sess_x', toolName: 'Bash', input: { command } },
+  });
+  await withMock(
+    { serverRequests: [ask('ls'), ask('rm -rf ~')], resendIntervalMs: 40 },
+    {
+      onServerRequest: async (req) => {
+        if (req.method !== 'interaction/requestPermission') return undefined;
+        assert.equal(req.params.requestId, undefined);
+        seen.push(req.params.input.command);
+        await sleep(150); // 拖到各自重发过几轮再答：同一个请求的重发（参数一字不差）仍然只跑一次处理器
+        return req.params.input.command === 'ls' ? { decision: 'allow' } : { decision: 'deny', reason: '人工拒绝' };
+      },
+    },
+    async ({ stderrLines }) => {
+      const answered = () => stderrLines.filter((l) => l.includes('serverRequest interaction/requestPermission answered'));
+      await waitFor(() => (answered().length >= 2 ? true : undefined), { timeoutMs: 3000 });
+      assert.deepEqual([...seen].sort(), ['ls', 'rm -rf ~'], '两个请求各跑一次处理器，重发不重跑');
+      assert.deepEqual(
+        answered().map((l) => JSON.parse(l.slice(l.indexOf('answered: ') + 'answered: '.length)).decision).sort(),
+        ['allow', 'deny'],
+      );
+      const resent = stderrLines.filter((l) => l.includes('server-request interaction/requestPermission'));
+      assert.ok(resent.length >= 4, `150ms 处理器 + 40ms 重发：两个请求都重发过（实际 ${resent.length} 次）`);
+      assert.ok(resent.every((l) => l.includes('requestId=(none)')));
+    },
+  );
+});
+
 test('create → runtimePreferences：处理器只跑一次，每个信封都拿到同一默认应答', async () => {
   let handlerCalls = 0;
   await withMock(
