@@ -37,6 +37,8 @@
 //   errors:            { 方法名: {code, message, data?} }  某方法直接回错误
 //   exitAfter:         方法名                              处理完这个方法就 process.exit(3)
 //   junkStdoutLine:    "…"                                 应答第一个请求前往 stdout 打一行非 JSON
+//   reportEnv:         [变量名]                            启动时对每个名字往 stderr 打一行 `env <名字>=set|unset`
+//                                                          （只报有没有，不报值）：测客户端没把宿主代理的凭据带给子进程
 //   hangMethods:       [方法名]                            这些方法收到后不应答（测请求超时）
 //   ignoreEof:         true                                stdin EOF 不退出（测 close 的 SIGKILL 路径）
 //   resendIntervalMs:  1000                                反向请求未答时的重发间隔
@@ -44,14 +46,17 @@
 //                                                          （形状同真机条目：{ref:{providerId,modelId},
 //                                                          label?, reasoning?:{levels,defaultLevel}}）；
 //                                                          create/generateText 的模型存在性也按它查
-//   serverRequests:    [{method, params}]                  启动后主动发这些反向请求
+//   serverRequests:    [{method, params, omitRequestId?}]  启动后主动发这些反向请求；omitRequestId 为真时
+//                                                          params 里不带 requestId（真机的 requestRuntimePreferences
+//                                                          就没有，verified.md「时序」行），测客户端的退路去重键
 //   serverRequestsDelayMs: 0                               这些请求延后多少毫秒再发（留时间给 attach）
 //   strayEvents:       [{sessionId, type?, params?, method?}]  回合结束后发的事件通知；
 //                                                          method 缺省 session/event，sessionId 可指别人的，params 透传
 //   turns:             [{ events, permission, permissions, question, hang, fail }]
 //                                                          第 n 次 session/send 用第 n 个 turn
 //     events:     [{type, payload, delayMs?}]              turn.started 之后依次推的 session/event
-//     permission: {toolName, input, reason, options?}     发 interaction/requestPermission 并等应答；
+//     permission: {toolName, input, reason, options?, requestId?}  发 interaction/requestPermission 并等应答；
+//                                                         requestId 给了就原样用（测对端复用 requestId），不给自己编
 //     permissions: [同上, …]                              一回合连续多次挂起（T2.6 真机形状），依序发
 //     question:   {questions, schema?, toolCallId?}       发 interaction/requestUserInput 并等应答；
 //                                                         schema/toolCallId 透传，可造 ExitPlanMode 形状
@@ -238,10 +243,10 @@ const pendingAnswers = new Map(); // 信封 id → 反向请求条目（存引�
 // ---------- 反向请求（未答每 RESEND_MS 重发，同一 requestId、新信封 id） ----------
 // verified.md「app-server 协议」表「反向请求」一行（经 zcode-acp 实测 + server-requests.js）：
 // 未答的反向请求每秒重发一次，同一 requestId、信封 id 每次不同
-function askServer(method, params) {
+function askServer(method, params, { omitRequestId = false } = {}) {
   return new Promise((resolve) => {
     // 剧本给了 requestId 就用它（T1.2 排队用例要按 requestId 认请求），否则自己编
-    const requestId = params.requestId ?? `mock_${nextId}`;
+    const requestId = omitRequestId ? undefined : params.requestId ?? `mock_${nextId}`;
     // T0.3c 第 1 条：pendingAnswers 必须存同一个 entry 的引用。之前每次 fire 展开快照，
     // 快照里的 timer 是旧的，应答后 clearTimeout 清不掉真正的重发定时器，导致无限重发。
     const entry = { method, timer: null, done: false, validateAndResolve: null };
@@ -250,8 +255,8 @@ function askServer(method, params) {
       const envelopeId = nextId++;
       pendingAnswers.set(envelopeId, entry);
       // 发出去的反向请求不进记录文件（那只记收到的），打 stderr 供测试计数
-      log(`server-request ${method} envelope=${envelopeId} requestId=${requestId}`);
-      send({ id: envelopeId, method, params: { ...params, requestId } });
+      log(`server-request ${method} envelope=${envelopeId} requestId=${requestId ?? '(none)'}`);
+      send({ id: envelopeId, method, params: omitRequestId ? params : { ...params, requestId } });
       entry.timer = setTimeout(fire, RESEND_MS);
     };
     entry.validateAndResolve = (result) => {
@@ -451,6 +456,7 @@ async function runTurn(sessionId, sendParams) {
   for (const permission of turn.permissions ?? (turn.permission ? [turn.permission] : [])) {
     if (stopped()) return;
     const answer = await askServer('interaction/requestPermission', {
+      ...(permission.requestId !== undefined ? { requestId: permission.requestId } : {}),
       sessionId,
       toolCallId: `tool_${randomUUID().slice(0, 8)}`,
       toolName: permission.toolName,
@@ -854,12 +860,14 @@ function handleRequest(msg) {
 if (script.serverRequests?.length) {
   setTimeout(() => {
     for (const r of script.serverRequests) {
-      void askServer(r.method, r.params ?? {}).then((answer) => log(`serverRequest ${r.method} answered: ${JSON.stringify(answer)}`));
+      void askServer(r.method, r.params ?? {}, { omitRequestId: r.omitRequestId === true })
+        .then((answer) => log(`serverRequest ${r.method} answered: ${JSON.stringify(answer)}`));
     }
   }, script.serverRequestsDelayMs ?? 0);
 }
 
 log(`started version=${version} pid=${process.pid}`);
+for (const name of script.reportEnv ?? []) log(`env ${name}=${process.env[name] === undefined ? 'unset' : 'set'}`);
 
 const rl = createInterface({ input: process.stdin });
 rl.on('line', (line) => {
