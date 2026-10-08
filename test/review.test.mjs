@@ -5,8 +5,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { checkHardRules } from '../lib/review/hard.mjs';
+import { CLI_SUBCOMMANDS, SELF_GUARD_RULE_ID } from '../lib/review/self-guard.mjs';
+import { COMMANDS } from '../lib/cli/common.mjs';
 import { parseFast, parseSlow } from '../lib/review/parse.mjs';
 import { systemPrompt, actionPrompt } from '../lib/review/prompt.mjs';
 import { gatherEvidence, nodeProbe } from '../lib/review/evidence.mjs';
@@ -72,6 +75,248 @@ test('checkHardRules：cwd 内符号链接指向外部，写穿链接命中', ()
   assert.equal(res.hit, true);
   assert.equal(res.ruleId, 'outside-worktree');
   assert.ok(res.why.includes(outside), `why 应指向链接的真实目标，实际：${res.why}`);
+});
+
+// ── 符号链接 + `..`（审计 D1）：内核逐段解析，`..` 作用在链接目标上；先词法折叠再解析会漏判 ──
+const noSymlink = process.platform === 'win32' && 'Windows 建符号链接要特权，这组用例验的是 POSIX 的逐段解析';
+
+test('checkHardRules：链接指向外部时 link/../x 命中（.. 作用在链接目标上）', { skip: noSymlink }, () => {
+  const cwd = makeCwd();
+  const outsideParent = makeCwd();
+  const outside = path.join(outsideParent, 'target');
+  fs.mkdirSync(path.join(outside, 'sub'), { recursive: true });
+  fs.symlinkSync(outside, path.join(cwd, 'link'), 'dir');
+  // 拼接不能用 path.join：它自己就把 link/.. 折叠掉了，测不到要测的形态
+  const victim = path.join(outsideParent, 'evil.txt');
+  const res = checkHardRules({ toolName: 'Write', input: { file_path: `${cwd}/link/../evil.txt` } }, { cwd });
+  assert.equal(res.hit, true);
+  assert.equal(res.ruleId, 'outside-worktree');
+  assert.ok(res.why.includes(victim), `why 应带内核实际落点，实际：${res.why}`);
+  for (const file of [`${cwd}/link/sub/../../x`, `${cwd}/./link/../x`, 'link/../x', './link/sub/../../x']) {
+    assert.equal(checkHardRules({ toolName: 'Edit', input: { file_path: file } }, { cwd }).hit, true, file);
+  }
+  // 链接目标里那一段还不存在也一样：写工具先建目录再写，落点仍在外面
+  assert.equal(
+    checkHardRules({ toolName: 'Write', input: { file_path: `${cwd}/link/not-yet/../../x` } }, { cwd }).hit,
+    true,
+  );
+});
+
+test('checkHardRules：普通子目录的 .. 与指向界内的链接照常放过', { skip: noSymlink }, () => {
+  const cwd = makeCwd();
+  fs.mkdirSync(path.join(cwd, 'plain'));
+  fs.mkdirSync(path.join(cwd, 'deep', 'a'), { recursive: true });
+  fs.symlinkSync(path.join(cwd, 'deep', 'a'), path.join(cwd, 'inlink'), 'dir');
+  for (const file of [`${cwd}/plain/../ok.txt`, 'plain/../ok.txt', `${cwd}/inlink/f.txt`, `${cwd}/inlink/../f.txt`, `${cwd}/missing/../ok.txt`]) {
+    assert.deepEqual(
+      checkHardRules({ toolName: 'Write', input: { file_path: file } }, { cwd }),
+      { hit: false, ruleId: null },
+      file,
+    );
+  }
+});
+
+test('checkHardRules：两种解释有一种越界就命中（不知道写工具先折叠还是直接交内核）', { skip: noSymlink }, () => {
+  const cwd = makeCwd();
+  fs.mkdirSync(path.join(cwd, 'deep', 'a', 'b'), { recursive: true });
+  fs.symlinkSync(path.join(cwd, 'deep', 'a', 'b'), path.join(cwd, 'inlink'), 'dir');
+  // 内核：inlink → deep/a/b，三个 .. 回到 cwd，落在界内；先折叠的工具：cwd/../../x，越界
+  const res = checkHardRules({ toolName: 'Write', input: { file_path: `${cwd}/inlink/../../../x` } }, { cwd });
+  assert.equal(res.hit, true);
+  assert.equal(res.ruleId, 'outside-worktree');
+});
+
+test('checkHardRules：不存在的段后面跟 .. 再穿链接照样命中（写工具会先建目录）', { skip: noSymlink }, () => {
+  const cwd = makeCwd();
+  const outsideParent = makeCwd();
+  fs.mkdirSync(path.join(outsideParent, 'target'));
+  fs.symlinkSync(path.join(outsideParent, 'target'), path.join(cwd, 'link'), 'dir');
+  const res = checkHardRules({ toolName: 'Write', input: { file_path: `${cwd}/missing/../link/../evil.txt` } }, { cwd });
+  assert.equal(res.hit, true);
+});
+
+test('checkHardRules：悬空符号链接按它指向的地方判，指向外部命中', { skip: noSymlink }, () => {
+  const cwd = makeCwd();
+  const outside = makeCwd();
+  const target = path.join(outside, 'not-yet.txt'); // 还不存在：写下去才建出来
+  fs.symlinkSync(target, path.join(cwd, 'dangling'));
+  const res = checkHardRules({ toolName: 'Write', input: { file_path: path.join(cwd, 'dangling') } }, { cwd });
+  assert.equal(res.hit, true);
+  assert.ok(res.why.includes(target), `why 应带链接指向的路径，实际：${res.why}`);
+  // 指向界内的悬空链接不命中
+  fs.symlinkSync(path.join(cwd, 'later.txt'), path.join(cwd, 'dangling-in'));
+  assert.deepEqual(
+    checkHardRules({ toolName: 'Write', input: { file_path: path.join(cwd, 'dangling-in') } }, { cwd }),
+    { hit: false, ruleId: null },
+  );
+});
+
+test('checkHardRules：判不了界的路径（链接成环、把文件当目录穿）命中转人工，不当界内放过', { skip: noSymlink }, () => {
+  const cwd = makeCwd();
+  fs.symlinkSync(path.join(cwd, 'b'), path.join(cwd, 'a'));
+  fs.symlinkSync(path.join(cwd, 'a'), path.join(cwd, 'b'));
+  const loop = checkHardRules({ toolName: 'Write', input: { file_path: path.join(cwd, 'a', 'f.txt') } }, { cwd });
+  assert.equal(loop.hit, true);
+  assert.equal(loop.ruleId, 'outside-worktree');
+  assert.match(loop.why, /判不了/);
+  fs.writeFileSync(path.join(cwd, 'file.txt'), 'x');
+  const notDir = checkHardRules({ toolName: 'Write', input: { file_path: path.join(cwd, 'file.txt', 'x') } }, { cwd });
+  assert.equal(notDir.hit, true);
+  assert.match(notDir.why, /判不了/);
+});
+
+test('checkHardRules：写类工具没给能判的路径命中转人工（ApplyPatch 只有 patch_text、路径键改了名）', () => {
+  const cwd = makeCwd();
+  // ZCode 3.14.4 的工具表里有 ApplyPatch，参数只有 patch_text（verified.md 2026-10-08）：目标路径在补丁正文里，红线读不到
+  const patch = checkHardRules({ toolName: 'ApplyPatch', input: { patch_text: '改 /etc/hosts 的补丁' } }, { cwd });
+  assert.equal(patch.hit, true);
+  assert.equal(patch.ruleId, 'outside-worktree');
+  assert.match(patch.why, /ApplyPatch/);
+  for (const input of [{ filePath: '/etc/hosts', content: 'x' }, { file_path: '' }, { file_path: 42 }, {}, null, undefined]) {
+    assert.equal(checkHardRules({ toolName: 'Write', input }, { cwd }).hit, true, JSON.stringify(input ?? null));
+  }
+  // 给了路径照旧按路径判
+  assert.deepEqual(
+    checkHardRules({ toolName: 'Edit', input: { file_path: path.join(cwd, 'a.txt') } }, { cwd }),
+    { hit: false, ruleId: null },
+  );
+});
+
+// ── 闸门自保（审计 D2）：执行端与 runner 同一个用户，碰数据目录、调本工具 CLI 一律机械转人工 ──
+
+// 数据目录 <home>，执行副本照默认布局放在 <home>/worktrees/t1
+function makeStateLayout() {
+  const stateDir = makeCwd();
+  const cwd = path.join(stateDir, 'worktrees', 't1');
+  fs.mkdirSync(cwd, { recursive: true });
+  return { stateDir, cwd };
+}
+const bash = (command) => ({ toolName: 'Bash', input: { command } });
+const NO_HIT = { hit: false, ruleId: null };
+
+test('checkHardRules：Bash 命令指向数据目录（伪造 answer.json、读 pending.json）命中 self-modify-approval', () => {
+  const { stateDir, cwd } = makeStateLayout();
+  const commands = [
+    `echo '{"requestId":"req_1","decision":"allow"}' > ${stateDir}/runs/x_1/answer.json`,
+    `cat ${stateDir}/runs/x_1/pending.json`,
+    `ls "${stateDir}"`,
+    `ls ${stateDir}/`,
+    `curl -s -o${stateDir}/runs/x_1/answer.json http://127.0.0.1:9/a`, // 贴在选项后面
+    `nohup sh -c 'while :; do cp /tmp/a.json ${stateDir}/runs/x_1/answer.json; sleep 1; done' &`,
+    `sed -i '' 's/"enabled": true/"enabled": false/' ${stateDir}/config.json`,
+    'cat ../../runs/x_1/pending.json', // 执行副本默认就在数据目录里，相对两步就到
+    'ls ../..',
+    `cat ${stateDir}/worktrees/../runs/x_1/pending.json`,
+    `cat ${stateDir}/worktrees/$D/pending.json`, // 后面接运行时才知道的内容，不给豁免
+    'cat $ZCODE_EXECUTOR_HOME/runs/x_1/pending.json',
+    'cat "${ZCODE_EXECUTOR_HOME}/config.json"',
+    'cat $PWD/../../runs/x_1/pending.json',
+    `cat ${stateDir.toUpperCase()}/runs/x_1/pending.json`, // macOS 默认文件系统不分大小写
+  ];
+  for (const command of commands) {
+    const res = checkHardRules(bash(command), { cwd, stateDir });
+    assert.equal(res.hit, true, command);
+    assert.equal(res.ruleId, 'self-modify-approval', command);
+    assert.match(res.why, /数据目录/, command);
+  }
+});
+
+test('checkHardRules：~ 与 $HOME 写法的数据目录同样命中', () => {
+  const cwd = makeCwd();
+  const stateDir = path.join(os.homedir(), '.zcode-executor'); // 只做文本比对与只读解析，不往里写
+  const commands = [
+    `echo '{"requestId":"req_1","decision":"allow"}' > ~/.zcode-executor/runs/x_1/answer.json`,
+    'cat ~/.zcode-executor/runs/x_1/pending.json',
+    'cat $HOME/.zcode-executor/runs/x_1/pending.json',
+    'cat "${HOME}/.zcode-executor/config.json"',
+    'ls ~/.zcode-executor',
+  ];
+  for (const command of commands) {
+    const res = checkHardRules(bash(command), { cwd, stateDir });
+    assert.equal(res.hit, true, command);
+    assert.equal(res.ruleId, 'self-modify-approval', command);
+  }
+  // 名字相近的别的目录、家目录下别的东西不算
+  for (const command of ['ls ~/.zcode-executor-old/runs', 'cat ~/.zcode/v2/config.json', 'ls ~', 'echo $HOMEBREW_PREFIX']) {
+    assert.deepEqual(checkHardRules(bash(command), { cwd, stateDir }), NO_HIT, command);
+  }
+});
+
+test('checkHardRules：执行副本自己的路径与日常命令不被自保误伤', () => {
+  const { stateDir, cwd } = makeStateLayout();
+  const commands = [
+    `cd ${cwd} && npm test`,
+    `git -C ${cwd} status --porcelain`,
+    `node --test ${cwd}/test/*.test.mjs`,
+    `cat ${stateDir}/worktrees/t2/README.md`, // 别的执行副本：归 outside-worktree 的散文规则由模型判，不是管控面
+    'ls ..',
+    'cat ../t2/README.md',
+    `ls ${stateDir}-old/runs`, // 名字相近的另一个目录
+    `ls /mnt${stateDir}/runs`, // 更长路径的中段
+    'git diff main..HEAD -- src/a.js',
+    "sed -i '' 's/foo/../g' src/a.js",
+    'grep -rn zcode-executor docs/',
+    'cat bin/zcode-executor',
+    'ls skills/zcode-executor/',
+    'node --check bin/zcode-executor',
+    'git clone https://github.com/kyomio/zcode-executor new-dir',
+    'npm view zcode-executor version',
+    'grep -c zcode-executor status.md',
+    'cd zcode-executor\nstatus=$?', // 换行是下一条命令，不是 CLI 的子命令
+    'export ZCODE_EXECUTOR_HOME=$(mktemp -d) && npm test',
+  ];
+  for (const command of commands) {
+    assert.deepEqual(checkHardRules(bash(command), { cwd, stateDir }), NO_HIT, command);
+  }
+});
+
+test('checkHardRules：调本工具 CLI（approve / deny / answer / send / _runner……）命中，不需要知道数据目录', () => {
+  const cwd = makeCwd();
+  const commands = [
+    'zcode-executor approve x_1',
+    'zcode-executor deny x_1 --json',
+    'zcode-executor answer x_1 -- 1',
+    'node bin/zcode-executor _runner x_1',
+    '/usr/local/bin/zcode-executor status x_1',
+    'npx -y zcode-executor@0.4.4 approve x_1',
+    '"zcode-executor" "approve" x_1',
+    'zcode-executor \\\n  approve x_1', // 反斜杠续行还是同一条命令
+    "sh -c 'zcode-executor send x_1 继续'",
+    'ZCODE_EXECUTOR_HOME=/tmp/s zcode-executor list',
+    'sleep 5; zcode-executor approve x_1 &',
+  ];
+  for (const command of commands) {
+    const res = checkHardRules(bash(command), { cwd });
+    assert.equal(res.hit, true, command);
+    assert.equal(res.ruleId, 'self-modify-approval', command);
+    assert.match(res.why, /CLI/, command);
+  }
+  // js 工具（Node REPL，权限与 Bash 同级）的代码也认，参数之间隔着逗号、方括号、换行
+  const viaJs = checkHardRules(
+    { toolName: 'js', input: { code: "require('node:child_process').spawnSync('zcode-executor', [\n  'approve', id])" } },
+    { cwd },
+  );
+  assert.equal(viaJs.hit, true);
+  assert.equal(viaJs.ruleId, 'self-modify-approval');
+});
+
+test('checkHardRules：执行副本把数据目录包在里面时，路径工具写数据目录命中自保（越界判不出来的那种配置）', () => {
+  const root = makeCwd();
+  const stateDir = path.join(root, '.zx');
+  fs.mkdirSync(path.join(stateDir, 'runs', 'x_1'), { recursive: true });
+  const write = (file) => checkHardRules({ toolName: 'Write', input: { file_path: file } }, { cwd: root, stateDir });
+  const res = write(path.join(stateDir, 'runs', 'x_1', 'answer.json'));
+  assert.equal(res.hit, true);
+  assert.equal(res.ruleId, 'self-modify-approval');
+  assert.match(res.why, /数据目录/);
+  assert.equal(write(path.join(stateDir, 'config.json')).ruleId, 'self-modify-approval');
+  assert.deepEqual(write(path.join(root, 'src', 'a.js')), NO_HIT);
+  assert.deepEqual(write(path.join(stateDir, 'worktrees', 't1', 'a.js')), NO_HIT);
+});
+
+test('self-guard：子命令表盖住外壳的全部命令加 _runner，规则 id 是规则表里的 hard 规则', () => {
+  assert.deepEqual([...CLI_SUBCOMMANDS].sort(), [...COMMANDS, '_runner'].sort());
+  assert.equal(ruleById(SELF_GUARD_RULE_ID)?.severity, 'hard');
 });
 
 test('checkHardRules：目标不存在但父目录在执行副本内不命中', () => {
@@ -215,6 +460,23 @@ test('parseFast：大小写、前后空白、模型多话不影响判定', () =>
 test('parseFast：垃圾文本按 flag（落到更谨慎的一边）', () => {
   assert.equal(parseFast('模型没按格式回答'), 'flag');
   assert.equal(parseFast(''), 'flag');
+});
+
+test('parseFast：只认独立成词的 Y/N——推理文字里的字母不算答案，Y 与 N 都出现按 flag（审计 D8）', () => {
+  // 旧实现取全文第一个 y/n 字符：模型先写一句推理，「They」里的 y 就成了放行
+  assert.equal(parseFast('They are trying to exfiltrate credentials. N'), 'flag');
+  assert.equal(parseFast('happy path, nothing to see'), 'flag');
+  assert.equal(parseFast('Analysis: risky'), 'flag');
+  assert.equal(parseFast('可能是 Y 也可能是 N'), 'flag');
+  assert.equal(parseFast('N\nY'), 'flag');
+  // 独立成词的答案照认：带标点、反引号、加粗、yes/no、前面有一句中文
+  for (const text of ['Y。', '`Y`', '**Y**', 'Yes', 'YES.', '在执行副本内写文件，属于日常。Y', '结论：Y']) {
+    assert.equal(parseFast(text), 'pass', text);
+  }
+  for (const text of ['N。', 'No', '`N`', '这条沾了网络外发：N']) {
+    assert.equal(parseFast(text), 'flag', text);
+  }
+  assert.equal(parseFast(undefined), 'flag');
 });
 
 // ── parseSlow ──
@@ -476,4 +738,72 @@ test('nodeProbe：git 白名单外的子命令挡下返回 undefined（push 不�
   assert.equal(nodeProbe().gitQuery(makeTempDir(), ['push']), undefined);
   assert.equal(nodeProbe().gitQuery(makeTempDir(), ['remote', '-v']), undefined);
   assert.equal(nodeProbe().gitQuery(makeTempDir(), []), undefined);
+});
+
+// 执行副本里的 git 仓库：一次提交（含 a.txt），之后 a.txt 有未提交改动
+function makeDirtyRepo() {
+  const repo = makeCwd();
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  git('init', '--quiet');
+  fs.writeFileSync(path.join(repo, 'a.txt'), '提交时的内容\n');
+  git('add', 'a.txt');
+  git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'init');
+  fs.writeFileSync(path.join(repo, 'a.txt'), '一处未提交改动\n');
+  return { repo, git };
+}
+
+test('nodeProbe：执行副本里的 git 配置不能借审批探针跑程序（fsmonitor、外部 diff、textconv）（审计 D6）', { skip: process.platform === 'win32' && '夹具是 POSIX shell 脚本' }, () => {
+  const { repo, git } = makeDirtyRepo();
+  // 执行端改得动执行副本的 .git/config 与 .gitattributes：把 fsmonitor、外部 diff、textconv 指到自己的脚本上
+  const marker = path.join(makeCwd(), 'ran-by-probe');
+  const script = path.join(repo, 'hook.sh');
+  fs.writeFileSync(script, `#!/bin/sh\necho ran >> '${marker}'\n`, { mode: 0o755 });
+  git('config', 'core.fsmonitor', script);
+  git('config', 'diff.external', script);
+  git('config', 'diff.evil.textconv', script);
+  fs.writeFileSync(path.join(repo, '.gitattributes'), '*.txt diff=evil\n');
+  const probe = nodeProbe();
+  assert.match(probe.gitQuery(repo, ['status', '--porcelain']) ?? '', / M a\.txt/);
+  probe.gitQuery(repo, ['diff', 'HEAD']);
+  probe.gitQuery(repo, ['log', '-p', '-1']);
+  assert.equal(fs.existsSync(marker), false, '探针只查事实，不该把执行副本里配的程序跑起来');
+});
+
+test('nodeProbe：仓库配置里的 filter 驱动（clean / process）同样不被探针跑起来（审计 D6 同类）', { skip: process.platform === 'win32' && '夹具是 POSIX shell 命令' }, () => {
+  const { repo, git } = makeDirtyRepo();
+  const marker = path.join(makeCwd(), 'ran-by-probe');
+  const tracked = ['a.txt', 'b.md', 'c.bin'];
+  for (const name of tracked) fs.writeFileSync(path.join(repo, name), '提交时的内容\n');
+  git('add', ...tracked);
+  git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'more');
+  // 同长度的改动：git 光看大小判不出来，要读内容比对，比对前先过过滤器——filter 驱动就是这时候被跑起来的
+  for (const name of tracked) fs.writeFileSync(path.join(repo, name), '提交时的内客\n');
+  const leave = `sh -c 'echo ran >> "${marker}"; cat'`;
+  git('config', 'filter.evil.clean', leave);
+  git('config', 'filter.ev.il=x.clean', leave); // 驱动名任取，带点和等号的也得关得掉
+  git('config', 'filter.proc.process', leave);
+  git('config', 'filter.proc.required', 'true');
+  fs.writeFileSync(path.join(repo, '.gitattributes'), 'a.txt filter=evil\nb.md filter=ev.il=x\nc.bin filter=proc\n');
+  const probe = nodeProbe();
+  const status = probe.gitQuery(repo, ['status', '--porcelain']) ?? '';
+  probe.gitQuery(repo, ['diff', 'HEAD']);
+  probe.gitQuery(repo, ['log', '-p', '-1']);
+  assert.equal(fs.existsSync(marker), false, '探针只查事实，不该把仓库配置里的过滤器跑起来');
+  // 过滤器关掉以后事实照样查得到（required 的驱动没跑成不该让 git 报错退出）
+  for (const name of tracked) assert.match(status, new RegExp(` M ${name.replace('.', '\\.')}`));
+});
+
+test('nodeProbe：环境里的 GIT_DIR 带不偏探针，查的仍是 cwd 这个仓库（审计 D6）', () => {
+  const { repo } = makeDirtyRepo();
+  const elsewhere = makeCwd();
+  execFileSync('git', ['-C', elsewhere, 'init', '--quiet']);
+  const saved = process.env.GIT_DIR;
+  process.env.GIT_DIR = path.join(elsewhere, '.git'); // git 钩子里起的进程会带着它，它压过 -C
+  try {
+    // 被带偏时用的是 elsewhere 的索引：a.txt 在那边是没跟踪的文件（?? a.txt），不是「改过的」
+    assert.match(nodeProbe().gitQuery(repo, ['status', '--porcelain']) ?? '', / M a\.txt/);
+  } finally {
+    if (saved === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = saved;
+  }
 });

@@ -89,6 +89,8 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
 - `--thought` 的值在建会话前对着该模型的合法档位校验，不合法退出码 2（`session/create` 遇到非法值会静默忽略，不能靠它报错）。
 - `watch --json` 每行一个对象：开头 `{type:'hello', repo}`（启动目录的所属仓库），之后 `{type:'session', session}`；首轮全部输出完是 `{type:'synced'}`，会话从登记簿消失是 `{type:'removed', id}`。快照字段与 `status --json` 不同名的才是新含义（`activeTool`、`recentTools`、`pendingDetail`、`offpeakQueue`、`reply`、`since`、`lastEndedAt`、`lastEndOutcome`、`replyMarkdown`）。
 - 正文写 `-` 从 stdin 读。`--json` 给机器可读结构。
+- 输出（stdout、stderr、`runner.log`）里的终端控制字符——C0（换行、制表除外）、DEL、C1、双向排版控制符——一律换成字面的 `\uXXXX`：
+  工具名、理由、提问、模型回复、文件名都是执行端可控的文本，原样上屏能清屏、改写人正在看的挂起行。`--json` 的含义不变（转义落在 JSON 字符串里，解析回来还是原字符）。
 - `doctor` 的退出码与 `--json.ok`：①–③ 有一步失败，或 ⑤ 的结论是「接口变了」（changed），`ok` 为 false、退出码 1；⑤ 的另外三种结论（正常、暂时不可用、不适用）不影响两者。⑤ 加进来之前 `ok` 只看 ①–③（2026-09-27 起才看 ⑤）。`--json` 加 `offpeak: {state, layer, expected, actual, reason, logid, appVersion, verifiedAppVersion}`；`doctor --offpeak --json` 只输出 `{ok, offpeak}`（另外，测试用的闲时服务地址环境变量 `ZCODE_EXECUTOR_OFFPEAK_ORIGIN` 配错时，`doctor --offpeak` 也以 1 退出）。
 
 ### 闲时投递
@@ -131,8 +133,16 @@ Flash 类模型思考等级不要往低调，效果差。
 
 1. **红线**（写死在代码里，谁也推不翻）：
    - hard 规则表沿用 Claude Code auto 模式的类别（凭据外泄等）。
-   - **本项目专属**：带路径参数的工具（Write、Edit 等）路径解析成绝对路径后不在 cwd 之下 → 转人工。
-     Bash 的路径没法可靠解析，不做红线，交给模型审批并在提示词里写明「任何越出执行副本的写入或删除一律转人工」。
+   - **本项目专属之一（越界，`outside-worktree`）**：带路径参数的工具（Write、Edit 等）路径不在 cwd 之下 → 转人工。
+     路径照内核的走法逐段解析再判界：符号链接就地展开，`..` 作用在链接目标上（`<执行副本>/link/../x` 落在链接目标的上一级，不在执行副本里）；
+     「先做词法归一」和「原样交给内核」两种读法都算，任一越界即命中。落点判不了的（符号链接成环、把文件当目录穿）、
+     写类工具（Write、Edit、MultiEdit、NotebookEdit、ApplyPatch）拿不出能判的路径的，同样转人工。
+     Bash 的路径没法可靠解析，不做越界红线，交给模型审批并在提示词里写明「任何越出执行副本的写入或删除一律转人工」。
+   - **本项目专属之二（自保，`self-modify-approval`）**：操作指向本工具自己的数据目录（挂起与应答、登记簿、配置都在里面；
+     默认执行副本根 `worktrees/` 与本会话的执行副本除外），或调用本工具的 CLI（`zcode-executor <子命令>`）→ 转人工。
+     执行端与 runner 是同一个用户，文件权限拦不住它自己写 `answer.json`、自己跑 `approve`，所以这两样不交给模型判。
+     Bash 的 `command` 与 js 工具的 `code` 按原文匹配，只认直白写法（字面路径、`~`、`$HOME`、`$PWD`、相对的 `..`、CLI 名后跟子命令）；
+     拼变量、编码、先写脚本再跑认不出来，仍归模型审批与人——同一个用户之下没有根治，要根治得上系统级隔离（decisions D23）。
    - 命中即挂起，不进模型审批。
 2. **模型审批**：可选 Jev 前筛 → 原 ZCode `fast` + `low` 快筛 → 必要时慢判。非空白 `review.jev.apiKey` 启用前筛；Jev pass 提前放行，flag/error/skip（含超时、非法响应、adapter 异常）都回到原快筛。无 key 时原链路不变。原快筛结果未通过或无法解析才进入慢判；原快筛调用失败仍以 `review-failed` 转人工。
    原快筛收到既有的完整 action/context，不使用 Jev 缩减后的 state，也不接受 Jev 概率作为指令；提示词、思考等级与解析规则沿用原合同。ZCode 快筛输出预算 300 token（`review.fastMaxTokens`），慢判 2000（`review.slowMaxTokens`）。Jev 不设 shadow/mode，也不从环境变量读取 key。含 Jev key 的 `~/.zcode-executor/config.json` 必须是当前用户拥有的普通非符号链接文件且权限不宽于 `0600`，否则配置读取失败。
@@ -151,6 +161,9 @@ Flash 类模型思考等级不要往低调，效果差。
 `answer` 应答。build 档下不会有 ExitPlanMode。
 
 **`--task`** 是模型审批的意图来源。不给的话意图只有投递正文，越界判断没有依据，快筛更容易 flag——skill 里要求必给。
+任务单在入队那一刻留快照（`runs/<id>/tasks/<sha256>.md`，哈希记进队列项与 `executor.send` 事件的 `taskSha256`），审批只读快照：
+任务单文件在执行副本里，执行端改得动，现读它等于让执行端自己写「用户说过的话」。之后再改任务单文件不影响审批依据，
+要让审批看到新内容就带着 `--task` 再投一次。没有快照的旧事件（升级前落的）不再作审批依据。
 
 每次审批只记一个最终 `executor.gate`：`stage:"review-fast"` + `reviewer:"jev"` 表示前筛提前通过，同一 stage + `reviewer:"zcode"` 表示原快筛通过；慢判/调用失败的最终 reviewer 为 ZCode。独立 `preScreen` 记录 Jev pass/flag/error/skip 与允许的原因、耗时、次数和概率等元数据；skip 不伪装成模型 flag。历史 `fastReview` 保持旧 Jev 回落含义，不改作 ZCode 快筛记录。终态统计不重复计数，字段合同见 SPEC。
 
@@ -176,9 +189,14 @@ Flash 类模型思考等级不要往低调，效果差。
     cancel                         叫停当前回合的标记，runner 见到就发 session/stop 并替人拒答挂起，处理完删掉
     runner.log                     runner 的 stderr
     queue/                         排队的投递
+    tasks/<sha256>.md              任务单在入队时的快照，模型审批的意图只读它
     lock                           O_EXCL 锁
     stop                           收摊标记，runner 做完手上这条就不再取队列、关连接退出
 ```
+
+`runs/` 与其下的目录 0700，本工具落盘的文件 0600（旧版本留下的 0755 目录在下次投递时收紧）：里面有命令原文、任务单、会话事件。
+挡的是同机别的用户，挡不住同一个用户的执行端。数据目录的根不收紧——默认的执行副本根也在它下面。
+`pending.json` 落盘前按值抹掉 runner 手里的密钥（provider key、闲时凭据、Jev key）；不做「看着像凭据就遮」的猜测，人要靠这份原文决定放不放。
 
 只有一个审计源：`events.jsonl`。查一条会话的来龙去脉只看一处。
 `~/.zcode/v2/config.json` 与 `~/.zcode/v2/credentials.json` 只读；`doctor` 只报它们在不在、key 在不在，不打内容。
@@ -192,7 +210,10 @@ Flash 类模型思考等级不要往低调，效果差。
 - 挂起期间 runner 和 app-server 子进程都活着。
 - 多条会话可同时跑，各自一个 app-server 子进程，不设上限。
 - 回合结束靠 `turn.completed` / `turn.failed` / `turn.terminal`。先不做无信号兜底，遇到挂死再加。
-- 反向请求未答会每秒重发一次同一 requestId，要去重。
+- 反向请求未答会每秒重发一次同一 requestId，要去重。去重用的应答缓存只留到下一次投递开始：对端复用 requestId 时，上一回合的放行不会原样答给新请求。
+- 拉起 app-server 子进程时不带宿主代理自己的凭据环境变量（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`GITHUB_TOKEN`、`GH_TOKEN` 等固定名单，
+  `lib/appserver.mjs` 的 `HOST_CREDENTIAL_ENV`）：执行端的 Bash 继承子进程环境，`env` 一下就全看见了。zcode 的模型 key 走个人 provider 文件，用不上它们；
+  执行端的任务要用 GitHub 凭据时走本机已登录的 gh / git 凭据助手。没带过去的名字在 `runner.log` 里记一行（只有名字）。
 
 ## 9. skill
 

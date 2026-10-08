@@ -322,6 +322,28 @@ zcode-open-bridge 称此模式不读配置里的模型，要环境变量注入�
   把一回合里多条消息首尾直接相连，没有分隔。
 - `events.jsonl` 九成以上是 `v4/telemetry/event` 遥测行；本机最大的事件文件 121MB。
 
+## 安全审计核实（2026-10-08，App 3.14.4，零 token，只读本机 zcode.cjs 与本机实验）
+
+核对的是 `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`（打包后的单文件），没有发任何请求。
+
+| 事实 | 内容 |
+| --- | --- |
+| 写类工具表 | `isWriteTool` 的集合是 `Write`、`Edit`、`ApplyPatch`、`Bash`；`isReadOnlyTool` 里有 `Read`、`Glob`、`Grep`、`WebSearch`、`WebFetch`、`TodoRead`、`TodoWrite` 等。`MultiEdit` 全文 0 次出现 |
+| 内置工具注册 | `registerBuiltInTools` 遍历内置工具表，按 `metadata.name` 注册。名字既有字面量，也有常量：`U1="WebFetch"`、`Oht="WebSearch"`、`jte="EvalWorkflowSnippet"` 等；只搜 `metadata:{name:"…"}` 得到的 17 个字面量条目不是完整工具表 |
+| `toolDenylist` | `session/create` 把它转成 runtime 的 `toolDisallowlist`；`registerBuiltInTools` 在注册前跳过禁止表中的工具。`web_search` 别名先归一成 `WebSearch`，所以 `--deny "WebFetch WebSearch"` 覆盖这两个内置联网工具及该别名。此次结论来自源码，没有为此发模型回合；Bash、js 和 MCP 工具的联网能力不受这两个名字限制 |
+| 工作流与闲时工具 | app-server 的 `dynamicWorkflowEnabled`、`offPeakToolEnabled` 默认均为 false；本工具的 runner 建会话时不启用它们。`EvalWorkflowSnippet` 属于动态工作流工具，注册受前一个开关控制；`OffPeakCreate` / `OffPeakList` 需要后一个开关提供的 port。闲时投递走协议参数，不靠开启这两个模型工具 |
+| `ApplyPatch` | 在本机这版的内置工具注册表中未找到它的实现。输入 schema 是 `{patch_text: string}`，**没有 `file_path`**，目标路径写在补丁正文里；补丁正文的格式没查明。机械红线对它一律转人工（没有可判的路径），等真机发得出来再补路径提取 |
+| `js` 工具 | Node REPL，输入 `{code: string, timeout_ms?, title?}`，`needsApproval:true`，权限说明原文「Node REPL can run arbitrary JavaScript with full Node privileges (require/process), like Bash」。所以闸门自保除了 Bash 的 `command`，也看 `code` |
+| 模型 key 的环境变量回落 | `ANTHROPIC_API_KEY`、`OPENAI_API_KEY` 只是 AI SDK 在没有显式给 key 时的回落；本工具走个人 provider 文件加运行时头，子进程环境里不需要它们 |
+
+本机实验（不涉及 zcode）：
+
+- Node v26.5.0 的 `fs.realpathSync`（JS 实现）先 `path.resolve` 再逐段解析：`<dir>/link/../x`（`link` 是指向别处目录的符号链接）得到 `<dir>/x`；
+  而 `fs.writeFileSync` 把原串交给内核，实际落在链接目标的上一级。两者不一致就是审计 D1 的洞，判界因此改成自己逐段解析。
+- git 2.54.0：`git status --porcelain` 对「大小没变、时间戳变了」的已跟踪文件要读内容比对，比对前会跑 `.gitattributes` 指到的 `filter.<名字>.clean`
+  （大小变了的文件不比内容，不触发）。`-c core.fsmonitor=false` 管不到它；经 `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n`
+  把 `filter.<名字>.process` 置成空串后不再跑（clean、smudge 也随之不被采用）。
+
 ## Claude Code mod（2026-10-02，Claude Code 桌面版，引擎 2.1.286）
 
 - 函数钩子插件（mod）的 `$.process.run` / `$.process.spawn` 在桌面版 Code 标签页可用（类型文件标着 "CLI only"）；

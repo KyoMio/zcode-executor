@@ -474,6 +474,33 @@ test('handlers.permission：收到 params（toolName/input/options），应答�
   );
 });
 
+test('下一回合复用了上一回合的 requestId：审批处理器照样再跑一次，不拿上回缓存的放行应答（审计 D9-③）', async () => {
+  const seen = [];
+  const permission = { toolName: 'Bash', input: { command: 'ls' }, reason: '列目录', requestId: 'req_reused' };
+  const script = { turns: [{ permission }, { permission: { ...permission, input: { command: 'rm -rf ~' } } }] };
+  await withSession(
+    script,
+    {
+      handlers: {
+        permission: async (params) => {
+          seen.push(params.input.command);
+          // 第一回合放行；第二回合同一个 requestId、换了命令，这次不放
+          return seen.length === 1 ? { decision: 'allow' } : { decision: 'deny', reason: '人工拒绝' };
+        },
+      },
+    },
+    async ({ session, recordPath }) => {
+      assert.equal((await session.send('第一回合')).outcome, 'done');
+      assert.equal((await session.send('第二回合')).outcome, 'done');
+      assert.deepEqual(seen, ['ls', 'rm -rf ~'], '第二回合的审批必须重新过处理器');
+      const answers = readRecord(recordPath)
+        .filter((m) => m.id !== undefined && m.method === undefined && m.result?.decision !== undefined)
+        .map((m) => m.result.decision);
+      assert.deepEqual(answers, ['allow', 'deny']);
+    },
+  );
+});
+
 test('resume 失败 → attachSession reject，details.data 透传', async () => {
   const script = { errors: { 'session/resume': { code: -32602, message: 'no such session', data: { details: ['会话不存在'] } } } };
   const mock = await startMock({ script });

@@ -6,7 +6,7 @@
 
 <p align="center">一个 Claude Code 等多个编码代理都能用的插件：把一件想清楚的开发任务派给本机的 <a href="https://zcode.z.ai">ZCode</a>（GLM）执行，在隔离的 git worktree 里跑，每一次写操作都过「红线 + 模型审批」两道闸，最后用 <code>git diff</code> 和测试验收，而不是听执行端的自述。</p>
 
-<p align="center"><img src="https://img.shields.io/badge/version-v0.4.4-5B4CF0" alt="v0.4.4"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-728%20passing-brightgreen" alt="Tests"></p>
+<p align="center"><img src="https://img.shields.io/badge/version-v0.4.4-5B4CF0" alt="v0.4.4"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-765%20passing-brightgreen" alt="Tests"></p>
 
 ## 为什么
 
@@ -338,11 +338,14 @@ zcode-executor doctor --json
 - **只在允许时放行。** 自动放行和 `approve` 都要求 options 里有 `allow_once`；没有「一直允许」。
 - **密钥严格限域。** ZCode provider key 仍只走 app-server 路径。可选的 Jev key 是唯一主动持久化的密钥：只存在受属主权限保护的 `config.json` 中，只作为 Jev Authorization 发送，绝不复制进事件、挂起状态、runner 日志或 app-server 进程。
 - **应答绑定请求。** `approve`/`deny`/`answer` 都带请求 id，陈年应答一律丢弃。
+- **闸门自己也在红线里。** 执行端碰 zcode-executor 的数据目录（默认执行副本根 `worktrees/` 与本会话的执行副本除外）或调 `zcode-executor` 命令，一律停下等人。执行端与 runner 是同一个系统用户，这条只认直白的写法：拼变量、先写个脚本再跑认不出来，仍靠模型审批与人。
+- **审批依据在投递时定格。** 任务单在入队那一刻留快照，模型审批只读快照；执行端事后改任务单文件，改不了审批看到的「用户原话」。
+- **宿主代理的凭据不带给执行端。** `ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`GITHUB_TOKEN`、`GH_TOKEN` 等环境变量在拉起 ZCode 时剔掉；任务不需要联网时再加 `--deny "WebFetch WebSearch"`。这只移除这两个工具，Bash、js 和 MCP 工具仍可能联网。
 
 ## 开发
 
 ```bash
-npm test          # 728 个用例对剧本驱动的 mock app-server 与 mock 闲时服务跑，外加文档版本号一致性检查；不花 token
+npm test          # 765 个用例对剧本驱动的 mock app-server 与 mock 闲时服务跑，外加文档版本号一致性检查；不花 token
 node --check lib/**/*.mjs
 ```
 

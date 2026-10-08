@@ -3,7 +3,7 @@
 // 不碰真网络、不读真实 ~/.zcode。号失效重取、续跑与结算重试在 test/offpeak-retake.test.mjs（任务 OP5）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, readdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { readRecord, waitFor } from './helpers.mjs';
@@ -98,6 +98,20 @@ test('send --offpeak：会话的 provider 已不在 provider 表里 → 退出�
   assert.equal(r.status, 2, r.stderr);
   assert.match(r.stderr, /builtin:bigmodel-coding-plan.*不在 provider 表里/);
   assert.equal(s.server.requests.length, 0);
+  assert.equal(existsSync(path.join(s.runsDir, 'offpeak.json')), false);
+});
+
+test('send --offpeak --task：任务单读不了 → 退出码 1，在取号之前就报，不白用一次号', { skip: process.getuid?.() === 0 && 'root 读得了 000 的文件' }, async (t) => {
+  const s = await setup(t);
+  // 入队时要读任务单留快照（审计 D3）；闲时投递是先取号后入队，读不了得在取号之前拦下
+  const task = path.join(s.entry.cwd, 'unreadable-task.md');
+  await writeFile(task, '# 任务单\n', { mode: 0o000 });
+  await chmod(task, 0o000);
+  t.after(() => chmod(task, 0o600).catch(() => {}));
+  const r = await runBin(s.env, ['send', s.entry.id, '活', '--offpeak', '--task', task]);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /--task 文件读不了/);
+  assert.equal(s.server.requests.length, 0, '没有向闲时服务发过任何请求');
   assert.equal(existsSync(path.join(s.runsDir, 'offpeak.json')), false);
 });
 

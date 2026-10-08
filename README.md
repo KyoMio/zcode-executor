@@ -6,7 +6,7 @@
 
 <p align="center">A plugin for Claude Code and other coding agents that hands a well-specified development task to the local <a href="https://zcode.z.ai">ZCode</a> agent (GLM), runs it in an isolated git worktree, guards every write with a hard-rule check plus a model-based review, and lets you verify the result with <code>git diff</code> and tests instead of trusting the agent's own report.</p>
 
-<p align="center"><img src="https://img.shields.io/badge/version-v0.4.4-5B4CF0" alt="v0.4.4"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-728%20passing-brightgreen" alt="Tests"></p>
+<p align="center"><img src="https://img.shields.io/badge/version-v0.4.4-5B4CF0" alt="v0.4.4"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-765%20passing-brightgreen" alt="Tests"></p>
 
 ## Why
 
@@ -350,11 +350,14 @@ Newly started runners read the configuration; existing runners do not hot-reload
 - **Allow only when allowed.** Automatic approval and `approve` both require an `allow_once` option; there is no "always allow".
 - **Secrets are tightly scoped.** ZCode's provider key still goes only to the app-server path. The optional Jev key is the one deliberate persistent secret: it lives only in owner-protected `config.json`, is sent only as Jev authorization, and is never copied to events, pending state, runner logs or the app-server process.
 - **Answers are bound to requests.** Every `approve`/`deny`/`answer` carries the request id; stale answers are discarded.
+- **The gate guards itself.** Anything that touches zcode-executor's own data directory (except the default `worktrees/` root and the current session's worktree) or invokes the `zcode-executor` CLI stops for a human. The executor runs as the same OS user as the runner, so this only catches plain spellings: variable splicing or a script written first and run later is not recognised and still relies on model review and the human.
+- **The approval basis is frozen at send time.** The task file is snapshotted when the turn is queued and model review reads only the snapshot; editing the task file afterwards cannot change what review sees as "what the user said".
+- **Host-agent credentials are not passed down.** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GITHUB_TOKEN`, `GH_TOKEN` and similar variables are stripped when ZCode is spawned; add `--deny "WebFetch WebSearch"` when the task does not need network access. This removes those two tools; Bash, js and MCP tools can still access the network.
 
 ## Development
 
 ```bash
-npm test          # 728 cases against a scripted mock app-server and mock off-peak server, plus a doc-version drift check; no tokens spent
+npm test          # 765 cases against a scripted mock app-server and mock off-peak server, plus a doc-version drift check; no tokens spent
 node --check lib/**/*.mjs
 ```
 
