@@ -15,6 +15,7 @@ description: 把一件已经想清楚的开发任务交给本机 ZCode（GLM）�
 1. **任务单是契约，消息只是门铃。** 任务内容全部写进任务单文件，投递正文一句「执行 tasks/T-xxx.md」就够——
    zcode 是有自己判断的完整 agent，一段话过去它会自己重新理解，任务单才是事后对账的依据。
    所以 `send` 必带 `--task`：不给任务单，模型审批看不到你授权了什么，越界判断没有依据，几乎全部转人工。
+   审批认的是**投递那一刻**的任务单内容（入队时留了快照）：之后再改文件，审批看不到，带着 `--task` 再投一次才算数。
 2. **验收看 `git diff` 和测试，不看它怎么说。** 回合结束带回来的回答只是执行端自述。判断做没做对，
    一律回主仓看 diff、在执行副本里跑测试、读产物文件。
 3. **反复投同一条会话三四轮还没过，回去改任务单。** 通常问题出在任务描述不清，不是多投几次能解决的。
@@ -123,6 +124,8 @@ chmod 600 ~/.zcode-executor/config.json
 
 1. 看挂起内容里的工具名、参数和转人工的理由，用 AskUserQuestion 转给用户
    （命中红线的一定要转，比如越出执行副本的写入）。
+   规则是 `self-modify-approval` 的要格外当心：那是执行端在碰 zcode-executor 自己的数据目录（审批的挂起与应答都在里面）
+   或者在调 `zcode-executor` 命令。正常干活用不着这两样，原样告诉用户它想做什么，别替它解释成无害。
 2. 拿到决定：允许 → `zcode-executor approve <id>`（只放行这一次，没有「一直允许」）；
    拒绝 → `zcode-executor deny <id>`。回合从挂起处继续。
 
@@ -266,7 +269,10 @@ zcode-executor answer <id> <值…>                 # 应答挂起的提问：�
   EOF
   ```
 
-- `--deny` 建会话时物理拿掉工具（如 `--deny "WebSearch"`），任务不需要执行端上网时用。
+- `--deny` 建会话时从工具注册中移除指定工具。**任务不需要执行端上网就带上 `--deny "WebFetch WebSearch"`**，减少联网工具的可用面。
+  这只移除这两个工具，Bash、js 和 MCP 工具仍可能联网；需要断网时要由系统或容器限制网络。
+- 你自己环境里的凭据变量（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`GITHUB_TOKEN`、`GH_TOKEN` 等）不会带给执行端。
+  任务要用 GitHub 凭据时靠本机已登录的 `gh` / git 凭据助手，别指望环境变量。
 - `--json` 给机器可读结构，脚本化处理时用；输出里的 `id` 都是本地 id。
 - cwd 会解析成真实路径存进登记簿（macOS 的 `/tmp/x` 会变成 `/private/tmp/x`），`list --project` 按解析后的路径匹配。
 - 数据目录 `~/.zcode-executor/`（`ZCODE_EXECUTOR_HOME` 可改）：`sessions.json` 登记簿，`runs/<id>/` 里有 `events.jsonl`（zcode 事件与闸门决定）、`last.json`、`pending.json`、`offpeak.json`（闲时投递时）、`runner.log`。

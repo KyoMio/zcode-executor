@@ -50,6 +50,8 @@
 ## 5. 输出与退出码
 
 - stdout 只放结果：人读的摘要，或 `--json` 时一个 JSON 对象一行。进度、警告、`--stream` 都走 stderr。
+- 输出一律经 `process.stdout` / `process.stderr`（`console.*` 也是）：入口给这两个流包了一层，把终端控制字符换成字面的 `\uXXXX`（`lib/cli/terminal.mjs`）——
+  工具名、理由、模型回复、文件名都是执行端可控的文本。别绕开它直接写 fd（`fs.writeSync(1, …)`、`stdio: 'inherit'` 的子进程）。
 - 每条 stderr 信息一行，以命令名或阶段开头：`new: cwd 不是 worktree，照常建`。
 - `--json` 的结构只加字段不删字段、不改字段含义。改了就在 PRD 第 4 节同步。
 - 退出码表固定为 0 / 1 / 2 / 3 / 4 / 5，含义见 PRD。新情况归入既有码，不加新码。
@@ -57,7 +59,10 @@
 ## 6. 落盘
 
 - 数据目录只从配置解析一次，所有路径用绝对路径。
-- 写 JSON 文件先写同目录临时文件再 `rename`，避免读到半截。
+- 写 JSON 文件先写同目录临时文件再 `rename`，避免读到半截。临时文件名带随机段、排他创建（`wx`）：猜得到的名字会被人预先放上符号链接。
+  走 `lib/config.mjs` 的 `writeJsonAtomic` / `writeFileAtomic`，别自己拼临时名（闸门层的 `pending.json` 不能 import 工作流层，另有一份同样的写法）。
+- 本工具落盘的文件 0600，`runs/` 与其下的目录 0700（`PRIVATE_FILE_MODE`、`PRIVATE_DIR_MODE`，`lib/runs.mjs` 的 `ensureRunsDir`）。数据目录的根不收紧：默认的执行副本根也在它下面。
+  这层挡的是同机别的用户；执行端与 runner 是同一个用户，挡它靠闸门（§8）。
 - `events.jsonl` 只追加，一行一个对象，本项目自己的事件 `type` 以 `executor.` 开头。
 - 时间一律 ISO 8601 UTC 字符串。
 - `runs/`、`worktrees/` 不进仓库；测试用 `mkdtemp` 建临时目录并在 `after()` 里清掉。
@@ -69,12 +74,15 @@
 ## 7. 协议层
 
 - 每个请求带超时，超时视为失败并说明是哪个方法。
-- 反向请求按 `params.requestId` 去重，没有 requestId 的按 `method|sessionId`；没有处理器的反向请求回 `-32601` 错误并打一行 stderr，
+- 反向请求按 `params.requestId` 去重，没有 requestId 的按「方法 + 参数全文」（重发的参数一字不差；参数不同就是两个请求）。
+  已出结果的应答只留到回合边界，`Session.send` 开头清掉：对端复用 requestId 时，上一回合的放行不能原样答给新请求。没有处理器的反向请求回 `-32601` 错误并打一行 stderr，
   不能不答（不答对端每秒重发）。**例外**：审批请求和提问由会话层接管，没给处理器时刻意不答让回合停住（这就是挂起），
   客户端对同一请求只保留最近 5 个信封 id，应答时只回这几个（挂起 75 秒后 approve 真机验过够用）。
 - 未知事件类型原样落盘，不报错。
 - 审批应答形状是 `{decision:'allow'|'deny'}`（verified.md「审批」），放行前必须确认 options 里有 `kind` 为 `allow_once` 的项，没有就转人工。
 - 子进程 stderr 全部转到本进程 stderr，前面加 `zcode:` 前缀。
+- 拉起 zcode 子进程不带宿主代理自己的凭据环境变量（`lib/appserver.mjs` 的 `HOST_CREDENTIAL_ENV`，不论来自本进程环境还是调用方的 `env`）。
+  要加名字就加进这张表；不改成白名单——`HOME`、`PATH` 这类漏一个就坏功能。
 
 ## 8. 安全底线（代码层面不可绕）
 
@@ -84,7 +92,12 @@
 - runner 只认 `answer.json` 里 requestId 与当前挂起一致的应答，对不上的丢弃：上一轮留下的答案不能放行这一轮。
 - 白名单检查在 `new` 做一次，runner 启动时对登记簿里的 cwd 再做一次。
 - API key、token 一类字符串永不打印。落盘只允许两处：D14 的 0600 临时个人 provider 文件，以及用户明确配置的 `~/.zcode-executor/config.json` 中 `review.jev.apiKey`（D15；含 key 时必须当前 uid 拥有、普通非符号链接且权限不宽于 0600）。`doctor` 只报 key 是否配置，永不报 key 本身。
-- 红线表是代码常量，不读配置。
+- 红线表是代码常量，不读配置。机械红线两条（越界、自保）在 `lib/review/hard.mjs`：新加的检查，失败方向只能是转人工，判不了的一律命中，不许把哪条 ask 路径改成自动放行或自动拒绝。
+- 路径判界不许先折叠再解析：`path.resolve`、`path.normalize`、`fs.realpathSync`（它的 JS 实现一上来就 `path.resolve`）都会把 `link/..` 词法折掉，
+  而内核是先进链接目标再退一级。判界走 `hard.mjs` 的逐段解析。
+- 执行端碰本工具的数据目录、调本工具的 CLI，机械转人工（`lib/review/self-guard.mjs`）。只认直白写法，拦截面不往宽里加——执行副本默认就在数据目录里，宽了就是误报海（decisions D23）。
+- 模型审批的意图只读入队时留的任务单快照（`runs/<id>/tasks/`），不读执行副本里的原文件：那个文件执行端改得动。
+- runner 自己在执行副本里起的进程（审批探针的 git）不经闸门，仓库配置能让它跑程序的开关一律在命令行上关掉（`lib/review/evidence.mjs` 的 `GIT_SAFE_OPTIONS` 与 `filterOverrides`）。
 
 ## 9. 测试
 
