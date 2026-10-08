@@ -517,7 +517,10 @@ test('runner 阶段方法集合：3.12 起不推 provider 表，create 排在最
   const run = runBin(env.env, ['send', env.entry.id, '干活', '--wait', '--json']);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
   // new 不再起子进程，记录里从头到尾都是 runner 的
-  const methods = readRecord(env.mock.env.MOCK_APPSERVER_RECORD).map((m) => m.method).filter(Boolean);
+  // send --wait 在 last.json 落盘就返回，session/close 在那之后才发。慢机器上记录文件还没刷到盘。
+  const recordPath = env.mock.env.MOCK_APPSERVER_RECORD;
+  await waitFor(async () => (readRecord(recordPath).some((m) => m.method === 'session/close') ? true : undefined));
+  const methods = readRecord(recordPath).map((m) => m.method).filter(Boolean);
   assert.equal(methods[0], 'session/create');
   assert.deepEqual([...new Set(methods)].sort(), [
     'session/close',
