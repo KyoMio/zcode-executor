@@ -121,7 +121,7 @@ tasks/todo.md 末尾备注）。真实使用前请先过检查点 C。
 | 面板顶部横幅「实时连接中断，正在重试」（down） | watch 进程断了，服务端 5 秒自动重起、起好即恢复；客户端同时退 1 秒轮询兜底，恢复后不补弹断连期间的变化。持续不去：到终端 `pgrep -f "zcode-executor watch"` 看进程是否反复死 |
 | 面板横幅为 failed 态（「起不来」类说明 + 指引） | watch 在首轮同步完成前就退出（多半 `execPath` 配错或 CLI 不在 PATH），**不重试**——重试也一样起不来。修法：设置页把 `execPath` 改对（存盘即热重载，watch 用新路径重起）。GUI 启动的宿主连 node 都不在 PATH，全局安装 + 落回 PATH 救不了——见下节「execPath 与 GUI 宿主的 PATH」 |
 | 横幅「无权访问（admit 拒绝）：本机登录态可能已失效，重新登录 DSH 后自动恢复」（snapshot 回 401/403） | 传输其实是通的，病根在鉴权：重新登录 DSH 即可，下一轮轮询自动恢复，不用动插件配置 |
-| 插件页行为 active 但右栏没有「zcode 任务」tab | 宿主缺 `sidebarRightTabs` 服务（DSH 版本过老），客户端 console 有一行说明；本插件 peer 钉 `^0.1.7-rc.2 || ^0.2.0-rc.1`，升 DSH 后重核 |
+| 插件页行为 active 但右栏没有「zcode 任务」tab | 宿主缺 `sidebarRightTabs` 服务（DSH 版本过老），客户端 console 有一行说明；本插件 peer 钉 `>=0.1.7-rc.2 <0.3.0`，升 DSH 后重核 |
 | `~/.dsh/skills/zcode-executor` 没建出来 / 智能体不会派单 | 插件页或宿主日志找 `[dsh-zcode-executor]` 的 warn：建链失败（不致命）或路径被别人占着（foreign，手动移走占名者再重载插件行） |
 | 面板数据停着不动但横幅没报错 | watch 空闲时本来就无行（没有会话在跑）；确认 zcode 侧确有活跃会话，或切「全部项目」看是否过滤仓库判错 |
 
@@ -163,7 +163,7 @@ exec /绝对路径/node /仓库绝对路径/bin/zcode-executor "$@"
 - [ ] 发 npm 前按 Apache-2.0 §4 处理衍生件：`src/client/view.ts` 与 `skills/zcode-executor/SKILL.md`
       按 Apache-2.0 授权（见 LICENSE 末尾授权说明），随包携带 Apache 许可证全文
       （如 `LICENSE.apache-2.0` 并入 `files`），两件文件头部的 SPDX 标注保持完整。
-- [ ] 依赖 DSH 版本重核：peer 范围 `^0.1.7-rc.2 || ^0.2.0-rc.1` 在 DSH 0.3 发布时按官方
+- [ ] 依赖 DSH 版本重核：peer 范围 `>=0.1.7-rc.2 <0.3.0` 在 DSH 0.3 发布时按官方
       兼容核查方法重跑（SPEC「Further Notes」），必要时 `dsh plugin allow-version` 豁免。
 - [ ] zcode-executor 仓库侧的关联文档改动（其 README 提及 DSH 插件、CONTEXT.md「观察面板」
       词条从「Claude Code 里」泛化为「宿主界面里」）随其下次发版一起做（交接已登记在其仓库本地记录）。

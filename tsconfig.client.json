@@ -38,9 +38,6 @@
       "@deepseek-ai/dsh-client-ui-renderer/client": [
         "./node_modules/@deepseek-ai/dsh-client-ui-renderer/lib/types/client/index.d.ts"
       ],
-      "@deepseek-ai/dsh-client-ui-sidebar/client": [
-        "./node_modules/@deepseek-ai/dsh-client-ui-sidebar/lib/types/client/index.d.ts"
-      ],
       "@deepseek-ai/dsh-client-ui-sidebar-right/client": [
         "./node_modules/@deepseek-ai/dsh-client-ui-sidebar-right/lib/types/client/index.d.ts"
       ],
