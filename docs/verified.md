@@ -2,6 +2,13 @@
 
 写的是当时的情况。文件、版本、命令用之前先确认还在。
 
+## 3.14.5 冒烟（2026-10-09，App 3.14.5 / CLI 0.16.9）
+
+- 升级核对，不需要改代码。`doctor` 五步全过；`scripts/probe.mjs` 全绿（旧方法握手、create/subscribe/list/resume/close）。
+- 源码核对 zcode.cjs：我们用的方法与反向请求全部还在——`session/create|send|subscribe|close|list|stop`、`v4/command`、`interaction/requestPermission|requestUserInput|requestProviderRuntimeHeaders`、`workspace/generateText`；新方法（`session/goal|fork|compact|usage` 等）均为增量。`~/.zcode/v2/config.json` 仍是 `provider` 表 + 明文 apiKey。
+- 花额度一条短回合：`real-send --yes --on-permission allow` 写 hi.txt，create（flash/high）→ Write 触发 `interaction/requestPermission` → 放行 → `turn` 13 秒结算 done，usage `{input 67365 / output 157 / cacheRead 33536}`，无错误码。
+- 闲时：`quota` 零额度路径正常（`canTakeNumber:true`，今日 0/3）。完整闲时投递未在 3.14.5 重跑（需闲时窗口），`OFFPEAK_VERIFIED_APP` 仍记 3.14.1，doctor 的提示行保持。
+
 ## 3.14.1 冒烟（2026-09-22，App 3.14.1 / CLI 0.16.9，插件 0.3.1，花额度两条短回合）
 
 - 零 token：`doctor` 四步全过（选中账号型个人版）；`scripts/probe.mjs` 与 v4 探针的每一步结果和 3.12.2 完全一致（旧方法握手、`v4/command` 的 ACK 形状、无 id 的 stop 被忽略）。v4 `stop` 的 ACK 多了一个 `memoryEnabled:false` 字段，忽略即可。
