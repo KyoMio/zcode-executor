@@ -42,6 +42,11 @@ _Avoid_: 闲时任务（只指 ZCode App 里的同名功能）、闲时会话（
 用完要结算。
 _Avoid_: 票、排队项、队列项
 
+**start plan 投递（start-plan send）**：
+这一回合的模型请求改走 Start Plan 订阅额度的一次投递，照普通投递立刻开跑，无号、不等待、不结算。
+会话、回合、验收的含义照旧。
+_Avoid_: start-plan 任务、Start Plan 会话（会话没有类型，start plan 是投递的属性）
+
 **执行副本（worktree）**：
 执行端干活用的 git worktree，和主检出隔离。由 Claude 建，本项目只记录。
 

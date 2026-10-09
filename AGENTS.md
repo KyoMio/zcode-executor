@@ -3,7 +3,7 @@
 Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给本机 ZCode（GLM），
 在 worktree 里隔离执行，用 git diff 和测试客观验收。
 
-**状态（2026-10-09）**：第一版完成并已适配 ZCode App 3.12.2 起的版本（decisions D14；2026-10-09 在 App 3.14.5 上零 token + 花额度冒烟全过，见 verified.md）；插话改走 `v4/command`（D17）；接上账号型 Coding Plan（凭据文件来源，D19）；闲时投递与 `quota`（D20）随 v0.3.5 发布，start plan 投递已撤除（D21）；v0.4.0 加观察面板：`watch` 子命令加 Claude Code mod（`hooks/`，D22），v0.4.1 回复按 Markdown 显示、超过两行可展开，v0.4.2–0.4.3 修长命令把工具名挤成两行、撑破卡片边框。`npm test` 728 个用例。
+**状态（2026-10-09）**：第一版完成并已适配 ZCode App 3.12.2 起的版本（decisions D14；2026-10-09 在 App 3.14.5 上零 token + 花额度冒烟全过，见 verified.md）；插话改走 `v4/command`（D17）；接上账号型 Coding Plan（凭据文件来源，D19）；闲时投递与 `quota`（D20）随 v0.3.5 发布，start plan 投递撤而复开（D21，2026-10-09 服务器撤了人机验证后拣回）；v0.4.0 加观察面板：`watch` 子命令加 Claude Code mod（`hooks/`，D22），v0.4.1 回复按 Markdown 显示、超过两行可展开，v0.4.2–0.4.3 修长命令把工具名挤成两行、撑破卡片边框。`npm test` 728 个用例。
 术语在 [docs/CONTEXT.md](docs/CONTEXT.md)。本地开发记录（`docs/handoff/`、`docs/tasks/`、`docs/PLAN*.md`、`docs/archive/`、`docs/SPEC-offpeak.md`、`docs/SPEC-watch-pane.md`、`docs/jev-*-plan.md`、`docs/research/`）不进 GitHub，只在开发机上有；
 有它们就从 `docs/PLAN-v4.md` 与 `docs/handoff/handoff-20260908.md` 接手，没有就从 README 与 docs/PRD.md 开始。
 
@@ -11,8 +11,8 @@ Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给�
 
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
-| 协议 | `lib/appserver.mjs` `lib/session.mjs` `lib/providers.mjs` `lib/offpeak-provider.mjs` `lib/scrub.mjs` | 拉起 `zcode app-server --stdio`，JSON-RPC 请求配对与反向请求路由，会话生命周期，回合结束判定 |
-| 工作流 | `lib/config.mjs` `lib/credentials.mjs` `lib/offpeak.mjs` `lib/offpeak-check.mjs` `lib/offpeak-send.mjs` `lib/offpeak-run.mjs` `lib/registry.mjs` `lib/models.mjs` `lib/tiers.mjs` `lib/runs.mjs` `lib/queue.mjs` `lib/run.mjs` `lib/intent.mjs` `lib/tool-summary.mjs` `lib/snapshot.mjs` | 配置、登记簿、等级分配、队列与锁、runner 的一生、`runs/<id>/` 落盘、本回合解析与会话快照 |
+| 协议 | `lib/appserver.mjs` `lib/session.mjs` `lib/providers.mjs` `lib/offpeak-provider.mjs` `lib/startplan-provider.mjs` `lib/scrub.mjs` | 拉起 `zcode app-server --stdio`，JSON-RPC 请求配对与反向请求路由，会话生命周期，回合结束判定 |
+| 工作流 | `lib/config.mjs` `lib/credentials.mjs` `lib/offpeak.mjs` `lib/offpeak-check.mjs` `lib/offpeak-send.mjs` `lib/offpeak-run.mjs` `lib/startplan-send.mjs` `lib/startplan-run.mjs` `lib/registry.mjs` `lib/models.mjs` `lib/tiers.mjs` `lib/runs.mjs` `lib/queue.mjs` `lib/run.mjs` `lib/intent.mjs` `lib/tool-summary.mjs` `lib/snapshot.mjs` | 配置、登记簿、等级分配、队列与锁、runner 的一生、`runs/<id>/` 落盘、本回合解析与会话快照 |
 | 闸门 | `lib/gate.mjs` `lib/pending.mjs` `lib/review/` | 红线 → 模型审批（`workspace/generateText`）→ 挂起等人 |
 | 外壳 | `bin/zcode-executor` `lib/cli/` `skills/zcode-executor/` `templates/` `hooks/` `types/` | CLI 与 skill；`hooks/` 是只在 Claude Code 里生效的观察面板 mod（decisions D22），运行环境没有 Node、不 import `lib/`，数据只从 `watch` 子命令来；`types/` 是 mod 状态的类型声明，给 `claude plugin validate` 核对用。MCP 外壳按需后加 |
 

@@ -2,6 +2,11 @@
 
 写的是当时的情况。文件、版本、命令用之前先确认还在。
 
+## start plan 投递重开真机（2026-10-09，App 3.14.5，拣回 e26fedb 实现后）
+
+- 协议面零成本核对：`provider/updateAccountConfig`、send 的 `modelSelection`/`modelExecution.selectionScope`、内置文件 start-plan 条目（模型 GLM-5.3-Flash/5.2/5-Turbo，端点 zcode.z.ai/api/v1/zcode-plan/anthropic）在 3.14.5 全部在。`npm test` 755/755。
+- 花额度一条：`send x_* "写 sp.txt" --start-plan --wait`。请求确实经 `account:bigmodel-start-plan` 到达 zcode-plan 端点，**没有再出现 2026-09-29 的 `captcha verify failed`**——人机验证已撤，JWT 鉴权通过；服务器回业务错误 1005 `exceed quota limit`（Start Plan 订阅额度用尽），回合按退出码 4 failed 收尾，事件与错误归因干净。通道适配成立，待额度恢复后补一条成功回合。
+
 ## 3.14.5 冒烟（2026-10-09，App 3.14.5 / CLI 0.16.9）
 
 - 升级核对，不需要改代码。`doctor` 五步全过；`scripts/probe.mjs` 全绿（旧方法握手、create/subscribe/list/resume/close）。
