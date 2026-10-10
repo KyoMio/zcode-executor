@@ -763,3 +763,34 @@ test('createSnapshotStore：unbridgedRetryMs 非正数构造即抛清晰错误',
   assert.throws(() => createSnapshotStore({ baseUrl: '', unbridgedRetryMs: 0 }), /unbridgedRetryMs/);
   assert.throws(() => createSnapshotStore({ baseUrl: '', unbridgedRetryMs: -5 }), /unbridgedRetryMs/);
 });
+
+test('侧切换竞态：切侧后旧连接再推的一行不进新侧状态，旧流被 abort 也不误报退化 warn', async () => {
+  const stub = await startStub({
+    onStream: replay({ id: 'a', repo: '/r', phase: 'running' }),
+    snapshot: liveSnapshot({}),
+  });
+  const store = createSnapshotStore({ baseUrl: stub.baseUrl, pollMs: POLL_MS, retryMs: RETRY_MS, safetyPollMs: 0 });
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    store.start();
+    await waitFor(() => store.getState().synced && store.getState().table.a, '本机侧同步');
+    const staleCtx = stub.ctxs.at(-1); // 本机流的桩侧句柄：切侧后客户端已 abort 这条连接
+    store.setSession('zr~abc12345~s1'); // 切远程：halt（abort 旧流）+ 清屏 + 新流重开
+    await waitFor(() => stub.hits.stream === 2 && store.getState().synced, '新侧重开并同步');
+    staleCtx.send({ type: 'session', session: { id: 'ghost', repo: '/r', phase: 'running' } }); // 旧连接迟到的行
+    await sleep(POLL_MS * 3);
+    assert.equal(store.getState().table.ghost, undefined, '旧侧的行不得进新侧状态');
+    assert.ok(
+      !warnings.some((w) => /实时流连接失败/.test(w)),
+      `旧流被 abort 不该误报「退化为轮询」，却打了：${warnings.join(' | ')}`,
+    );
+    stub.ctxs.at(-1).send({ type: 'session', session: { id: 'b', repo: '/r', phase: 'running' } });
+    await waitFor(() => store.getState().table.b, '新侧流照常活着（顺证切侧没把新流弄坏）');
+  } finally {
+    console.warn = originalWarn;
+    store.stop();
+    await stub.close();
+  }
+});

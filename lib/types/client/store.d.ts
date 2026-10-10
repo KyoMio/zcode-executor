@@ -66,6 +66,9 @@ export interface SnapshotStore {
     /** 换过滤仓库：只改状态，不动取数。 */
     setScopeRepo(repo: string | null): void;
 }
+/** 响应是不是子客户端拦截层回的「未桥接」（PB-6 协议）。store 的取数路径与
+ *  index.tsx 的 repo 路径共用这一个判定。 */
+export declare function isUnbridgedResponse(res: Response): boolean;
 /**
  * 未桥接 reason → 面板横幅的中文原因（PB-6 口径四类 + 其他附原文）。导出供测试对表。
  * not-on-server 与 version-mismatch 都归「服务端未安装同版本插件」——前者没装、后者装

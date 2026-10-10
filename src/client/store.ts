@@ -108,6 +108,12 @@ const UNBRIDGED_HEADER_VALUE = 'unbridged';
 /** 未桥接体的错误码（协议定死；头是简写、体带 reason 细分）。 */
 const UNBRIDGED_CODE = 'zr-plugin-unbridged';
 
+/** 响应是不是子客户端拦截层回的「未桥接」（PB-6 协议）。store 的取数路径与
+ *  index.tsx 的 repo 路径共用这一个判定。 */
+export function isUnbridgedResponse(res: Response): boolean {
+  return res.status === 503 && res.headers.get(UNBRIDGED_HEADER) === UNBRIDGED_HEADER_VALUE;
+}
+
 /**
  * 未桥接 reason → 面板横幅的中文原因（PB-6 口径四类 + 其他附原文）。导出供测试对表。
  * not-on-server 与 version-mismatch 都归「服务端未安装同版本插件」——前者没装、后者装
@@ -211,8 +217,7 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
   const pollDelayNow = (): number => (unbridged ? Math.max(pollMs, unbridgedRetryMs) : pollMs);
 
   /** 响应是不是子客户端拦截层回的「未桥接」（PB-6 协议：503 + x-zen-remote: unbridged）。 */
-  const isUnbridged = (res: Response): boolean =>
-    res.status === 503 && res.headers.get(UNBRIDGED_HEADER) === UNBRIDGED_HEADER_VALUE;
+  const isUnbridged = isUnbridgedResponse;
 
   /** 未桥接体里的 reason（协议形状 {"ok":false,"error":{"code","reason"}}），读不出回 'unknown'。 */
   const reasonOfUnbridged = async (res: Response): Promise<string> => {
@@ -464,9 +469,12 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
       // 正常读到底也是断流（服务端关了流）；残缺的末行没有换行符，视为截断丢弃
     } catch (err) {
       alarm.disarm();
-      // abort（stop）或网络错或首响应超时：都落到下面的统一断流处理，由 running/timedOut 区分
-      // 主动 stop 不算退化，静默；真失败与超时各打一条（去重位拦住重试期的周期性重复）
-      if (running && !warnedDegraded) {
+      // 连接已被换掉（侧切换重开 abort 旧流、新连接已顶上，streamController 不再是本
+      // 连接）或主动 stop：静默收场——旧连接的收场不代表数据源健康状况，且侧切换每次
+      // 都会踩一遍，「退化」warn 纯属误报（PB-7b 修）。其余（真失败与超时）各打一条，
+      // 去重位拦住重试期的周期性重复。
+      if (streamController !== controller || !running) return;
+      if (!warnedDegraded) {
         warnedDegraded = true;
         console.warn(
           `[zcode-executor] 实时流连接失败，退化为 snapshot 轮询兜底：${

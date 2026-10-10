@@ -14,7 +14,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { createSnapshotStore, REPO_PATH } from './store.ts'
+import { createSnapshotStore, isUnbridgedResponse, REPO_PATH } from './store.ts'
 import { mainSessionIdOf, pickWorkspacePath } from './session-cwd.ts'
 import { registerTasksTab } from './register-tab.ts'
 import { PANE_CSS } from './pane/styles.ts'
@@ -51,6 +51,12 @@ async function routeScopeRepo(
       : `cwd=${encodeURIComponent(target.cwd)}`;
   try {
     const res = await fetch(`${BASE_URL}${REPO_PATH}?${query}`);
+    if (isUnbridgedResponse(res)) {
+      // 未桥接：面板横幅已有原因文案（store 侧合成），repo 解析不到是同一件事的另一半，
+      // 不再打「解析失败」warn 重复报障（PB-7b）；scope 照失败路径落到「显示全部」。
+      if (isCurrent()) store.setScopeRepo(null);
+      return;
+    }
     if (!res.ok) throw new Error(`repo HTTP ${res.status}`);
     const body = (await res.json()) as { repo?: unknown };
     if (!isCurrent()) return;

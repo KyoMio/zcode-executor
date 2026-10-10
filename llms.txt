@@ -18,6 +18,16 @@
   `GET /zcode-executor/stream`（NDJSON 推送，已同步的新客户端先补一轮全量）、
   `GET /zcode-executor/snapshot`（一次性全量，轮询兜底）、
   `GET /zcode-executor/repo?cwd=…`（git 共同数据目录判所属仓库，进程内缓存）。
+  0.2.0 起三条路由的请求都可带 `?sessionId=<会话 id>`（插件桥凭它改道）：其中 repo 按
+  它解析会话 cwd（宿主 sessions 服务 `get(id).header.cwd`，与 `?cwd=` 同给时以 sessionId
+  为准，解析不出回 `{repo:null}`）；stream / snapshot 是整机数据，服务端不读该参数。
+- 远程会话（zen-remote 插件桥，0.2.0）：装 zen-remote 2.1+ 时插件经
+  `ctx.inject(['zenRemote'])` 登记桥声明（版本运行时读 package.json；stream/snapshot 是
+  scope 'server' 整机数据要主服务端主人同意，repo 是 scope 'session'）。子客户端的远程
+  会话里面板显示主服务端任务，「本项目」按主服务端上该会话的仓库；客户端「侧」= 主会话
+  id 是否 `zr~` 前缀（`zr~<serverId>~<id>` 虚拟 id）：侧变化关流清屏重开、同侧换会话不
+  重开；未桥接（503 `zr-plugin-unbridged`，头 `x-zen-remote: unbridged`）时横幅给中文
+  原因、不退化为本机数据、重试节奏放宽到不短于 5 秒，桥恢复自动接上。
 - watch 子进程生命周期：synced 前退出 = failed（起不来，不重试——多半 execPath 配错）；
   synced 后意外退出 = down，5 秒自动重起，重起到下个 synced 之间的快照只作新基线。
 - 客户端：`createSnapshotStore` 流式读 stream（首响应 15 秒闹钟防服务器收 TCP 不回的永久挂起），
@@ -27,7 +37,9 @@
   starting / live / down /
   failed 各说各话：transport 全断合成 down「实时连接中断」但不覆盖服务端 failed；401/403 是
   「无权访问（admit 拒绝）……重新登录 DSH 后自动恢复」，不说「连接中断」。
-- 当前项目判定：主会话 cwd（`retainedBy.mainView > 0`）→ 无会话退工作区路径 → repo 路由换过滤仓库；
+- 当前项目判定：主会话（`retainedBy.mainView > 0` 的第一行）的 id 与 cwd——id 定数据「侧」
+  （本机 / 远程主服务端，见上条），cwd 定过滤仓库（无会话退工作区路径，repo 路由换过滤仓库；
+  有主会话时 repo 请求带 `?sessionId=` 由服务端按会话 cwd 判）；
   面板「本项目 / 全部项目」chip 切换。信息架构与 zcode-executor 的 Claude Code mod 对齐（已结束 20 条上限、
   回复默认收起一行可展开（2026-10-07 用户改规格，原两行；挂起/中断卡也带最新回复）、挂起卡片带工具名与原因、
   闲时排队显示排位、已结束 30 分钟内成卡片更久缩一行且行可点开成卡片（原 10 分钟/不可点）），颜色全取宿主 `--dsw-alias-*` 主题令牌
@@ -45,6 +57,6 @@
 - README.md — 安装（link: 两处登记 + 重启）、配置、架构、故障排查、已知边界、发布前 checklist。
 - SPEC.md — 需求、实现决定、测试缝选取、Out of Scope；tasks/plan.md + tasks/todo.md — 任务与检查点
   （A/B/C，真机 C1–C10；T6 机器侧已完成——预览 + mockup 比对修复过，真机检查点待验收）。
-- 测试与构建命令：`node --test "test/*.test.mjs"`（87 用例，零额度，直读 src/*.ts 靠 Node 类型剥离、
+- 测试与构建命令：`node --test "test/*.test.mjs"`（111 用例，零额度，直读 src/*.ts 靠 Node 类型剥离、
   本机 v22.22.3 实测可用）；`npm run build`（tsc 两套 tsconfig + scripts/build-client.mjs 内联打包客户端，
   产物 lib/ 入库）；`npm run verify`（两套 tsconfig --noEmit）。

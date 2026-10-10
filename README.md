@@ -48,6 +48,19 @@ DSH（DeepSeek Harness）插件：把本机的 [zcode-executor](../../../../zcod
    `~/.dsh/skills/zcode-executor` → 包内 `skills/zcode-executor`（被同名异物占着时只 warn 不覆盖，
    手动移走占名者再重载插件行即可）。
 
+**子客户端机器的安装**（要在另一台 DSH 桌面端里远程看主服务端任务才需要；见
+[远程会话](#远程会话zen-remote-插件桥)一节）。与上面同样的两处登记，只是 dependencies
+写 Gitea 仓库地址加版本标签（两端版本必须一致，桥才握手成功）：
+
+```json
+"dsh-zcode-executor": "git+https://openwrt.kyomio.top:3773/kyomio/dsh-zcode-executor.git#v0.2.0"
+```
+
+同一文件里的 `dsh.profile.bundles` 数组照现有说明追加 `"dsh-zcode-executor"`，`pnpm install`
+后重启桌面端。子客户端机器**不需要装 `zcode-executor` 命令行**：本机会话里面板会显示 watch
+起不来的失败说明（execPath 排不到可执行文件），远程会话不受影响——数据经插件桥转发自主
+服务端，与本机 CLI 无关。
+
 **卸载**：从上面两处各删一行 → `pnpm install` → 重启。插件行 dispose 时会摘掉仍指向本包的 skill
 软链（别人的文件/链接一律不碰），不留坏链。
 
@@ -75,6 +88,9 @@ zcode-executor watch --json（子进程，stdout NDJSON 行协议）
     GET /zcode-executor/stream    NDJSON 推送（连接态行 + watch 原始行；已同步的新客户端先补一轮全量）
     GET /zcode-executor/snapshot  一次性全量快照（轮询兜底）
     GET /zcode-executor/repo?cwd=…  按 git 共同数据目录判所属仓库，进程内缓存
+    （0.2.0 起三条路由的请求都可带 ?sessionId=<会话 id>（插件桥凭它改道，见下节）：其中
+     repo 按它解析会话 cwd，与 ?cwd= 同给时以 sessionId 为准，解析不出回 {repo:null}；
+     stream / snapshot 是整机数据，服务端不读该参数）
         │  fetch（同源带 cookie）
         ▼
 客户端 lib/client.js（浏览器半场，官方右栏 API）
@@ -91,10 +107,39 @@ zcode-executor watch --json（子进程，stdout NDJSON 行协议）
 经 `ctx.inject` 惰性注入——整块不挂载但插件照常加载；客户端遇老版本 DSH 没有 `sidebarRightTabs`
 服务时同理，只 console 一行说明、tab 不挂载。
 
+## 远程会话（zen-remote 插件桥）
+
+0.2.0 起本插件是 dsh-zen-remote 插件桥的协作插件：装了 zen-remote 2.1+ 的机器上，插件会向它的
+`zenRemote` 服务登记三条路由的转发声明；在 zen-remote 子客户端打开的远程会话里，「zcode 任务」
+面板显示**主服务端**的任务（取数请求带 `?sessionId=<会话 id>`，子客户端的 zen-remote 把带
+`zr~` 虚拟会话 id 的请求经中继改道到主服务端执行），「本项目」按主服务端上该会话的仓库筛选；
+切回本机会话即回到本机任务。
+
+三个前提，缺一都是「未桥接」：
+
+1. **两端都装本插件且版本一致**（桥按「插件名 + 版本 + 声明摘要」三方一致握手）；
+2. **主服务端装 dsh-zen-remote 2.1+**（旧版没有 `zenRemote` 服务，登记不发生，纯本机行为）；
+3. **主服务端主人在 zen-remote 设置页「插件桥」里允许本插件转发整机数据**——stream/snapshot
+   是整台机器的全部 zcode 任务，属整机数据，要主人显式同意；repo 是会话级数据，不需要这步。
+
+未桥接时面板不退化为本机数据（显示本机任务会张冠李戴），而是顶部横幅给出原因，取数按
+不短于 5 秒的节奏慢速重试，桥恢复后自动接上：
+
+| 横幅原因 | 是什么问题 | 处理 |
+| --- | --- | --- |
+| 主服务端未安装同版本的本插件 | 服务端没装本插件，或装的版本与子客户端不一致 | 两端升到同一版本（安装见上文，子客户端机用 git 地址加版本标签装） |
+| 主服务端未允许转发整机数据 | 主服务端主人没同意 stream/snapshot 的转发 | 主服务端主人在 zen-remote 设置页「插件桥」里允许本插件 |
+| 中继离线 | 子客户端到主服务端的远程链路不通 | 等链路恢复，面板自动重试；持续不去先查两端 zen-remote 的配对与网络 |
+| 主服务端的 zen-remote 版本过旧 | 主服务端的 zen-remote 不认识插件桥握手 | 升级主服务端的 dsh-zen-remote 到 2.1+ |
+| 其他（附原因原文） | 声明不一致、主服务端更换等其余情况 | 照括号里的原因对照；两端各重载一次插件行再试 |
+
+横幅之外的细节：本机会话（含没有会话时）的取数不带 `?sessionId=`，行为与 0.1 完全一致；
+远程会话的 `repo` 请求同样转发到主服务端，按该会话在主服务端上的工作目录判所属仓库。
+
 ## 开发与测试
 
 ```sh
-node --test "test/*.test.mjs"   # 85 用例，零额度：纯逻辑层直读 src/*.ts（靠 Node 类型剥离，
+node --test "test/*.test.mjs"   # 111 用例，零额度：纯逻辑层直读 src/*.ts（靠 Node 类型剥离，
                                 # 本机 v22.22.3 实测可用），服务端半场用 fake ctx + 桩 watch
                                 # 脚本（test/fixtures/stub-watch.mjs）
 npm run build                   # 产出 lib/（入库）
