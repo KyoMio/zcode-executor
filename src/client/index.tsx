@@ -4,8 +4,10 @@
  * apply 里四件事（生命周期全部挂本 fiber，插件卸载级联清掉）：
  * 1. 样式：模板字符串 CSS 一次注入 <style data-plugin="dsh-zcode-executor">（zen-remote 同款）；
  * 2. 数据：createSnapshotStore（baseUrl 同源根，路由常量与 store.ts 对齐）并 start；
- * 3. 范围：订阅 ctx.sessions.list / ctx.workspaces.list，派生当前主会话 cwd（无会话退
- *    工作区路径，session-cwd.ts），cwd 变化时调 repo 路由换过滤仓库进 store.setScopeRepo——
+ * 3. 范围与侧（PB-6）：订阅 ctx.sessions.list / ctx.workspaces.list，派生当前主会话 id 与
+ *    cwd——id 交给 store.setSession（侧变化在 store 内部重开流：远程会话的取数带
+ *    `?sessionId=` 由 zen-remote 插件桥改道到主服务端，本机/无会话不带）；repo 路由主会话
+ *    存在时按 sessionId 解析（服务端用会话 cwd 判仓库），无主会话退工作区路径 `?cwd=`——
  *    失败或 repo 为 null 时 scope 为 null = 显示全部并在面板注明；
  * 4. 右栏：registerTasksTab 挂官方「zcode 任务」tab（register-tab.ts，含老宿主降级）。
  * 面板只看不应答：本半场不注册任何 approve/deny/answer 控件（AGENTS.md 硬边界）。
@@ -13,7 +15,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { createSnapshotStore, REPO_PATH } from './store.ts'
-import { mainSessionCwdOf, pickWorkspacePath } from './session-cwd.ts'
+import { mainSessionIdOf, pickWorkspacePath } from './session-cwd.ts'
 import { registerTasksTab } from './register-tab.ts'
 import { PANE_CSS } from './pane/styles.ts'
 
@@ -27,22 +29,28 @@ export const inject = ['slots', 'sessions', 'workspaces']
 const BASE_URL = ''
 
 /**
- * 「当前项目」cwd 变化时的换仓动作：调 repo 路由解析所属仓库进 store。
- * 解析失败 / 不是 git 仓（repo null）/ 没有 cwd 可派生 → scopeRepo 置 null，
+ * 「当前项目」变化时的换仓动作（PB-6）：调 repo 路由解析所属仓库进 store。主会话存在时
+ * 按 `?sessionId=<主会话 id>` 解析（服务端用该会话的 cwd 判仓库；远程会话由插件桥转发到
+ * 主服务端解析，本地会话 id 原样到本机路由），无主会话退回工作区路径 `?cwd=`。
+ * 解析失败 / 不是 git 仓（repo null）/ 两者都没有 → scopeRepo 置 null，
  * 面板显示全部并注明（SPEC 用户故事 14 的另一面）。
- * @param isCurrent - 代际守卫：dispose 或换了新 cwd 之后，旧回应不得倒拨新 scope。
+ * @param isCurrent - 代际守卫：dispose 或换了新会话之后，旧回应不得倒拨新 scope。
  */
 async function routeScopeRepo(
   store: ReturnType<typeof createSnapshotStore>,
-  cwd: string | null,
+  target: { sessionId: string } | { cwd: string } | null,
   isCurrent: () => boolean,
 ): Promise<void> {
-  if (cwd === null) {
+  if (target === null) {
     if (isCurrent()) store.setScopeRepo(null);
     return;
   }
+  const query =
+    'sessionId' in target
+      ? `sessionId=${encodeURIComponent(target.sessionId)}`
+      : `cwd=${encodeURIComponent(target.cwd)}`;
   try {
-    const res = await fetch(`${BASE_URL}${REPO_PATH}?cwd=${encodeURIComponent(cwd)}`);
+    const res = await fetch(`${BASE_URL}${REPO_PATH}?${query}`);
     if (!res.ok) throw new Error(`repo HTTP ${res.status}`);
     const body = (await res.json()) as { repo?: unknown };
     if (!isCurrent()) return;
@@ -63,9 +71,9 @@ async function routeScopeRepo(
 export function apply(ctx: Context): void {
   // 构建号：真机排障用（宿主模块缓存按应用会话发旧 bundle，2026-10-07 连续两轮踩坑）——
   // devtools Console 里一眼核对跑的是哪版；改动记号见 git/构建时间，格式 YYYYMMDD-HHMM。
-  console.info('[zcode-executor] 面板构建 20261007-1500（安全网提速+告警、no-store 版）');
+  console.info('[zcode-executor] 面板构建 20261010-1200（插件桥：远程会话看主服务端任务）');
   // 面板数据 store：每插件激活一份；start/stop 跟 fiber 走，状态不清（重载后面板保留旧数据
-  // 直到流重连，重连首轮按基线对齐——归约器语义）。
+  // 直到流重连，重连首轮按基线对齐——归约器语义）。侧切换的清屏重开在 store.setSession 里。
   const store = createSnapshotStore({ baseUrl: BASE_URL });
   ctx.effect(() => {
     store.start();
@@ -85,20 +93,28 @@ export function apply(ctx: Context): void {
     };
   }, 'zcode-executor: pane styles');
 
-  // 当前项目 → 过滤仓库：两个目录都可观察，任一变化就重派生 cwd，cwd 真变了才调 repo 路由
-  // （repo 路由自带进程内缓存，但这挡得住客户端侧的重复请求）。
+  // 当前项目 → 数据侧与过滤仓库：两个目录都可观察，任一变化就重派生。主会话 id 变化时
+  // store.setSession（侧变化重开流、同侧只换参数）；repo 的变化检测键是「主会话 id，无
+  // 主会话退工作区路径」——repo 路由进程内有缓存，但这挡得住客户端侧的重复请求。
   ctx.effect(() => {
-    let lastCwd: string | null = null;
-    let routed = false; // 首轮即使 cwd 是 null 也要把 scope 落到「显示全部」
-    let sequence = 0; // 在途请求的代际号：dispose 或换 cwd 后，旧回应不得倒拨新 scope
+    let lastKey: string | null = null;
+    let routed = false; // 首轮即使键是 null 也要把 scope 落到「显示全部」
+    let sequence = 0; // 在途请求的代际号：dispose 或换会话后，旧回应不得倒拨新 scope
     const rederive = (): void => {
-      const cwd = mainSessionCwdOf(Object.values(ctx.sessions.list.getSnapshot().byId))
-        ?? pickWorkspacePath(ctx.workspaces.list.getSnapshot().items);
-      if (routed && cwd === lastCwd) return; // 无变化不重路由，也不作废在途请求
+      // 直接传参（不提中间变量）：rows 的宿主类型经参数位置的上下文推断对上 SessionRowLike
+      const sessionId = mainSessionIdOf(Object.values(ctx.sessions.list.getSnapshot().byId));
+      // 侧判定与重开在 store 内部（与本 effect 的 repo 代际互不干扰）
+      store.setSession(sessionId);
+      // repo 的目标：主会话在 → sessionId 分支（服务端按会话 cwd 判仓库）；不在 → 退
+      // 现有的工作区路径 cwd 分支。变化检测键同理：主会话 id 优先，无主会话用工作区路径。
+      const workspaceCwd = sessionId !== null ? null : pickWorkspacePath(ctx.workspaces.list.getSnapshot().items);
+      const target = sessionId !== null ? { sessionId } : workspaceCwd !== null ? { cwd: workspaceCwd } : null;
+      const key = sessionId ?? workspaceCwd;
+      if (routed && key === lastKey) return; // 无变化不重路由，也不作废在途请求
       const mine = ++sequence;
-      lastCwd = cwd;
+      lastKey = key;
       routed = true;
-      void routeScopeRepo(store, cwd, () => mine === sequence);
+      void routeScopeRepo(store, target, () => mine === sequence);
     };
     const unsubscribeSessions = ctx.sessions.list.subscribe(rederive);
     const unsubscribeWorkspaces = ctx.workspaces.list.subscribe(rederive);

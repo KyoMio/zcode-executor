@@ -1,6 +1,6 @@
 {
   "name": "dsh-zcode-executor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "把 zcode-executor 接进 DSH：智能体派单教学（SKILL.md + systemPrompt 公告）+ 官方右侧栏「zcode 任务」观察面板。Wires the zcode-executor CLI into DeepSeek Harness: agent dispatch teaching plus an official right-sidebar watch pane.",
   "license": "MIT",
   "type": "module",

@@ -39,6 +39,13 @@ export interface SnapshotStoreOptions {
      * 退化轮询（流断）进行中时安全网暂停，由退化轮询接管；流恢复即回到安全网节奏。
      */
     safetyPollMs?: number;
+    /**
+     * 未桥接（503 zr-plugin-unbridged）时的重试节奏下限，默认 5000（任务口径：不疯狂重试、
+     * 最长间隔不小于 5 秒）。远程会话里插件桥没桥上（服务端没装同版本 / 未同意 / 中继离线
+     * 等）时子客户端回 503，流与轮询照常重试（桥恢复后自动接上），但节奏放宽到本值与常规
+     * 间隔的较大者；测试注入小值驱动。构造时校验正数。
+     */
+    unbridgedRetryMs?: number;
 }
 export interface SnapshotStore {
     /** 当前状态。内容不变则同一引用（useSyncExternalStore 的防死循环前提）。 */
@@ -49,9 +56,22 @@ export interface SnapshotStore {
     start(): void;
     /** 停取数：断在途请求（AbortController）、清轮询与重试定时器。状态保留不清屏。 */
     stop(): void;
+    /**
+     * 换当前主会话（PB-6）：id 存起来给 stream/snapshot 请求当 `?sessionId=` 参数；它的
+     * 「侧」（session-cwd.ts 的 sideOfSessionId）与正在跑的连接不同侧时——本机 ↔ 远程、
+     * 或两台远程主服务端之间——关掉当前流、清空面板数据、按新侧重开；同侧内换会话不重开
+     * 流（数据是整机的，只有后续请求改用新参数）。没在取数时只记参数，下次 start 生效。
+     */
+    setSession(sessionId: string | null): void;
     /** 换过滤仓库：只改状态，不动取数。 */
     setScopeRepo(repo: string | null): void;
 }
+/**
+ * 未桥接 reason → 面板横幅的中文原因（PB-6 口径四类 + 其他附原文）。导出供测试对表。
+ * not-on-server 与 version-mismatch 都归「服务端未安装同版本插件」——前者没装、后者装
+ * 的不是同一版，对用户是同一件事：两端装同版本。
+ */
+export declare function unbridgedMessageOf(reason: string): string;
 /**
  * 建一个快照 store。构造后不取数，start() 才连；stop() 后可再 start() 从头连。
  * @param options - baseUrl 与两个注入计时（测试给小值）。

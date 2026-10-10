@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { createSnapshotStore, STREAM_PATH, SNAPSHOT_PATH, REPO_PATH } from '../src/client/store.ts';
+import { createSnapshotStore, STREAM_PATH, SNAPSHOT_PATH, REPO_PATH, unbridgedMessageOf } from '../src/client/store.ts';
 import { STREAM_ROUTE, SNAPSHOT_ROUTE, REPO_ROUTE } from '../src/routes.ts';
 
 const POLL_MS = 20;
@@ -24,37 +24,59 @@ async function waitFor(fn, label, ms = 2000) {
 /** 一条 stream 连接的句柄：send 吐一行 NDJSON，cut 中途掐断（res.destroy）。 */
 
 /**
- * 桩服务器。onStream(ctx) 每条 stream 连接调一次（ctx 存进 ctxs 供测试后续推行，
- * 连接关闭时移除）；snapshot() 每次轮询请求现算 { status, body }。返回 baseUrl、
- * 命中计数 hits（stream/snapshot）、存活连接 ctxs 与 close()。
+ * 桩服务器。onStream(ctx, url) 每条 stream 连接调一次（ctx 存进 ctxs 供测试后续推行，
+ * 连接关闭时移除；url 是完整请求 URL，PB-6 的 sessionId 参数断言用）；snapshot() 每次
+ * 轮询请求现算 { status, headers?, body }。返回 baseUrl、命中计数 hits（stream/snapshot）、
+ * 存活连接 ctxs、两类请求的 URL 账目 urls 与 close()。
  */
 async function startStub({ onStream, snapshot }) {
   const hits = { stream: 0, snapshot: 0 };
+  const urls = { stream: [], snapshot: [] };
   const ctxs = [];
   const server = createServer((req, res) => {
     const { pathname } = new URL(req.url ?? '/', 'http://stub');
     if (pathname === '/zcode-executor/stream') {
       hits.stream += 1;
-      res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+      urls.stream.push(req.url);
+      // 200 头 lazy 到第一行数据才写：rejectUnbridged 要回 503，先写头就撞 ERR_HTTP_HEADERS_SENT
+      let headed = false;
+      const ensureHead = () => {
+        if (!headed && !res.headersSent) {
+          res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+          headed = true;
+        }
+      };
       const ctx = {
-        send: (line) => res.write(`${JSON.stringify(line)}\n`),
+        send: (line) => {
+          ensureHead();
+          res.write(`${JSON.stringify(line)}\n`);
+        },
         // 绕过 JSON.stringify 原样写：测跨 chunk 的半行（字符串或 UTF-8 字节块）
-        sendRaw: (chunk) => res.write(chunk),
+        sendRaw: (chunk) => {
+          ensureHead();
+          res.write(chunk);
+        },
         cut: () => res.destroy(),
+        // PB-6：子客户端拦截层回「未桥接」（503 + x-zen-remote: unbridged + reason 体）
+        rejectUnbridged: (reason) => {
+          res.writeHead(503, { 'Content-Type': 'application/json', 'x-zen-remote': 'unbridged' });
+          res.end(JSON.stringify({ ok: false, error: { code: 'zr-plugin-unbridged', reason, plugin: 'dsh-zcode-executor' } }));
+        },
       };
       ctxs.push(ctx);
       res.on('close', () => {
         const at = ctxs.indexOf(ctx);
         if (at !== -1) ctxs.splice(at, 1);
       });
-      onStream(ctx);
+      onStream(ctx, req.url);
       return;
     }
     if (pathname === '/zcode-executor/snapshot') {
       hits.snapshot += 1;
+      urls.snapshot.push(req.url);
       // snapshot() 可返回 Promise（测试 hold 响应控制放行时机）也可同步返回，统一走 then
-      void Promise.resolve(snapshot()).then(({ status, body }) => {
-        res.writeHead(status, { 'Content-Type': 'application/json' });
+      void Promise.resolve(snapshot()).then(({ status, headers, body }) => {
+        res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
         res.end(JSON.stringify(body));
       });
       return;
@@ -66,6 +88,7 @@ async function startStub({ onStream, snapshot }) {
   const { port } = server.address();
   return {
     hits,
+    urls,
     ctxs,
     baseUrl: `http://127.0.0.1:${port}`,
     close: () => new Promise((resolve) => server.close(resolve)),
@@ -576,3 +599,167 @@ for (const status of [401, 403]) {
     }
   });
 }
+
+// ---- PB-6：会话「侧」（本机 / 远程主服务端）与未桥接 503 ----
+
+test('setSession 侧变化（本机→远程）：关旧流、清空面板数据、按新侧重开且请求带 sessionId', async () => {
+  const seenUrls = [];
+  const stub = await startStub({
+    onStream: (ctx, url) => {
+      seenUrls.push(url);
+      replay({ id: 'a', repo: '/r', phase: 'running' })(ctx);
+    },
+    snapshot: liveSnapshot({}),
+  });
+  const store = createSnapshotStore({ baseUrl: stub.baseUrl, pollMs: POLL_MS, retryMs: RETRY_MS, safetyPollMs: 0 });
+  try {
+    store.start();
+    await waitFor(() => store.getState().synced && store.getState().table.a, '本机侧首轮同步');
+    store.setSession('zr~abc12345~sess_remote'); // 切到远程会话：本机表对远程侧是错的
+    assert.equal(store.getState().table.a, undefined); // 同步清屏（旧侧数据不残留）
+    assert.equal(store.getState().link, 'starting');
+    await waitFor(() => stub.hits.stream === 2, '侧变化重开流');
+    await waitFor(() => store.getState().synced && store.getState().table.a, '新侧重新同步');
+    assert.ok(seenUrls.at(-1).includes('sessionId=zr~abc12345~sess_remote'), `请求应带虚拟 id（URL 规范化后 ~ 字面），实际 ${seenUrls.at(-1)}`); // 由桥改道
+  } finally {
+    store.stop();
+    await stub.close();
+  }
+});
+
+test('setSession 同侧换会话不重开流（数据是整机的）；后续请求改用新参数', async () => {
+  let snapshotQuery = null;
+  const stub = await startStub({
+    onStream: replay({ id: 'a', repo: '/r', phase: 'running' }),
+    snapshot: liveSnapshot({ b: { id: 'b', repo: '/r', phase: 'idle' } }),
+  });
+  const store = createSnapshotStore({ baseUrl: stub.baseUrl, pollMs: POLL_MS, retryMs: RETRY_MS, safetyPollMs: 0 });
+  try {
+    store.start();
+    await waitFor(() => store.getState().synced, '本机侧首轮同步');
+    store.setSession('zr~abc12345~s1'); // 本机 → A 机：侧变化，重开一次
+    await waitFor(() => stub.hits.stream === 2 && store.getState().synced, '切到 A 机重开并同步');
+    store.setSession('zr~abc12345~s2'); // 同机换会话：数据是整机的，流不动
+    await sleep(POLL_MS * 2);
+    assert.equal(stub.hits.stream, 2); // 没有第三次连接
+    // 让流断一次，断言兜底轮询用的是新会话参数
+    stub.ctxs[0].cut();
+    await waitFor(() => stub.hits.snapshot >= 1, '断流进轮询');
+    snapshotQuery = stub.urls.snapshot.at(-1);
+    assert.ok(snapshotQuery.includes('sessionId=zr~abc12345~s2'), `轮询应带新会话参数，实际 ${snapshotQuery}`);
+  } finally {
+    store.stop();
+    await stub.close();
+  }
+});
+
+test('setSession 不同 serverId 重开；远程切回本机重开且请求不带 sessionId', async () => {
+  const stub = await startStub({
+    onStream: replay({ id: 'a', repo: '/r', phase: 'running' }),
+    snapshot: liveSnapshot({}),
+  });
+  const store = createSnapshotStore({ baseUrl: stub.baseUrl, pollMs: POLL_MS, retryMs: RETRY_MS, safetyPollMs: 0 });
+  try {
+    store.start();
+    await waitFor(() => store.getState().synced, '首轮同步');
+    store.setSession('zr~abc12345~s1');
+    await waitFor(() => stub.hits.stream === 2 && store.getState().synced, '切到主机 A：重开');
+    store.setSession('zr~def67890~s1');
+    await waitFor(() => stub.hits.stream === 3 && store.getState().synced, '切到主机 B：另一台，重开');
+    store.setSession(null); // 切回本机（无主会话）
+    await waitFor(() => stub.hits.stream === 4 && store.getState().synced, '回本机：重开');
+    assert.ok(!stub.urls.stream.at(-1).includes('sessionId='), '本机请求不带 sessionId');
+    // 同侧（本机）再 setSession null：不重开
+    store.setSession(null);
+    await sleep(POLL_MS * 2);
+    assert.equal(stub.hits.stream, 4);
+  } finally {
+    store.stop();
+    await stub.close();
+  }
+});
+
+test('503 未桥接（流与轮询都回）：面板显示原因、不退化为本机数据、重试节奏放宽', async () => {
+  let snapshotCalls = 0;
+  let bridged = false; // 模拟主服务端主人中途同意
+  const stamps = [];
+  const unbridged = () => ({
+    status: 503,
+    headers: { 'x-zen-remote': 'unbridged' },
+    body: { ok: false, error: { code: 'zr-plugin-unbridged', reason: 'consent-off', plugin: 'dsh-zcode-executor' } },
+  });
+  const stub = await startStub({
+    onStream: (ctx) => (bridged ? replay({ id: 'a', repo: '/r', phase: 'running' })(ctx) : ctx.rejectUnbridged('consent-off')),
+    snapshot: () => {
+      snapshotCalls += 1;
+      stamps.push(Date.now());
+      if (!bridged) return unbridged();
+      return liveSnapshot({ a: { id: 'a', repo: '/r', phase: 'idle' } })();
+    },
+  });
+  const store = createSnapshotStore({
+    baseUrl: stub.baseUrl,
+    pollMs: POLL_MS,
+    retryMs: RETRY_MS,
+    safetyPollMs: 0,
+    unbridgedRetryMs: 80, // 生产默认 5000；测试注入小值驱动
+  });
+  try {
+    store.start();
+    store.setSession('zr~abc12345~sess_remote'); // 远程会话里的未桥接（流重连后带参数再拒）
+    await waitFor(() => stub.hits.stream >= 2, '远程侧重开后再拒');
+    await waitFor(() => store.getState().message !== null, '未桥接原因进面板');
+    assert.equal(store.getState().link, 'down'); // 横幅位置不变
+    assert.match(store.getState().message, /未允许转发整机数据/);
+    const snapAtDown = stub.hits.snapshot;
+    await sleep(200); // 若还是 pollMs=20 的节奏，这段会攒下 ~10 轮；80ms 节奏只应 2-3 轮
+    const pollsDuringDown = stub.hits.snapshot - snapAtDown;
+    assert.ok(pollsDuringDown <= 4, `未桥接期间轮询应放宽节奏，200ms 内轮询了 ${pollsDuringDown} 次`);
+    if (stamps.length >= 2) {
+      const gap = stamps.at(-1) - stamps.at(-2);
+      assert.ok(gap >= 60, `相邻两轮间隔应接近 unbridgedRetryMs(80ms)，实测 ${gap}ms`);
+    }
+    // 关键：不退化为本机数据——未桥接期间每个请求仍带着远程会话参数，等桥恢复自动接上
+    for (const url of stub.urls.snapshot) {
+      assert.ok(url.includes('sessionId=zr~'), `未桥接期间请求仍带 sessionId，实际 ${url}`);
+    }
+    bridged = true; // 桥上了：流重试或下一轮轮询任一先到都该恢复
+    await waitFor(() => store.getState().link === 'live' && store.getState().synced, '桥恢复后自动接上');
+    assert.equal(store.getState().message, null); // 恢复后横幅清掉
+    assert.ok(store.getState().table.a);
+  } finally {
+    store.stop();
+    await stub.close();
+  }
+});
+
+test('503 未桥接：体读不出 reason 时按 unknown 走「其他」文案；各 reason 的文案对表', async () => {
+  const stub = await startStub({
+    onStream: (ctx) => ctx.rejectUnbridged('declaration-mismatch'), // 体里有 reason（非专名 → 其他文案）
+    snapshot: () => ({ status: 503, headers: { 'x-zen-remote': 'unbridged' }, body: 'not json' }), // 体不是 JSON → unknown
+  });
+  const store = createSnapshotStore({ baseUrl: stub.baseUrl, pollMs: POLL_MS, retryMs: 5_000, safetyPollMs: 0 });
+  try {
+    store.start();
+    await waitFor(() => store.getState().message !== null, '未桥接原因进面板');
+    assert.match(store.getState().message, /插件桥未桥接，原因：declaration-mismatch/, '非专名 reason 附原文');
+  } finally {
+    store.stop();
+    await stub.close();
+  }
+});
+
+test('unbridgedMessageOf：四类专名文案 + 其他附 reason 原文', () => {
+  assert.match(unbridgedMessageOf('not-on-server'), /未安装同版本/);
+  assert.match(unbridgedMessageOf('version-mismatch'), /未安装同版本/);
+  assert.match(unbridgedMessageOf('consent-off'), /未允许转发整机数据/);
+  assert.match(unbridgedMessageOf('offline'), /中继离线/);
+  assert.match(unbridgedMessageOf('server-too-old'), /版本过旧/);
+  assert.match(unbridgedMessageOf('weird-reason'), /weird-reason/); // 其他：附原文
+  assert.match(unbridgedMessageOf('not-shared'), /not-shared/);
+});
+
+test('createSnapshotStore：unbridgedRetryMs 非正数构造即抛清晰错误', () => {
+  assert.throws(() => createSnapshotStore({ baseUrl: '', unbridgedRetryMs: 0 }), /unbridgedRetryMs/);
+  assert.throws(() => createSnapshotStore({ baseUrl: '', unbridgedRetryMs: -5 }), /unbridgedRetryMs/);
+});

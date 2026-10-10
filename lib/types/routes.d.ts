@@ -13,6 +13,10 @@
  *   zcode-executor 的 worktreeStatus().repo 一致（lib/cli/common.mjs）：common dir 叫
  *   .git 就取它的上一级（真实路径）；不是 git 仓、裸仓库、坏路径都回 { repo: null }。
  *   进程内按 cwd 缓存（成功才缓存，git 一时出错不该永久记成无仓库）。
+ *   PB-6 起支持 `?sessionId=<id>`：宿主 sessions 服务 get(id) 的 header.cwd 解析出会话
+ *   工作目录再走同一套解析与缓存——远程会话由 zen-remote 插件桥转发过来时只带 sessionId
+ *   （cwd 是主服务端上的路径，子客户端无从知道）。两个参数都给时以 sessionId 为准；
+ *   会话不存在 / 服务缺席 / 无 cwd 都回 { repo: null }，不影响 cwd 分支。
  */
 import { execFileSync } from 'node:child_process';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -42,6 +46,12 @@ export interface RouteDeps {
     watch: WatchSource;
     /** 缺省用模块级共享实例（缓存在进程内活一辈子，行重载不丢）。 */
     repoResolver?: RepoResolver;
+    /**
+     * 会话 id → cwd（repo 路由 sessionId 分支用）。由 index.ts 接线：宿主 sessions 服务
+     * get(id) 的 header.cwd，每请求现查（服务可能晚于本注入就绪）；宿主没提供 sessions
+     * 服务时整个缺省——sessionId 分支一律回 { repo: null }，cwd 分支不受影响。测试假它。
+     */
+    resolveSessionCwd?: (sessionId: string) => string | null;
 }
 /** git 共同数据目录的解析与缓存（测试注入假 execFileSync 数调用次数）。 */
 export interface RepoResolver {

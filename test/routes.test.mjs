@@ -224,3 +224,48 @@ test('repo：同一 cwd 只调一次 git（进程内缓存），git 失败不缓
   assert.equal(failing.resolve(dir), null); // null 不缓存：git 一时出错不该永久记成无仓库
   assert.equal(calls, 3);
 });
+
+// ---- PB-6：repo 路由的 sessionId 分支（远程会话由插件桥转发，只带 sessionId） ----
+
+/** mounted 的扩展：给 repo 路由挂 resolveSessionCwd。 */
+const askRepo = (deps, query) => {
+  const { byPath } = mounted(deps);
+  const res = new FakeRes();
+  byPath(REPO).handler(fakeReq(`${REPO}${query}`), res);
+  assert.equal(res.status, 200);
+  return JSON.parse(res.body()).repo;
+};
+
+test('repo?sessionId= 命中：宿主 sessions 的会话 cwd 走同一套仓库解析', (t) => {
+  const { main } = gitRepo(t);
+  const resolveSessionCwd = (id) => (id === 'sess_live' ? main : null);
+  assert.equal(askRepo({ resolveSessionCwd }, '?sessionId=sess_live'), main);
+});
+
+test('repo?sessionId= 会话不存在 / 服务缺席 / 解析空串：一律 { repo: null }，不碰 git', (t) => {
+  let gitCalls = 0;
+  const repoResolver = createRepoResolver({ execFileSync: () => { gitCalls += 1; return '.git\n'; } });
+  // 会话不存在：解析回 null
+  assert.equal(askRepo({ resolveSessionCwd: () => null, repoResolver }, '?sessionId=sess_gone'), null);
+  // sessions 服务缺席（resolveSessionCwd 缺省）：同样 null
+  assert.equal(askRepo({ repoResolver }, '?sessionId=sess_any'), null);
+  assert.equal(gitCalls, 0); // 两条路都没拿到 cwd，不该发起 git
+});
+
+test('repo?sessionId= 与 ?cwd= 都给时以 sessionId 为准（桥转发只带 sessionId）', (t) => {
+  const { main, wt } = gitRepo(t);
+  const resolveSessionCwd = (id) => (id === 'sess_live' ? main : null);
+  // cwd 指向 worktree、sessionId 指向主仓：sessionId 赢
+  assert.equal(askRepo({ resolveSessionCwd }, `?sessionId=sess_live&cwd=${encodeURIComponent(wt)}`), main);
+  // sessionId 解析不出时也不回落 cwd（桥的语义：会话就是不存在，cwd 是过时参数）
+  assert.equal(askRepo({ resolveSessionCwd }, `?sessionId=sess_gone&cwd=${encodeURIComponent(wt)}`), null);
+});
+
+test('repo?cwd= 分支不回归：sessionId 缺席时 cwd 照旧解析（含空参回 null）', (t) => {
+  const { main } = gitRepo(t);
+  let sessionAsked = 0;
+  const resolveSessionCwd = () => { sessionAsked += 1; return main; };
+  assert.equal(askRepo({ resolveSessionCwd }, `?cwd=${encodeURIComponent(main)}`), main);
+  assert.equal(askRepo({ resolveSessionCwd }, ''), null);
+  assert.equal(sessionAsked, 0); // 纯 cwd 调用不碰会话解析
+});

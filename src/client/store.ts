@@ -23,6 +23,8 @@
 
 import { applyEvent, emptyState } from './reducer.ts';
 import type { Link, ReducerState } from './reducer.ts';
+import { sideEquals, sideOfSessionId } from './session-cwd.ts';
+import type { SessionSide } from './session-cwd.ts';
 
 /** 与 src/routes.ts 的 STREAM_ROUTE 一致（那边 import node:*，客户端不能引；测试断言两边相等防漂移）。 */
 export const STREAM_PATH = '/zcode-executor/stream';
@@ -66,6 +68,13 @@ export interface SnapshotStoreOptions {
    * 退化轮询（流断）进行中时安全网暂停，由退化轮询接管；流恢复即回到安全网节奏。
    */
   safetyPollMs?: number;
+  /**
+   * 未桥接（503 zr-plugin-unbridged）时的重试节奏下限，默认 5000（任务口径：不疯狂重试、
+   * 最长间隔不小于 5 秒）。远程会话里插件桥没桥上（服务端没装同版本 / 未同意 / 中继离线
+   * 等）时子客户端回 503，流与轮询照常重试（桥恢复后自动接上），但节奏放宽到本值与常规
+   * 间隔的较大者；测试注入小值驱动。构造时校验正数。
+   */
+  unbridgedRetryMs?: number;
 }
 
 export interface SnapshotStore {
@@ -77,6 +86,13 @@ export interface SnapshotStore {
   start(): void;
   /** 停取数：断在途请求（AbortController）、清轮询与重试定时器。状态保留不清屏。 */
   stop(): void;
+  /**
+   * 换当前主会话（PB-6）：id 存起来给 stream/snapshot 请求当 `?sessionId=` 参数；它的
+   * 「侧」（session-cwd.ts 的 sideOfSessionId）与正在跑的连接不同侧时——本机 ↔ 远程、
+   * 或两台远程主服务端之间——关掉当前流、清空面板数据、按新侧重开；同侧内换会话不重开
+   * 流（数据是整机的，只有后续请求改用新参数）。没在取数时只记参数，下次 start 生效。
+   */
+  setSession(sessionId: string | null): void;
   /** 换过滤仓库：只改状态，不动取数。 */
   setScopeRepo(repo: string | null): void;
 }
@@ -85,6 +101,33 @@ const LINKS: ReadonlyArray<string> = ['starting', 'live', 'down', 'failed'];
 
 /** admit 拒绝（snapshot 回 401/403）时合成的连接说明：传输是通的，病根在鉴权（Task 8 ⑥）。 */
 const AUTH_DENIED_MESSAGE = '无权访问（admit 拒绝）：本机登录态可能已失效，重新登录 DSH 后自动恢复';
+
+/** 子客户端 zen-remote 拦截层回未桥接时的响应标记：503 + 这个响应头（PB-6 协议）。 */
+const UNBRIDGED_HEADER = 'x-zen-remote';
+const UNBRIDGED_HEADER_VALUE = 'unbridged';
+/** 未桥接体的错误码（协议定死；头是简写、体带 reason 细分）。 */
+const UNBRIDGED_CODE = 'zr-plugin-unbridged';
+
+/**
+ * 未桥接 reason → 面板横幅的中文原因（PB-6 口径四类 + 其他附原文）。导出供测试对表。
+ * not-on-server 与 version-mismatch 都归「服务端未安装同版本插件」——前者没装、后者装
+ * 的不是同一版，对用户是同一件事：两端装同版本。
+ */
+export function unbridgedMessageOf(reason: string): string {
+  switch (reason) {
+    case 'not-on-server':
+    case 'version-mismatch':
+      return '远程面板暂不可用：主服务端未安装同版本的本插件（两端装同版本后自动恢复）。';
+    case 'consent-off':
+      return '远程面板暂不可用：主服务端未允许转发整机数据（主服务端主人在 zen-remote 设置里同意后自动恢复）。';
+    case 'offline':
+      return '远程面板暂不可用：中继离线（远程链路恢复后自动重试）。';
+    case 'server-too-old':
+      return '远程面板暂不可用：主服务端的 zen-remote 版本过旧（升级服务端后自动恢复）。';
+    default:
+      return `远程面板暂不可用（插件桥未桥接，原因：${reason}），恢复后自动重试。`;
+  }
+}
 
 /** 连接态守卫：JSON 来的字段不受类型标注约束，先认值再存。 */
 function isLink(value: unknown): value is Link {
@@ -125,12 +168,25 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
   if (!Number.isFinite(safetyPollMs) || safetyPollMs < 0) {
     throw new Error(`createSnapshotStore：safetyPollMs 必须是非负有限数（0 关闭），收到 ${safetyPollMs}`);
   }
+  const unbridgedRetryMs = options.unbridgedRetryMs ?? 5_000;
+  if (!Number.isFinite(unbridgedRetryMs) || unbridgedRetryMs <= 0) {
+    throw new Error(`createSnapshotStore：unbridgedRetryMs 必须是正的有限数，收到 ${unbridgedRetryMs}`);
+  }
 
   let state: SnapshotStoreState = { ...emptyState(), link: 'starting', message: null, scopeRepo: null, dataAt: 0 };
   const listeners = new Set<() => void>();
 
   let running = false;
   let polling = false;
+  /**
+   * 当前主会话 id（setSession 存的）：stream/snapshot 请求带 `?sessionId=<id>`，null 不带
+   * （本机行为）。远程会话的 id 是 `zr~<serverId>~<id>` 虚拟形式，由桥改道。
+   */
+  let sessionId: string | null = null;
+  /** 正在跑的取数连接的侧（连接发起时记下）：侧变化重开的判据。null = 还没连过。 */
+  let liveSide: SessionSide | null = null;
+  /** 上次响应是否「未桥接」（503 + x-zen-remote: unbridged）：重试节奏放宽 + 横幅换文案。 */
+  let unbridged = false;
   /** 退化提示去重位：每次退化只 console 一条，流恢复即复位（别让轮询/重试的周期性失败刷屏）。 */
   let warnedDegraded = false;
   /** 安全网失败的独立去重位：安全网失败不改变连接态（流还活着），但一行告警必须有——
@@ -145,6 +201,40 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
   const notify = (): void => {
     // 遍历快照：某个回调里退订（或新订）不影响本轮（dsh-zen-remote compat/store.ts 同款）
     for (const fn of [...listeners]) fn();
+  };
+
+  /** 取数请求的会话参数：有主会话才带（桥凭它改道；本机路由的 sessionId 分支也认它）。 */
+  const sessionQuery = (): string => (sessionId !== null ? `?sessionId=${encodeURIComponent(sessionId)}` : '');
+
+  /** 未桥接时节奏放宽到不短于 unbridgedRetryMs（「不疯狂重试」），平时照常规。 */
+  const retryDelayNow = (): number => (unbridged ? Math.max(retryMs, unbridgedRetryMs) : retryMs);
+  const pollDelayNow = (): number => (unbridged ? Math.max(pollMs, unbridgedRetryMs) : pollMs);
+
+  /** 响应是不是子客户端拦截层回的「未桥接」（PB-6 协议：503 + x-zen-remote: unbridged）。 */
+  const isUnbridged = (res: Response): boolean =>
+    res.status === 503 && res.headers.get(UNBRIDGED_HEADER) === UNBRIDGED_HEADER_VALUE;
+
+  /** 未桥接体里的 reason（协议形状 {"ok":false,"error":{"code","reason"}}），读不出回 'unknown'。 */
+  const reasonOfUnbridged = async (res: Response): Promise<string> => {
+    try {
+      const body = (await res.json()) as { error?: { code?: unknown; reason?: unknown } };
+      if (body?.error?.code === UNBRIDGED_CODE && typeof body.error.reason === 'string' && body.error.reason !== '') {
+        return body.error.reason;
+      }
+    } catch {
+      // 体不是 JSON / 已被消费：头已证明是未桥接，reason 未知
+    }
+    return 'unknown';
+  };
+
+  /** 未桥接进面板：合成 down + 中文原因（沿用横幅位置），不喂 503 体（它不是快照数据）。 */
+  const noteUnbridged = (reason: string): void => {
+    unbridged = true;
+    const message = unbridgedMessageOf(reason);
+    if (state.link === 'down' && state.message === message) return; // 同原因不重复打扰订阅者
+    const before = state;
+    accept({ type: 'connection', link: 'down', message });
+    if (state !== before) notify();
   };
 
   /**
@@ -200,20 +290,20 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
     if (state !== before) notify();
   };
 
-  /** 流断开：进轮询兜底，并按 retryMs 重试流。 */
+  /** 流断开：进轮询兜底，并按 retryMs 重试流（未桥接时放宽节奏）。 */
   const onStreamDown = (): void => {
     if (!running) return;
     startPolling();
     retryTimer = setTimeout(() => {
       retryTimer = null;
       void connectStream();
-    }, retryMs);
+    }, retryDelayNow());
   };
 
   const startPolling = (): void => {
     if (polling || !running) return;
     polling = true;
-    pollTimer = setTimeout(() => void runPoll('degraded'), pollMs);
+    pollTimer = setTimeout(() => void runPoll('degraded'), pollDelayNow());
   };
 
   /** 流活着时的安全网轮询：低频拉 snapshot，防传输层把流缓冲住（见 options.safetyPollMs 注）。 */
@@ -248,16 +338,21 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
     pollController = controller;
     const alarm = armFirstResponse(controller);
     try {
-      const res = await fetch(`${baseUrl}${SNAPSHOT_PATH}`, {
+      const res = await fetch(`${baseUrl}${SNAPSHOT_PATH}${sessionQuery()}`, {
         signal: controller.signal,
         cache: 'no-store', // 防任何 HTTP 缓存层扣下 GET 响应（2026-10-07 真机排查加）
       });
       alarm.disarm(); // 响应头到了：本轮不再限时
-      if (res.status === 401 || res.status === 403) {
+      if (isUnbridged(res)) {
+        // 插件桥没桥上（远程会话）：横幅说原因、节奏放宽，绝不退化成本机数据
+        //（请求始终带 sessionId，桥恢复后自动接上）
+        noteUnbridged(await reasonOfUnbridged(res));
+      } else if (res.status === 401 || res.status === 403) {
         // 服务端明确拒了鉴权：传输其实是通的，「连接中断」会误导排障（Task 8 ⑥）
         noteAuthDenied();
       } else {
         if (!res.ok) throw new Error(`snapshot HTTP ${res.status}`);
+        unbridged = false; // 正常响应：未桥接解除（如主人刚在服务端点了同意），节奏回常规
         const body: unknown = await res.json();
         if (running && (mode === 'safety' || polling)) acceptSnapshot(body);
       }
@@ -291,7 +386,7 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
       if (pollController === controller) pollController = null;
     }
     if (mode === 'degraded') {
-      if (running && polling) pollTimer = setTimeout(() => void runPoll('degraded'), pollMs);
+      if (running && polling) pollTimer = setTimeout(() => void runPoll('degraded'), pollDelayNow());
     } else if (running && !polling) {
       // 退化轮询接管期间安全网不排；流恢复（stopPolling）后由恢复点重排
       safetyTimer = setTimeout(() => void runPoll('safety'), safetyPollMs);
@@ -327,14 +422,17 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
     const controller = new AbortController();
     streamController = controller;
     const alarm = armFirstResponse(controller);
+    liveSide = sideOfSessionId(sessionId); // 本连接的侧：之后 setSession 的侧变化据此判重开
     try {
-      const res = await fetch(`${baseUrl}${STREAM_PATH}`, {
+      const res = await fetch(`${baseUrl}${STREAM_PATH}${sessionQuery()}`, {
         signal: controller.signal,
         headers: { accept: 'application/x-ndjson' },
         cache: 'no-store', // 同上：流请求也不许任何缓存层介入
       });
       alarm.disarm(); // 响应头到了：之后的流读不限时（watch 空闲时长时间无行是常态）
+      if (isUnbridged(res)) noteUnbridged(await reasonOfUnbridged(res));
       if (!res.ok || res.body === null) throw new Error(`stream HTTP ${res.status}`);
+      unbridged = false; // 流接上了：未桥接解除，节奏回常规
       stopPolling(); // 流恢复即停退化轮询；若刚连上又断，onStreamDown 会再排
       startSafetyPoll(); // 安全网回到低频节奏（退化期间它让位）
       warnedDegraded = false; // 流活了：退化提示位复位，下次再退化才再提示
@@ -384,6 +482,30 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
     onStreamDown();
   };
 
+  /** 停掉在途取数（定时器与两个 abort），不动 running：stop 与侧切换重开共用。 */
+  const halt = (): void => {
+    stopPolling();
+    if (retryTimer !== null) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+    if (safetyTimer !== null) {
+      clearTimeout(safetyTimer);
+      safetyTimer = null;
+    }
+    streamController?.abort();
+    streamController = null;
+    pollController?.abort();
+    pollController = null;
+  };
+
+  /** 侧切换的清屏：表/基线/同步态归零、连接态回 starting；scopeRepo 是外层的过滤意图，保留。 */
+  const resetForSide = (): void => {
+    state = { ...emptyState(), link: 'starting', message: null, scopeRepo: state.scopeRepo, dataAt: 0 };
+    unbridged = false;
+    notify();
+  };
+
   return {
     getState: (): SnapshotStoreState => state,
     subscribe: (fn: () => void): (() => void) => {
@@ -400,19 +522,19 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
     },
     stop: (): void => {
       running = false;
-      stopPolling();
-      if (retryTimer !== null) {
-        clearTimeout(retryTimer);
-        retryTimer = null;
-      }
-      if (safetyTimer !== null) {
-        clearTimeout(safetyTimer);
-        safetyTimer = null;
-      }
-      streamController?.abort();
-      streamController = null;
-      pollController?.abort();
-      pollController = null;
+      halt();
+    },
+    setSession: (next: string | null): void => {
+      const side = sideOfSessionId(next);
+      // 正在跑的连接与新的侧不同侧才重开（本机 ↔ 远程、或两台主服务端之间）；同侧内换
+      // 会话只换后续请求的参数，数据是整机的、流不动。liveSide 为 null（还没连过/已停）
+      // 时不重开：start 的下一次连接自然用新参数。
+      const restart = running && liveSide !== null && !sideEquals(liveSide, side);
+      sessionId = next;
+      if (!restart) return;
+      halt(); // 关掉当前流与兜底（在途的无参/旧侧请求作废）
+      resetForSide(); // 清空面板数据：旧侧的整机数据对新侧是错的
+      void connectStream();
     },
     setScopeRepo: (repo: string | null): void => {
       if (state.scopeRepo === repo) return;

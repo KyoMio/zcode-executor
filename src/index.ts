@@ -10,6 +10,10 @@
  * 派单教学（Task 7）：ensureSkillLink 幂等软链 ~/.dsh/skills/zcode-executor → 包内 skill 目录
  * （src/skill-link.ts），systemPrompt 公告把派单通道与「挂起必转交用户」写进智能体的系统提示。
  * 浏览器半边经 package.json 的 dsh.client 声明走 exports["./client"]。
+ *
+ * 插件桥（PB-6）：另起 ctx.inject(['zenRemote'], …) 向 dsh-zen-remote 2.1 登记桥声明
+ * （src/bridge.ts），远程会话里 zen-remote 的子客户端把三条路由改道到主服务端执行；
+ * 没装 zen-remote 时该 inject 永不触发，插件照常。
  */
 
 import { homedir } from 'node:os'
@@ -18,6 +22,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 
+import { registerBridgeDeclaration } from './bridge.ts'
 import { resolveWatchSettings } from './config.ts'
 import type { RowConfig } from './config.ts'
 import { installReloadWatcher } from './reload.ts'
@@ -101,6 +106,11 @@ export function apply(ctx: Context, config: RowConfig = {}): void {
     }
   })
 
+  // 插件桥（PB-6）：向 dsh-zen-remote 2.1 登记桥声明（三条路由的转发许可）。放在
+  // webServer 注入之外单独一支：装没装 zen-remote、装的是哪种角色，都与本插件的路由
+  // 半场无关。dispose 由 registerBridgeDeclaration 内部挂 inject 子 fiber 的 effect。
+  registerBridgeDeclaration(ctx, ctx.logger)
+
   ctx.inject(['webServer', 'connection'], (webCtx) => {
     webCtx.effect(() => {
       const watch = new WatchProcess({
@@ -114,6 +124,17 @@ export function apply(ctx: Context, config: RowConfig = {}): void {
         register: (route) => webCtx.webServer.register(route),
         admit: (req) => webCtx.connection.admit(req),
         watch,
+        // repo 路由的 sessionId 分支（PB-6）：每请求现查宿主 sessions 服务（它可能晚于
+        // 本注入就绪；缺席回 null → 路由回 {repo:null}，不影响 cwd 分支）。get(id) 的
+        // header.cwd 是会话当前工作目录（zen-remote sessionUploadRoot 同款读法）。
+        resolveSessionCwd: (sessionId) => {
+          const sessions = webCtx.get('sessions') as
+            | { get?(id: string): { header?: { cwd?: unknown } } | undefined }
+            | undefined
+          const session = typeof sessions?.get === 'function' ? sessions.get(sessionId) : undefined
+          const cwd = session?.header?.cwd
+          return typeof cwd === 'string' && cwd !== '' ? cwd : null
+        },
       })
       return () => {
         // 顺序：先摘路由（新连接进不来），再杀 watch 进程（存量订阅随 dispose 清空）

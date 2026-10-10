@@ -10,6 +10,10 @@
  * 派单教学（Task 7）：ensureSkillLink 幂等软链 ~/.dsh/skills/zcode-executor → 包内 skill 目录
  * （src/skill-link.ts），systemPrompt 公告把派单通道与「挂起必转交用户」写进智能体的系统提示。
  * 浏览器半边经 package.json 的 dsh.client 声明走 exports["./client"]。
+ *
+ * 插件桥（PB-6）：另起 ctx.inject(['zenRemote'], …) 向 dsh-zen-remote 2.1 登记桥声明
+ * （src/bridge.ts），远程会话里 zen-remote 的子客户端把三条路由改道到主服务端执行；
+ * 没装 zen-remote 时该 inject 永不触发，插件照常。
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { RowConfig } from './config.ts';
