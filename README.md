@@ -85,7 +85,19 @@ claude plugin install zcode-executor@zcode-executor --scope user
 
 `bin/zcode-executor` is added to Bash's `PATH` while the plugin is enabled; the skill appears as `/zcode-executor:zcode-executor`. Saying "let zcode do it" triggers it.
 
-The plugin also ships a **Claude Code mod** (a module of function hooks, `hooks/`): type `/zcode` to open the [watch pane](#watch-pane-claude-code-only), a live view of this project's zcode sessions. It also opens by itself when Claude sends a task, and adds a status-line summary and toasts. Nothing to configure; it needs a Claude Code version with function-hook mods (the API is in early access).
+The plugin also ships a **Claude Code mod** (a module of function hooks, `hooks/`): type `/zcode` to open the [watch pane](#watch-pane), a live view of this project's zcode sessions. It also opens by itself when Claude sends a task, and adds a status-line summary and toasts. Nothing to configure; it needs a Claude Code version with function-hook mods (the API is in early access).
+
+### DeepSeek Harness (DSH)
+
+The repo ships `dsh-plugin/` — a DSH plugin (`dsh-zcode-executor`) that teaches the DSH agent the full dispatch flow (skill + system-prompt notice) and puts the same live watch pane in the official right sidebar as a **"zcode 任务" tab**. Install it into the desktop profile from a local checkout (full steps in [dsh-plugin/README.md](dsh-plugin/README.md)):
+
+```jsonc
+// ~/.dsh/profiles/desktop/package.json — register in both places
+"dependencies": { "dsh-zcode-executor": "link:/path/to/zcode-executor/dsh-plugin" },
+"dsh.profile.bundles": [ /* existing bundles */ , "dsh-zcode-executor" ]
+```
+
+Then `pnpm install` and `npm run build` inside `dsh-plugin/`, restart the DSH desktop app, and confirm the plugin row shows active. The skill auto-symlinks into `~/.dsh/skills/`.
 
 ### Kimi Work
 
@@ -223,9 +235,11 @@ This is how zcode-executor itself was built:
 
 The split keeps the expensive model on judgment and the cheap one on typing.
 
-## Watch pane (Claude Code only)
+## Watch pane
 
-In Claude Code (terminal or the desktop Code tab), type `/zcode` to open a live pane showing what this project's zcode sessions are doing:
+The pane is not Claude Code-only: the Claude Code plugin and the DSH plugin each ship one, both fed by the same `watch --json` stream.
+
+**Claude Code** (terminal or the desktop Code tab): type `/zcode` to open a live pane showing what this project's zcode sessions are doing:
 
 - **Needs you**: pending permission requests (full command and reason), questions, runners that died;
 - **Running**: the executor's latest message rendered as Markdown, the tool it is running with its arguments, recently finished tools (failures in red), and queue position for off-peak sends;
@@ -235,7 +249,10 @@ A message longer than two lines is folded to its first two; press **Expand reply
 
 The pane opens by itself when Claude sends a task. The status line sums up running turns and pending requests, and a toast pops on a pending request, a finished turn, or a dead runner. The pane is read-only: pending requests still go through Claude.
 It reads `zcode-executor watch --json` (read-only, long-running, no quota) and shows only sessions of the repository the Claude session is in. If the pane says node cannot be found, set `nodePath` in the plugin's settings.
-Other agents ignore the pane and keep using the skill and the CLI.
+
+**DSH**: the `dsh-plugin/` install above shows the same live view in the right sidebar's "zcode 任务" tab, refreshing about once a second at zero quota. It is read-only there too — pending requests go to the dispatching agent, which handles them per the skill's answering rules.
+
+Other agents have no pane and keep using the skill and the CLI.
 
 ## Commands
 

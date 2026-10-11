@@ -83,7 +83,19 @@ claude plugin install zcode-executor@zcode-executor --scope user
 
 插件启用期间 `bin/zcode-executor` 自动进 Bash 的 `PATH`，skill 以 `/zcode-executor:zcode-executor` 出现；说「让 zcode 去做」就会触发。
 
-插件同时带一个 **Claude Code mod**（函数钩子模块，`hooks/`）：输入 `/zcode` 打开[观察面板](#观察面板只在-claude-code-里)，实时看本项目各 zcode 会话的进展；Claude 投递时它也会自动打开，并在状态栏汇总、关键变化时弹提示。不用额外配置；需要支持函数钩子 mod 的 Claude Code 版本（该接口目前为早期预览）。
+插件同时带一个 **Claude Code mod**（函数钩子模块，`hooks/`）：输入 `/zcode` 打开[观察面板](#观察面板)，实时看本项目各 zcode 会话的进展；Claude 投递时它也会自动打开，并在状态栏汇总、关键变化时弹提示。不用额外配置；需要支持函数钩子 mod 的 Claude Code 版本（该接口目前为早期预览）。
+
+### DeepSeek Harness（DSH）
+
+本仓库带 `dsh-plugin/`——一个 DSH 插件（`dsh-zcode-executor`）：教 DSH 智能体走完整派单流程（skill + system prompt 公告），并把同一个实时观察面板放进官方右侧栏的「zcode 任务」标签页。从本地检出的 `dsh-plugin/` 以 `link:` 方式装进 desktop profile（完整步骤见 [dsh-plugin/README.md](dsh-plugin/README.md)）：
+
+```jsonc
+// ~/.dsh/profiles/desktop/package.json — 两处都要登记
+"dependencies": { "dsh-zcode-executor": "link:/path/to/zcode-executor/dsh-plugin" },
+"dsh.profile.bundles": [ /* 原有的 bundles 别动 */ , "dsh-zcode-executor" ]
+```
+
+然后在 `dsh-plugin/` 里 `pnpm install`、`npm run build`，重启 DSH 桌面端，到插件页确认该行为 active 即可；skill 会幂等软链进 `~/.dsh/skills/`。
 
 ### Codex
 
@@ -211,9 +223,11 @@ zcode-executor 自己就是这么开发出来的：
 
 这样分工，贵的模型只花在判断上，便宜的模型负责敲代码。
 
-## 观察面板（只在 Claude Code 里）
+## 观察面板
 
-在 Claude Code（终端或桌面版 Code 标签页）里，输入 `/zcode` 打开一个面板，实时看当前项目派出去的 zcode 会话干到哪了：
+观察面板不再是 Claude Code 专属：Claude Code 插件和 DSH 插件各带一个，数据都来自同一条 `watch --json` 流。
+
+**Claude Code**（终端或桌面版 Code 标签页）：输入 `/zcode` 打开一个面板，实时看当前项目派出去的 zcode 会话干到哪了：
 
 - **待处理**：挂起的审批请求（显示完整命令和原因）、提问、执行进程中断；
 - **执行中**：执行端最新一条消息（按 Markdown 显示）、正在用的工具和参数、最近完成的工具（失败标红），闲时投递显示排队位次；
@@ -223,7 +237,10 @@ zcode-executor 自己就是这么开发出来的：
 
 Claude 投递时面板会自动打开；状态栏汇总「N 个回合执行中，M 个挂起」，挂起、回合结束、执行进程中断时弹提示。面板只看不应答，挂起仍由 Claude 问你。
 数据来自 `zcode-executor watch --json`（只读、常驻、不花额度），只显示当前 Claude 会话所在仓库的会话。面板提示找不到 node 时，在插件配置里填 `nodePath`。
-其他代理不认这个面板，照常只用 skill 和命令行。
+
+**DSH**：上面 `dsh-plugin/` 的安装会把同一个实时视图放进右侧栏「zcode 任务」标签页，约 1 秒自刷、零额度。那边同样只看不答：挂起的请求走派单的智能体，由它按 skill 的应答安全条件分流。
+
+其他代理没有面板，照常只用 skill 和命令行。
 
 ## 命令
 
