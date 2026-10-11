@@ -8,7 +8,7 @@
  * 服务时回调根本不执行——插件行照常加载，只是不挂路由、不起 watch。
  *
  * 派单教学（Task 7）：ensureSkillLink 幂等软链 ~/.dsh/skills/zcode-executor → 包内 skill 目录
- * （src/skill-link.ts），systemPrompt 公告把派单通道与「挂起必转交用户」写进智能体的系统提示。
+ * （src/skill-link.ts），systemPrompt 公告把派单通道与「挂起按授权分流」写进智能体的系统提示。
  * 浏览器半边经 package.json 的 dsh.client 声明走 exports["./client"]。
  *
  * 插件桥（PB-6）：另起 ctx.inject(['zenRemote'], …) 向 dsh-zen-remote 2.1 登记桥声明
@@ -54,13 +54,13 @@ interface SystemPromptSlice {
 
 /**
  * 智能体系统提示里的派单公告（Task 7）。两三句说清通道是什么、细节去哪查、
- * 红线在哪——审批与提问必须转交用户，这是 skill 铁律 4 的前置提醒。
+ * 工作模式与授权边界；具体分流和应答安全条件以 skill 为准。
  */
 const ANNOUNCE_TO_AGENT = [
   '本机有 zcode-executor 派单通道：把一件想清楚的开发任务写成任务单，派给本机 ZCode（GLM）'
   + '在隔离的执行副本（git worktree）里执行，用 git diff 和测试客观验收。',
-  '完整用法见 skill「zcode-executor」。',
-  '执行端挂起的审批请求与提问必须转交用户，不替用户批越界操作。',
+  '派单前读取 skill「zcode-executor」：主 agent 编排，返工投原执行会话、复审交原 review 会话；投递后先推进独立工作，无事可做再等待。',
+  '挂起先按任务授权判断，遵守 skill 的应答安全条件及上层审批限制；越界、无法确认或规则要求人工决定的才转用户。',
 ].join('')
 
 /**

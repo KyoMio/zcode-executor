@@ -8,7 +8,7 @@
  * 服务时回调根本不执行——插件行照常加载，只是不挂路由、不起 watch。
  *
  * 派单教学（Task 7）：ensureSkillLink 幂等软链 ~/.dsh/skills/zcode-executor → 包内 skill 目录
- * （src/skill-link.ts），systemPrompt 公告把派单通道与「挂起必转交用户」写进智能体的系统提示。
+ * （src/skill-link.ts），systemPrompt 公告把派单通道与「挂起按授权分流」写进智能体的系统提示。
  * 浏览器半边经 package.json 的 dsh.client 声明走 exports["./client"]。
  *
  * 插件桥（PB-6）：另起 ctx.inject(['zenRemote'], …) 向 dsh-zen-remote 2.1 登记桥声明

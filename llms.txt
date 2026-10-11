@@ -3,7 +3,7 @@
 > DSH（DeepSeek Harness）插件，把本机的 zcode-executor 派单执行器接进 DSH。三件套：SKILL.md 派单教学
 > （软链 `~/.dsh/skills/zcode-executor` + systemPrompt 公告）、官方右侧栏「zcode 任务」实时观察面板
 > （三段：待处理 / 执行中 / 已结束，回复按 Markdown 渲染、约 1 秒刷新、零额度）、闸门边界不变——
-> 面板只看不应答，挂起仍由派单智能体在对话里转交用户。
+> 面板只看不应答，派单智能体按 skill 的授权与安全条件处理挂起，仅需人工决定的转用户。
 
 ## Key facts
 

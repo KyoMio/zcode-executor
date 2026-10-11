@@ -5,10 +5,10 @@ DSH（DeepSeek Harness）插件：把本机的 [zcode-executor](../../../../zcod
 智能体教学 + 观察面板两件事：
 
 1. **派单教学**——SKILL.md 软链进 `~/.dsh/skills/` 教 DSH 智能体完整走派单流程（写任务单、建执行副本、
-   `new` / `send --task` / 验收、合并），再往 system prompt 挂两三句公告提醒通道存在与「挂起必转交用户」的红线。
+   `new` / `send --task` / 验收、合并），再往 system prompt 挂短公告：原会话返工/复审、非阻塞推进、挂起按授权分流（应答安全条件见 skill）。
 2. **观察面板**——官方右侧栏「zcode 任务」tab，实时显示当前项目的各条 zcode 会话：待处理（挂起/中断）、
    执行中（最新回复按 Markdown 渲染、正在跑的工具、闲时排队）、已结束三段，约 1 秒内自动刷新、零额度。
-3. **边界不变**——面板只看不应答：没有 approve / deny / answer 控件，挂起仍由派单的智能体在对话里转交用户。
+3. **边界不变**——面板只看不应答：没有 approve / deny / answer 控件，挂起由派单智能体按 skill 的授权与应答安全条件分流，需人工决定的才转用户。
 
 数据来自服务端常驻的 `zcode-executor watch --json` 子进程，经插件自己的 NDJSON 流路由推给客户端；
 与 zcode-executor 仓库的唯一耦合面是这条行协议（见 [架构](#架构一览)）。
@@ -186,8 +186,8 @@ exec /绝对路径/node /仓库绝对路径/bin/zcode-executor "$@"
 
 ## 已知边界
 
-- **面板只看不应答**：挂起的审批请求 / 提问由派单的智能体在对话里转交用户，面板与插件其他部分
-  都没有任何应答控件。要改这条边界等于改 zcode-executor 的闸门设计，是另立决定的事（SPEC「Out of Scope」）。
+- **面板只看不应答**：挂起的审批请求 / 提问由派单智能体按 skill 分流，面板与插件其他部分
+  都没有任何应答控件。自主应答仍受宿主指令、任务授权与 CLI 请求绑定安全条件约束；插件不修改执行器闸门。
 - **v1 纯中文**：文案写死中文，locale 管线留了接口不填字典。
 - **不发 npm**：v1 只 `link:` 装本机 desktop profile。要公开分发时照 zen-remote 补 Trusted
   Publishing 流水线，见下方[发布前 checklist](#发布前-checklist)。

@@ -11,6 +11,23 @@ import path from 'node:path';
 
 import { ensureSkillLink } from '../src/skill-link.ts';
 
+test('派单教学与公告：原会话闭环、非阻塞、授权分流及安全边界', async () => {
+  const skill = await readFile(new URL('../skills/zcode-executor/SKILL.md', import.meta.url), 'utf8');
+  const host = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
+  for (const text of [skill, host]) {
+    assert.match(text, /原执行会话/);
+    assert.match(text, /原 review 会话/);
+    assert.match(text, /独立工作/);
+    assert.match(text, /上层.*限制/);
+    assert.doesNotMatch(text, /审批请求与提问必须转交用户|挂起必转交用户/);
+  }
+  assert.match(skill, /expected-requestId\/CAS/);
+  assert.match(skill, /外部串行化/);
+  const sends = skill.split('\n').filter(line => /^\s*zcode-executor send .*--task "/.test(line));
+  assert.ok(sends.length > 0);
+  assert.ok(sends.every(line => !line.includes('--wait')), '可执行投递示例默认非阻塞');
+});
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** 收集 effect 注册进来的 disposer 的假 ctx：ensureSkillLink 只用 ctx.effect 这一个面。 */
