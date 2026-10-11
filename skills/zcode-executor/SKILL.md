@@ -7,8 +7,16 @@ description: 把一件已经想清楚的开发任务交给本机 ZCode（GLM）�
 
 你是规划中枢，zcode 是执行端。你把要做什么写成任务单，zcode 在隔离的执行副本（git worktree）里改，
 你用客观证据验收。命令是 `zcode-executor`，下面的命令块替换占位符后可直接复制运行。
-装成 Claude Code 插件时它已在 PATH 里；在别的代理（如 Codex）里如果找不到这个命令，它就在本 skill 目录上两级的
-`bin/zcode-executor`（即 `<插件根>/bin/zcode-executor`），用绝对路径调；也可以 `npm install -g zcode-executor` 或直接 `npx zcode-executor …`。
+终端里先 `command -v zcode-executor` 确认：在 PATH 里就照抄命令块。找不到时按宿主取值：
+- Claude Code 插件装好时已进 PATH；散装用法里它是本 skill 目录上两级的 `bin/zcode-executor`（`<插件根>/bin/zcode-executor`），用绝对路径调；
+- 本机源码用法：仓库 `bin/` 的绝对路径（示例：`/Volumes/MacData/projects/zcode-executor/bin/zcode-executor doctor`）；
+- 也可以 `npm install -g zcode-executor` 或直接 `npx zcode-executor …`。
+
+## 工作模式：主 agent 编排，原会话闭环
+
+- 主 agent 负责任务单、调度和最终证据验收；实现与返工交给执行会话，代码评审与复审交给独立 review 会话。记录任务对应的执行 id、review id 和执行副本路径；review 会话只读。
+- **返工 → 原执行会话；返工后复审 → 原 review 会话。** 将评审问题、复现证据和通过标准写入返工单，等原执行回合结束后带 `--task` 重投；将最新 diff、测试结果和返工单交回原 review 会话，逐项确认问题关闭。主 agent 的证据验收不代替 review，也不亲自接管修补。原会话确实不可恢复时才新建，并移交上述上下文。
+- **投递后先推进独立工作，确实无事可做再等待。** 默认 `send` 不带 `--wait`，后台起 `follow` 并记录 job id；期间规划下一步、准备验收清单或梳理后续任务，不碰执行端正在改的文件，不提前使用尚未完成的产物。收到完成或挂起通知再处理，交付前收齐结果；不要用反复 `status` 或 sleep 循环代替后台等待。
 
 ## 铁律
 
@@ -19,9 +27,7 @@ description: 把一件已经想清楚的开发任务交给本机 ZCode（GLM）�
    一律回主仓看 diff、在执行副本里跑测试、读产物文件。
 3. **反复投同一条会话三四轮还没过，回去改任务单。** 通常问题出在任务描述不清，不是多投几次能解决的。
    改法：写 `tasks/T-xxx-fix.md` 说明差在哪，再投同一条会话（它有上下文，带着上下文返工）。
-4. **不替用户批越界。** 挂起（退出码 5）是执行端在等人的信号：审批请求用 AskUserQuestion 转给用户，
-   拿到决定再 `approve` / `deny`。模型审批只会放行或转人工、从不拒绝，替用户点「允许」越过这一层，
-   等于把人工这道闸门拆了。
+4. **挂起先分流，不替用户批越界。** 先核对任务单、用户已有授权和具体操作：能确认且规则允许主 agent 处理的，按「退出码 5」应答；越界、无法确认或上层指令要求人工确认的，带判断依据转用户。挂起本身不是危险判据，也不是放行依据；本 skill 不覆盖宿主的审批限制。
 5. **Jev 只由配置启用前筛。** 非空白 `review.jev.apiKey` 启用提前通过层；pass 结束审批，flag/error/skip 回到
    原 ZCode `fast` + `review.thought`（默认 `low`）快筛，未通过或无法解析才慢判；原快筛调用失败仍转人工。
    正文省略、缺有效意图或必要输入截断时本地 skip，不发 HTTP；复杂命令本身不是跳过理由。无 key 保留原链，
@@ -41,22 +47,23 @@ git -C <主仓绝对路径> worktree add "$WT" -b task/T-xxx    # 首次：在 $
 zcode-executor new --cwd "$WT" --title T-xxx --tier fast --json
 
 # 每个对话第一次派单前：zcode-executor quota（零额度），按「闲时投递」一节的话术告诉用户，然后照常普通投递
-# 4. 投递并跟看到干完（--task 必带）
+# 4. 非阻塞投递（--task 必带），随后用后台任务起 follow <id>；按「工作模式」推进独立工作
 #    消息里的 tasks/T-xxx.md 是让 zcode 自己在执行副本里读的相对路径，所以任务单必须放在 $WT 里；
 #    --task 给的是模型审批看的授权依据，用绝对路径
-zcode-executor send <id> "执行 tasks/T-xxx.md" --task "$WT/tasks/T-xxx.md" --wait
+zcode-executor send <id> "执行 tasks/T-xxx.md" --task "$WT/tasks/T-xxx.md"
 
-# 5. 验收（客观证据，不是它的自述）。zcode 不提交，改动停在执行副本工作区，先把未跟踪文件收进来再看 diff
+# 5. 收到完成通知后，交独立 review 会话评审；主 agent 核对客观证据。
+#    zcode 不提交，改动停在执行副本工作区，先把未跟踪文件收进来再看 diff
 git -C "$WT" add -A && git -C "$WT" diff --cached --stat && git -C "$WT" diff --cached
 git -C "$WT" <跑测试的命令>
 #    还想看审批经过：$ZCODE_EXECUTOR_HOME/runs/<id>/events.jsonl 里 type 为 executor.gate 的行
 
 # 6. 过了：在 $WT 里提交（git -C "$WT" commit -m "T-xxx: …"），再回主仓合并（见下一节）。
-#    没过：git -C "$WT" reset 撤掉暂存，写 tasks/T-xxx-fix.md，再投同一条会话
+#    没过：git -C "$WT" reset 撤掉暂存，写 tasks/T-xxx-fix.md，投原执行会话；完成后交原 review 会话复审
 ```
 
-挂起时 `send --wait` 立刻以退出码 5 返回并打印挂起内容，处理见「退出码 5」一节；
-不想前台等就去掉 `--wait`（立刻返回，起一个后台 runner），用 `follow` 跟看。
+默认投递立刻返回、后台 runner 继续工作；`follow` 用宿主的后台任务工具启动（`run_in_background: true`），记下返回的 job id。
+仅当前下一步确实依赖结果且无独立工作时才等待该后台任务；`send --wait` 是可选阻塞用法，挂起时以退出码 5 返回。
 
 ## git 一律 `-C <绝对路径>`，别靠 cd
 
@@ -121,10 +128,11 @@ chmod 600 ~/.zcode-executor/config.json
 
 **审批请求**（执行端要做某个操作，等你允许）：
 
-1. 看挂起内容里的工具名、参数和转人工的理由，用 AskUserQuestion 转给用户
-   （命中红线的一定要转，比如越出执行副本的写入）。
-2. 拿到决定：允许 → `zcode-executor approve <id>`（只放行这一次，没有「一直允许」）；
-   拒绝 → `zcode-executor deny <id>`。回合从挂起处继续。
+1. 读取完整工具名、参数、目标路径和挂起理由，对照任务单与用户授权判断实际影响；证据不足先做只读核查。
+2. **可自行确认**：操作明确在授权范围内、未命中红线，且上层指令允许自主应答 → 说明依据后 `zcode-executor approve <id>`（仅本次）；明确违反任务约束且允许自主拒绝 → `zcode-executor deny <id>`，将原因交回原执行会话调整方案。
+3. **需人工决定**：越界（例如执行副本外写入）、新增权限或不可逆影响未获授权、证据不足，或上层指令明确要求转交 → 原样转述工具名、参数、理由，附建议与未确认点（Claude Code 用 AskUserQuestion，DSH 走宿主的上抛）；得到决定再 `approve` / `deny`。不得通过改任务单、关闭审批或换命令绕过限制。
+
+**应答绑定限制（approve / deny / answer 都适用）**：当前 CLI 会重新读取 pending，未提供 expected-requestId/CAS；只做两次读取或声称单人操作不能防止串答。只有已验证的外部串行化覆盖「核对当前请求 → CLI 读取」全过程，才执行应答；否则保留挂起并报告该限制，请用户协调安全处理，人工说“允许”本身也不消除竞态。不要虚构参数或直接写 answer.json。
 
 **提问**（执行端反过来问你问题，要答案不是要允许）：
 
@@ -223,12 +231,11 @@ App 版本和验证过的版本不同时，stderr 每次多一行提示；每跑
 ## start plan 投递
 
 Start Plan 是 ZCode App 里的另一档订阅。`send <id> <正文> --start-plan` 让**这一回合**吃 Start Plan 额度，
-其余与普通投递完全一样：立刻开跑、立刻计时、没有号、不独占会话、验收照旧。这个功能只在 `offpeak` 分支构建的版本里有。
+其余与普通投递完全一样：立刻开跑、没有号、不独占会话、验收照旧。`--offpeak` 与 `--start-plan` 互斥，
+`--steer` 不能插进 start plan 投递（它是一次新投递）。（2026-09-29 曾因阿里云验证码在无头宿主上不可用，
+2026-10-09 服务器撤下验证后恢复。）
 
-- **当前用不了（2026-09-29 真机）**：zcode-plan 端点要求阿里云验证码，只有桌面 App 内嵌的验证码 SDK 过得去，
-  本工具这类无头宿主会以回合失败收场（退出码 4，`captcha verify failed`）。**现在别对用户提这个选项，也别说「可以试」**；
-  服务器侧放行前，start plan 额度只能在 ZCode App 里用。
-- 模型表只有 GLM-5.3-Flash、GLM-5.2、GLM-5-Turbo；会话模型不在表里（比如 GLM-5.3）退出码 2。
+- 模型表以 ZCode App 的内置配置为准（被拒时退出码 2，报错会列出表）；会话模型不在表里就换 `--tier` 新建会话。
 - 同一会话可以混用：有的投递带 `--start-plan`、有的不带，互不影响；失败也不影响后续普通投递。
 
 ## 两种会话 id
@@ -258,6 +265,7 @@ zcode-executor new --cwd <绝对路径> [--title T] [--tier fast|strong] [--thou
 zcode-executor send <id> <正文|-> [--task 文件] [--wait] [--steer] [--timeout 秒] [--stream] [--json]
 zcode-executor send <id> <正文|-> --offpeak [--task 文件] [--wait] [--timeout 秒] [--stream] [--json]  # 闲时投递：当场取号
 zcode-executor send <id> --offpeak --resume [--wait] [--stream] [--json]  # 接着跑没收尾的闲时投递
+zcode-executor send <id> <正文|-> --start-plan [--task 文件] [--wait] [--timeout 秒] [--stream] [--json]  # Start Plan 额度
 zcode-executor follow <id> [--timeout 秒] [--stream] [--json]
 zcode-executor status <id> [--tools N] [--json]  # 在跑/空闲/挂起/异常结束、最近工具调用、队列长度
 zcode-executor cancel <id>                       # 叫停：挂起的先答拒绝，之后不再取队列
@@ -266,13 +274,14 @@ zcode-executor deny <id>                         # 应答挂起的审批请求�
 zcode-executor answer <id> <值…>                 # 应答挂起的提问：按序号/value/label，多选逗号分隔
 ```
 
-- 在 Claude Code 里，用户输入 `/zcode` 能打开观察面板，实时看本项目各会话的回复、工具、挂起与排队；你投递时它会自动打开。
-  面板只看不应答，挂起照样由你按上面的规矩转给用户。它背后是只读常驻的 `zcode-executor watch --json`，你不需要自己跑。
+- 观察面板实时显示各会话进展（回复、工具、挂起与排队）：Claude Code 里用户输入 `/zcode` 打开（你投递时自动打开，
+  状态栏汇总、关键变化弹提示），DSH 右侧栏有「zcode 任务」tab。面板只看不应答，挂起照样按上面的规矩在对话里处理。
+  背后是你不需要自己跑的只读 `zcode-executor watch --json`。
 
 - 正文写 `-` 从 stdin 读，长文本别跟命令行引号较劲：
 
   ```bash
-  zcode-executor send <id> - --task "$WT/tasks/T-xxx.md" --wait <<'EOF'
+  zcode-executor send <id> - --task "$WT/tasks/T-xxx.md" <<'EOF'
   执行 tasks/T-xxx.md，按验收标准逐条自检后再停
   EOF
   ```

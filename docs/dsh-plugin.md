@@ -21,7 +21,7 @@
 | --- | --- |
 | `src/` | TypeScript 源码：index（cordis 插件入口）、routes（NDJSON 流路由）、watch-process、bridge（zen-remote 插件桥）、client/（React 面板） |
 | `lib/` | 构建产物（tsc + `build-client.mjs` 内联打包），**入库** |
-| `skills/zcode-executor/` | 派单教学 SKILL.md（运行时软链到 `~/.dsh/skills/`） |
+| `skills/zcode-executor/` | 派单教学 SKILL.md——**软链**指向根 `skills/zcode-executor/SKILL.md`（单一事实源，改只改根那份；`test/skill-link.test.mjs` 守卫）。若将来本插件要独立发包，需把软链换回复制件 |
 | `cordis.patch.yml` | bundle 注册补丁（行 id `zcode-executor`） |
 | `test/` | 112 个用例，全部用桩数据，不建 DSH 会话、不花 token |
 | `SPEC.md` / `README.md` | 规格全文（含测试决定与边界）/ 安装与架构 |
