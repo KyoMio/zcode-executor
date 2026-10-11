@@ -29,6 +29,7 @@ Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给�
 - `~/.zcode/v2/config.json` 与 `~/.zcode/v2/credentials.json` 只读：前者有明文 API key、App 会重写它；后者是 App 的加密凭据，只解账号型 coding plan 要的四个键（D19）和闲时投递要的 `zcodejwttoken`（D20）。两处读到的 key 只落 D14 的临时个人 provider 文件；JWT 只进内存与 JSON-RPC 参数，不落盘。
 - 从 zcode-acp 搬来的代码保留 Apache-2.0 版权声明，记入 `NOTICE`。
 - 排障看 `~/.zcode/cli/log/zcode-YYYY-MM-DD.jsonl`。JSON-RPC 错误的细节在 `error.data.details`，`message` 只有一句概括。
+- `dsh-plugin/` 是 DSH 侧插件 dsh-zcode-executor 的源码（2026-10-11 subtree 并入，旧 Gitea 仓库冻结）：TypeScript + pnpm 独立包，与 CLI 唯一耦合是 `watch --json` 行协议。开发、测试、安装见其 [docs/dsh-plugin.md](docs/dsh-plugin.md) 与目录内 README；版本独立发版，不进 `sync-doc-version.mjs`。
 
 ## 发版
 

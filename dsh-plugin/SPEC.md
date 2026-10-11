@@ -4,7 +4,7 @@
 > 视觉与信息布局基准：`mockup/pane.html`（已确认）。需求经 2026-10-06 对齐（Q1–Q9 + 图标族要求）。
 > 数据契约：`zcode-executor watch --json` 的 NDJSON 行协议（hello / session / synced / removed，快照字段见其 PRD 第 4 节）。
 > 术语沿用 zcode-executor 的 CONTEXT.md：会话、投递、回合、挂起、观察面板、所属仓库、闲时投递。
-> 状态（2026-10-07）：T1–T5/T7–T9 完成，T6 视觉精修与真机检查点（tasks/plan.md 检查点 A/B/C）待验收。
+> 状态（2026-10-07）：T1–T5/T7–T9 完成，T6 视觉精修与真机检查点（A/B/C）待验收。
 
 ## Problem Statement
 
@@ -82,7 +82,7 @@ Claude Code 那边已经有同款观察面板（zcode-executor 的 Claude Code m
 - **repo 路由的 sessionId 分支（PB-6）**：`?sessionId=<id>` 优先于 `?cwd=`（桥转发只带 sessionId；cwd 保留给无会话时的本机调用）。cwd 用宿主 sessions 服务 `get(id)` 的 `header.cwd` 解析，每请求现查（服务可能晚于路由注入就绪；缺席该分支固定 `{repo:null}`，不影响 cwd 分支）。拿不到（会话不存在 / 无 cwd）**不回落会话持久化**，直接 `{repo:null}`：先例（zen-remote 的 sessionUploadRoot）在 live session 查不到时不深挖持久化，且客户端本有无会话退工作区路径的回退，服务端再查收益小、无公开 API 形状可依。
 - Config（全字段 volatile、schema 全 `z.any()`，遵守设置服务的两条硬规则）：`execPath`、`watchMode`、`announceToAgent`。三个字段的变更都经 src/reload.ts 的指纹守卫重载插件行（Task 8 ①）：监听行的 `loader/volatile-update` 事件 + 2 秒轮询兜底，对 resolveWatchSettings 的解析值做指纹比对，变了就 `fiber.restart`——apply 重跑，watch 进程与路由随之用新配置重建（zen-remote 的 restart-watcher 先例；announceToAgent 同样走行重载，不精细到只撤销公告）。
 - 三路由的 method 墙（Task 8 ②，zen-remote 同款）：admit 之后非 GET 一律 405 + `Allow: GET` + JSON 错误体，admit 放行的 GET 语义不变。
-- **背压 / 心跳（Task 8 ③ 评估结论：可接受，不做实现）**：stream 的 `res.write` 忽略返回值、无心跳，是有意为之。依据：面板是单用户桌面场景，客户端在同机回环上持续读（浏览器侧 ReadableStream），响应头带 `X-Accel-Buffering: no` 防反代攒批；推送量有界——快照表 ≤ 数百条会话，首轮回放实测 244 行 1.0s 内齐（出处：tasks/todo.md「Task 3」Verification 的实测记录，2026-10-07），之后只有人的操作尺度的事件。Node 的 `write` 返回 false 仅表示数据进了用户态缓冲等 socket 排空，回环路径毫秒级；「多客户端 × 高频变更 × 跨网段慢消费者」的组合在本插件的接入面（本机 desktop、admit 门内）不存在，不为它加 drain 复杂度。心跳同理不做：路由本身即时转发连接态行（watch 起 / 停 / 断立刻有行），连不上的场景由客户端首响应超时兜住，同机回环没有中途静默丢连接的环节。
+- **背压 / 心跳（Task 8 ③ 评估结论：可接受，不做实现）**：stream 的 `res.write` 忽略返回值、无心跳，是有意为之。依据：面板是单用户桌面场景，客户端在同机回环上持续读（浏览器侧 ReadableStream），响应头带 `X-Accel-Buffering: no` 防反代攒批；推送量有界——快照表 ≤ 数百条会话，首轮回放实测 244 行 1.0s 内齐（2026-10-07 首轮实测记录），之后只有人的操作尺度的事件。Node 的 `write` 返回 false 仅表示数据进了用户态缓冲等 socket 排空，回环路径毫秒级；「多客户端 × 高频变更 × 跨网段慢消费者」的组合在本插件的接入面（本机 desktop、admit 门内）不存在，不为它加 drain 复杂度。心跳同理不做：路由本身即时转发连接态行（watch 起 / 停 / 断立刻有行），连不上的场景由客户端首响应超时兜住，同机回环没有中途静默丢连接的环节。
 - **onChildExit 的 intentionalStop 分支（Task 8 ④ 复查结论：留作纵深防御）**：stopForIdle 与 dispose 都先置空 `this.child` 再 kill，主动停机的 exit 事件在身份校验处就被拦下，该分支实际不可达；保留是防将来出现「不先置空就 kill」的新停机路径把主动停机误报成断连横幅（用户可见的假警报），代价 4 行，删了不划算。
 - 教学与公告：`ensureSkillLink()` 幂等软链 `~/.dsh/skills/zcode-executor` → 包内 skill 目录（DSH 不消费 `dsh.skills` 声明，走目录扫描）；`ctx.systemPrompt.section({ name, order: 150 })` 挂短公告，`announceToAgent` 控制。
 

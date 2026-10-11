@@ -1,6 +1,6 @@
 # dsh-zcode-executor
 
-DSH（DeepSeek Harness）插件：把本机的 [zcode-executor](../../../../zcode-executor)（Claude Code 当工头、
+DSH（DeepSeek Harness）插件：把本机的 [zcode-executor](../)（Claude Code 当工头、
 本机 ZCode（GLM）当执行端的派单执行器）接进 DSH。
 智能体教学 + 观察面板两件事：
 
@@ -13,8 +13,8 @@ DSH（DeepSeek Harness）插件：把本机的 [zcode-executor](../../../../zcod
 数据来自服务端常驻的 `zcode-executor watch --json` 子进程，经插件自己的 NDJSON 流路由推给客户端；
 与 zcode-executor 仓库的唯一耦合面是这条行协议（见 [架构](#架构一览)）。
 
-> 本文写给拿到这个包、要装它或继续开发它的下一个会话。规格全文在 [SPEC.md](SPEC.md)（含测试决定与边界），
-> 任务与检查点在 [tasks/plan.md](tasks/plan.md) + [tasks/todo.md](tasks/todo.md)。
+> 本文写给拿到这个包、要装它或继续开发它的下一个会话。规格全文在 [SPEC.md](SPEC.md)（含测试决定与边界）。
+> 开发过程记录（任务单与检查点表）按主仓纪律不进仓库，留在已冻结的旧 Gitea 仓 `kyomio/dsh-zcode-executor`。
 
 ## 安装
 
@@ -23,7 +23,7 @@ DSH（DeepSeek Harness）插件：把本机的 [zcode-executor](../../../../zcod
 1. `~/.dsh/profiles/desktop/package.json` 的 `dependencies` 加：
 
    ```json
-   "dsh-zcode-executor": "link:/Volumes/MacData/projects/dsh-plugins/plugins/dsh-zcode-executor"
+   "dsh-zcode-executor": "link:/Volumes/MacData/projects/zcode-executor/dsh-plugin"
    ```
 
 2. **同一文件**里的 `dsh.profile.bundles` 数组追加 `"dsh-zcode-executor"`（数组里原有的项别动）。
@@ -33,7 +33,7 @@ DSH（DeepSeek Harness）插件：把本机的 [zcode-executor](../../../../zcod
 3. 插件目录里装依赖并构建：
 
    ```sh
-   cd /Volumes/MacData/projects/dsh-plugins/plugins/dsh-zcode-executor
+   cd /Volumes/MacData/projects/zcode-executor/dsh-plugin
    pnpm install
    npm run build   # tsc 两套 tsconfig + build-client.mjs 内联打包客户端，产物 lib/ 入库
    ```
@@ -150,14 +150,13 @@ npm run verify                  # 两套 tsconfig --noEmit
 
 ## 验收与检查点索引
 
-检查点全表在 [tasks/plan.md](tasks/plan.md)：**检查点 A**（T1 后，装入冒烟）、**检查点 B**
+真机检查点分三个：**检查点 A**（T1 后，装入冒烟）、**检查点 B**
 （T5 后，真机 C1–C5、C7）、**检查点 C**（T8 后，真机 C1–C10 全量；C9 智能体真实派单是唯一花额度
 步骤，需用户在场）。真机检查点细目（C1–C10）在 SPEC「Testing Decisions」末尾。
 
 **当前状态（2026-10-07）**：T1–T5、T7–T9 完成（87 用例全绿、构建与 verify 绿、服务端真跑实测
 首轮 244 行 1.0s 内齐）；T6 机器侧完成（`npm run preview` 真实渲染预览 + mockup 并排比对修掉四处差异，
-深浅主题截图复验过）；**A/B/C 的真机检查点均待验收**（需重启 DSH 桌面端后人工过；已测部分见
-tasks/todo.md 末尾备注）。真实使用前请先过检查点 C。
+深浅主题截图复验过）；**A/B/C 的真机检查点均待验收**（需重启 DSH 桌面端后人工过）。真实使用前请先过检查点 C。
 
 ## 故障排查
 

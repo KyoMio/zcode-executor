@@ -55,8 +55,8 @@
 ## Docs
 
 - README.md — 安装（link: 两处登记 + 重启）、配置、架构、故障排查、已知边界、发布前 checklist。
-- SPEC.md — 需求、实现决定、测试缝选取、Out of Scope；tasks/plan.md + tasks/todo.md — 任务与检查点
-  （A/B/C，真机 C1–C10；T6 机器侧已完成——预览 + mockup 比对修复过，真机检查点待验收）。
+- SPEC.md — 需求、实现决定、测试缝选取、Out of Scope；检查点 A/B/C、真机 C1–C10 的进度见 README
+  「验收与检查点索引」（T6 机器侧已完成——预览 + mockup 比对修复过，真机检查点待验收）。
 - 测试与构建命令：`node --test "test/*.test.mjs"`（111 用例，零额度，直读 src/*.ts 靠 Node 类型剥离、
   本机 v22.22.3 实测可用）；`npm run build`（tsc 两套 tsconfig + scripts/build-client.mjs 内联打包客户端，
   产物 lib/ 入库）；`npm run verify`（两套 tsconfig --noEmit）。
