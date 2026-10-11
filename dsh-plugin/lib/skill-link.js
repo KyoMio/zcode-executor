@@ -10,6 +10,7 @@
  * 全部失败都非致命：skill 是派单教学材料，不是任何功能的前置依赖。
  */
 import { homedir } from 'node:os';
+import { existsSync } from 'node:fs';
 import { lstat, mkdir, readlink, realpath, rm, symlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,9 +24,15 @@ export function defaultDshHome() {
  * 仍指向本包的链接。任何异常都吞成 warn，绝不向上抛。
  */
 export async function ensureSkillLink(ctx, dshHome = defaultDshHome()) {
-    // 上两级到包根：src 直读时 src/skill-link.ts → src → 包根；编译后 lib/skill-link.js → lib → 包根
+    // 上两级：src 直读时 src/skill-link.ts → src → 插件目录；编译后 lib/skill-link.js → lib → 插件目录。
+    // 两种装法的 skill 位置不同，按实际存在的取：
+    // - link: 开发装法（插件目录即包根）：skills/zcode-executor 是软链进仓库根 skills/ 的链接；
+    // - npm 包名装法（包根是仓库根，代码在 dsh-plugin/lib/）：npm 打包跳过软链，skill 实体在根 skills/。
     const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-    const target = join(packageRoot, 'skills', 'zcode-executor');
+    const nested = join(packageRoot, 'skills', 'zcode-executor');
+    const target = existsSync(nested)
+        ? nested
+        : join(dirname(packageRoot), 'skills', 'zcode-executor');
     const linkDir = join(dshHome, 'skills');
     const linkPath = join(linkDir, 'zcode-executor');
     let outcome = 'error';

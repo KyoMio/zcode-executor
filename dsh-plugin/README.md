@@ -1,6 +1,6 @@
-# dsh-zcode-executor
+# DSH 插件（dsh-plugin/）
 
-DSH（DeepSeek Harness）插件：把本机的 [zcode-executor](../)（Claude Code 当工头、
+DSH（DeepSeek Harness）半边：把本机的 [zcode-executor](../)（Claude Code 当工头、
 本机 ZCode（GLM）当执行端的派单执行器）接进 DSH。
 智能体教学 + 观察面板两件事：
 
@@ -18,46 +18,26 @@ DSH（DeepSeek Harness）插件：把本机的 [zcode-executor](../)（Claude Co
 
 ## 安装
 
-源码仓:Gitea `kyomio/dsh-zcode-executor`(私人,`https://openwrt.kyomio.top:3773/kyomio/dsh-zcode-executor.git`,remote 名 `gitea`)。v1 只以 `link:` 装本机 desktop profile 本地使用,**不发 npm**。装法(手工两处登记):
+**插件定义在仓库根**：根 `package.json` 的 `dsh` 字段（`cordis.patch.yml` bundle + 右侧栏客户端），
+npm 包 `zcode-executor` 本身就是插件。桌面端插件页按包名 `zcode-executor` 安装即可，
+App 自动登记 bundle——不需要 `link:`、不需要手改 profile 配置。
 
-1. `~/.dsh/profiles/desktop/package.json` 的 `dependencies` 加：
+本地开发（改这个目录的源码）：
 
-   ```json
-   "dsh-zcode-executor": "link:/Volumes/MacData/projects/zcode-executor/dsh-plugin"
-   ```
-
-2. **同一文件**里的 `dsh.profile.bundles` 数组追加 `"dsh-zcode-executor"`（数组里原有的项别动）。
-   **bundles 不加、只装包等于没启用**——profile 加载器只挂 bundles 列表里的包，手工 `pnpm install`
-   只会装包不会启用（`dsh plugin` 命令和 App 插件页会自动追加这一项；CLI 拒绝 `--profile desktop`，
-   桌面端要么 App 插件页装，要么照上面手工改）。
-3. 插件目录里装依赖并构建：
-
-   ```sh
-   cd /Volumes/MacData/projects/zcode-executor/dsh-plugin
-   pnpm install
-   npm run build   # tsc 两套 tsconfig + build-client.mjs 内联打包客户端，产物 lib/ 入库
-   ```
-
-4. 重启 DSH 桌面端（改插件代码后同样）：
-
-   ```sh
-   osascript -e 'quit app "DeepSeek Harness"' && open -a "DeepSeek Harness"
-   ```
-
-5. 到插件页确认行 `dsh-zcode-executor` 为 active。首次加载会幂等建软链
-   `~/.dsh/skills/zcode-executor` → 包内 `skills/zcode-executor`（被同名异物占着时只 warn 不覆盖，
-   手动移走占名者再重载插件行即可）。
-
-**子客户端机器的安装**（要在另一台 DSH 桌面端里远程看主服务端任务才需要；见
-[远程会话](#远程会话zen-remote-插件桥)一节）。与上面同样的两处登记，只是 dependencies
-写 Gitea 仓库地址加版本标签（两端版本必须一致，桥才握手成功）：
-
-```json
-"dsh-zcode-executor": "git+https://openwrt.kyomio.top:3773/kyomio/dsh-zcode-executor.git#v0.2.0"
+```sh
+cd /Volumes/MacData/projects/zcode-executor/dsh-plugin
+pnpm install
+npm run build   # tsc 两套 tsconfig + build-client.mjs 内联打包客户端，产物 lib/ 入库
 ```
 
-同一文件里的 `dsh.profile.bundles` 数组照现有说明追加 `"dsh-zcode-executor"`，`pnpm install`
-后重启桌面端。子客户端机器**不需要装 `zcode-executor` 命令行**：本机会话里面板会显示 watch
+重启 DSH 桌面端生效（`osascript -e 'quit app "DeepSeek Harness"' && open -a "DeepSeek Harness"`）。
+首次加载会幂等建软链 `~/.dsh/skills/zcode-executor` → 包内 skill 目录
+（npm 装法下 npm 打包跳过软链，此时指向仓库根的 `skills/zcode-executor`，见 src/skill-link.ts；
+被同名异物占着时只 warn 不覆盖，手动移走占名者再重载插件行即可）。
+
+**子客户端机器的安装**（要在另一台 DSH 桌面端里远程看主服务端任务才需要；见
+[远程会话](#远程会话zen-remote-插件桥)一节）：同样桌面端插件页按包名装 `zcode-executor`，
+版本与主端保持一致（桥才握手成功；如 `zcode-executor@0.4.5`）。子客户端机器**不需要装 `zcode-executor` 命令行**：本机会话里面板会显示 watch
 起不来的失败说明（execPath 排不到可执行文件），远程会话不受影响——数据经插件桥转发自主
 服务端，与本机 CLI 无关。
 
@@ -188,8 +168,8 @@ exec /绝对路径/node /仓库绝对路径/bin/zcode-executor "$@"
 - **面板只看不应答**：挂起的审批请求 / 提问由派单智能体按 skill 分流，面板与插件其他部分
   都没有任何应答控件。自主应答仍受宿主指令、任务授权与 CLI 请求绑定安全条件约束；插件不修改执行器闸门。
 - **v1 纯中文**：文案写死中文，locale 管线留了接口不填字典。
-- **不发 npm**：v1 只 `link:` 装本机 desktop profile。要公开分发时照 zen-remote 补 Trusted
-  Publishing 流水线，见下方[发布前 checklist](#发布前-checklist)。
+- **随主包发 npm**：插件定义在仓库根 `package.json`，`zcode-executor` 按 tag 发版时经根 `files`
+  一起打包（含 `cordis.patch.yml` 与 `dsh-plugin/lib`）；桌面端插件页按包名直装，见[安装](#安装)。
 - **视觉精修（T6）待真机反馈**：信息架构与 CC mod 对齐、mockup/pane.html 是版式基准，但图标映射表、
   密度与两主题的逐项核对要真机上人工过。
 - 已结束列表至多 20 条：结束 30 分钟内成卡片，更久缩为一行（行可点开成卡片看回复、卡片「收起」收回）；回复折叠复刻 CC mod 语义——有内容的行不超过两行整段 Markdown 直接显示，超过则默认收起前两行、点「展开回复」看全文（2026-10-07 晚修复：当日早先的「一律收一行」规格下，单段无换行的回复与执行中每条新消息的开头会被 CSS 整个藏掉，面板上完全看不到）。面板不弹 toast、不做 tab 角标（官方注册面没有徽标字段）。
@@ -197,17 +177,8 @@ exec /绝对路径/node /仓库绝对路径/bin/zcode-executor "$@"
 
 ## 发布前 checklist
 
-- [ ] `skills/zcode-executor/SKILL.md` 里硬编码的本机 CLI 绝对路径
-      （`/Volumes/MacData/projects/zcode-executor/bin/zcode-executor`，SKILL.md 第 11 行附近）
-      改成可推导写法：保留 `command -v zcode-executor` 探测，绝对路径示例改为
-      `npm root -g` / `npm prefix -g` 推导或让用户按自己的安装位置填，删去本机卷路径。
-- [ ] `package.json` 补 `repository` 字段（现有 `license: MIT`、`description` 双语已就位）。
-- [ ] 发 npm 时照 zen-remote 补：`.github/workflows/publish.yml`（Trusted Publishing，OIDC）、
-      版本同步脚本、两份 README 的徽章；`files` 字段已含 `lib/ src/ scripts/ skills/ cordis.patch.yml`。
-- [ ] 发 npm 前按 Apache-2.0 §4 处理衍生件：`src/client/view.ts` 与 `skills/zcode-executor/SKILL.md`
-      按 Apache-2.0 授权（见 LICENSE 末尾授权说明），随包携带 Apache 许可证全文
-      （如 `LICENSE.apache-2.0` 并入 `files`），两件文件头部的 SPDX 标注保持完整。
+- [ ] SKILL.md（根 `skills/zcode-executor/`）里硬编码的本机 CLI 绝对路径示例改成可推导写法
+      （`command -v` / `npm root -g`），删去本机卷路径——merged skill 合并时保留待办。
 - [ ] 依赖 DSH 版本重核：peer 范围 `>=0.1.7-rc.2 <0.3.0` 在 DSH 0.3 发布时按官方
       兼容核查方法重跑（SPEC「Further Notes」），必要时 `dsh plugin allow-version` 豁免。
-- [ ] zcode-executor 仓库侧的关联文档改动（其 README 提及 DSH 插件、CONTEXT.md「观察面板」
-      词条从「Claude Code 里」泛化为「宿主界面里」）随其下次发版一起做（交接已登记在其仓库本地记录）。
+- [ ] 子客户端（zen-remote 插件桥）两端版本一致：按主仓发版的 npm 版本号对齐。

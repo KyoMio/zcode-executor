@@ -6,7 +6,7 @@
 
 <p align="center">一个 Claude Code 等多个编码代理都能用的插件：把一件想清楚的开发任务派给本机的 <a href="https://zcode.z.ai">ZCode</a>（GLM）执行，在隔离的 git worktree 里跑，每一次写操作都过「红线 + 模型审批」两道闸，最后用 <code>git diff</code> 和测试验收，而不是听执行端的自述。</p>
 
-<p align="center"><img src="https://img.shields.io/badge/version-v0.4.4-5B4CF0" alt="v0.4.4"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-757%20passing-brightgreen" alt="Tests"></p>
+<p align="center"><img src="https://img.shields.io/badge/version-v0.4.4-5B4CF0" alt="v0.4.4"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-762%20passing-brightgreen" alt="Tests"></p>
 
 ## 为什么
 
@@ -87,15 +87,7 @@ claude plugin install zcode-executor@zcode-executor --scope user
 
 ### DeepSeek Harness（DSH）
 
-本仓库带 `dsh-plugin/`——一个 DSH 插件（`dsh-zcode-executor`）：教 DSH 智能体走完整派单流程（skill + system prompt 公告），并把同一个实时观察面板放进官方右侧栏的「zcode 任务」标签页。从本地检出的 `dsh-plugin/` 以 `link:` 方式装进 desktop profile（完整步骤见 [dsh-plugin/README.md](dsh-plugin/README.md)）：
-
-```jsonc
-// ~/.dsh/profiles/desktop/package.json — 两处都要登记
-"dependencies": { "dsh-zcode-executor": "link:/path/to/zcode-executor/dsh-plugin" },
-"dsh.profile.bundles": [ /* 原有的 bundles 别动 */ , "dsh-zcode-executor" ]
-```
-
-然后在 `dsh-plugin/` 里 `pnpm install`、`npm run build`，重启 DSH 桌面端，到插件页确认该行为 active 即可；skill 会幂等软链进 `~/.dsh/skills/`。
+npm 包本身就是 DSH 插件：根 `package.json` 带着 `dsh` 定义（`cordis.patch.yml` bundle + 右侧栏客户端），插件代码是 `dsh-plugin/lib/` 的构建产物（源码见 [dsh-plugin/](dsh-plugin/README.md)）。在 DSH 桌面端的插件页直接按 npm 包名 `zcode-executor` 安装即可——App 会自动登记 bundle，不需要手动 `link:` 或改配置文件。插件会教 DSH 智能体走完整派单流程（skill 幂等软链进 `~/.dsh/skills/`），并把同一个实时观察面板放进官方右侧栏「zcode 任务」标签页，约 1 秒自刷、零额度。本地开发：在 `dsh-plugin/` 里 `pnpm install && npm run build`，再重启桌面端。
 
 ### Codex
 
@@ -359,7 +351,7 @@ zcode-executor doctor --json
 ## 开发
 
 ```bash
-npm test          # 757 个用例对剧本驱动的 mock app-server 与 mock 闲时服务跑，外加文档版本号一致性检查；不花 token
+npm test          # 762 个用例对剧本驱动的 mock app-server 与 mock 闲时服务跑，外加文档版本号一致性检查；不花 token
 node --check lib/**/*.mjs
 ```
 

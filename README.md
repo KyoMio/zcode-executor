@@ -6,7 +6,7 @@
 
 <p align="center">A plugin for Claude Code and other coding agents that hands a well-specified development task to the local <a href="https://zcode.z.ai">ZCode</a> agent (GLM), runs it in an isolated git worktree, guards every write with a hard-rule check plus a model-based review, and lets you verify the result with <code>git diff</code> and tests instead of trusting the agent's own report.</p>
 
-<p align="center"><img src="https://img.shields.io/badge/version-v0.4.4-5B4CF0" alt="v0.4.4"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-757%20passing-brightgreen" alt="Tests"></p>
+<p align="center"><img src="https://img.shields.io/badge/version-v0.4.4-5B4CF0" alt="v0.4.4"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-762%20passing-brightgreen" alt="Tests"></p>
 
 ## Why
 
@@ -89,15 +89,7 @@ The plugin also ships a **Claude Code mod** (a module of function hooks, `hooks/
 
 ### DeepSeek Harness (DSH)
 
-The repo ships `dsh-plugin/` — a DSH plugin (`dsh-zcode-executor`) that teaches the DSH agent the full dispatch flow (skill + system-prompt notice) and puts the same live watch pane in the official right sidebar as a **"zcode 任务" tab**. Install it into the desktop profile from a local checkout (full steps in [dsh-plugin/README.md](dsh-plugin/README.md)):
-
-```jsonc
-// ~/.dsh/profiles/desktop/package.json — register in both places
-"dependencies": { "dsh-zcode-executor": "link:/path/to/zcode-executor/dsh-plugin" },
-"dsh.profile.bundles": [ /* existing bundles */ , "dsh-zcode-executor" ]
-```
-
-Then `pnpm install` and `npm run build` inside `dsh-plugin/`, restart the DSH desktop app, and confirm the plugin row shows active. The skill auto-symlinks into `~/.dsh/skills/`.
+The npm package **is** the DSH plugin: the root `package.json` carries the `dsh` definition (`cordis.patch.yml` bundle + right-sidebar client), and the plugin code is the built output under `dsh-plugin/lib/` (sources in [dsh-plugin/](dsh-plugin/README.md)). In the DSH desktop app's plugin page, just install by the npm package name `zcode-executor` — the app registers the bundle by itself; no manual `link:` or config editing. The plugin teaches the DSH agent the full dispatch flow (the skill auto-symlinks into `~/.dsh/skills/`) and adds the **"zcode 任务" tab** to the official right sidebar — the same live watch pane, refreshing about once a second at zero quota. Local development: `pnpm install && npm run build` inside `dsh-plugin/`, then restart the desktop app.
 
 ### Kimi Work
 
@@ -371,7 +363,7 @@ Newly started runners read the configuration; existing runners do not hot-reload
 ## Development
 
 ```bash
-npm test          # 757 cases against a scripted mock app-server and mock off-peak server, plus a doc-version drift check; no tokens spent
+npm test          # 762 cases against a scripted mock app-server and mock off-peak server, plus a doc-version drift check; no tokens spent
 node --check lib/**/*.mjs
 ```
 

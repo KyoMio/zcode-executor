@@ -3,7 +3,7 @@
 Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给本机 ZCode（GLM），
 在 worktree 里隔离执行，用 git diff 和测试客观验收。
 
-**状态（2026-10-09）**：第一版完成并已适配 ZCode App 3.12.2 起的版本（decisions D14；2026-10-09 在 App 3.14.5 上零 token + 花额度冒烟全过，见 verified.md）；插话改走 `v4/command`（D17）；接上账号型 Coding Plan（凭据文件来源，D19）；闲时投递与 `quota`（D20）随 v0.3.5 发布，start plan 投递撤而复开（D21，2026-10-09 服务器撤了人机验证后拣回）；v0.4.0 加观察面板：`watch` 子命令加 Claude Code mod（`hooks/`，D22），v0.4.1 回复按 Markdown 显示、超过两行可展开，v0.4.2–0.4.3 修长命令把工具名挤成两行、撑破卡片边框。`npm test` 757 个用例。
+**状态（2026-10-09）**：第一版完成并已适配 ZCode App 3.12.2 起的版本（decisions D14；2026-10-09 在 App 3.14.5 上零 token + 花额度冒烟全过，见 verified.md）；插话改走 `v4/command`（D17）；接上账号型 Coding Plan（凭据文件来源，D19）；闲时投递与 `quota`（D20）随 v0.3.5 发布，start plan 投递撤而复开（D21，2026-10-09 服务器撤了人机验证后拣回）；v0.4.0 加观察面板：`watch` 子命令加 Claude Code mod（`hooks/`，D22），v0.4.1 回复按 Markdown 显示、超过两行可展开，v0.4.2–0.4.3 修长命令把工具名挤成两行、撑破卡片边框。`npm test` 762 个用例。
 术语在 [docs/CONTEXT.md](docs/CONTEXT.md)。本地开发记录（`docs/handoff/`、`docs/tasks/`、`docs/PLAN*.md`、`docs/archive/`、`docs/SPEC-offpeak.md`、`docs/SPEC-watch-pane.md`、`docs/jev-*-plan.md`、`docs/research/`）不进 GitHub，只在开发机上有；
 有它们就从 `docs/PLAN-v4.md` 与 `docs/handoff/handoff-20260908.md` 接手，没有就从 README 与 docs/PRD.md 开始。
 
@@ -29,7 +29,7 @@ Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给�
 - `~/.zcode/v2/config.json` 与 `~/.zcode/v2/credentials.json` 只读：前者有明文 API key、App 会重写它；后者是 App 的加密凭据，只解账号型 coding plan 要的四个键（D19）和闲时投递要的 `zcodejwttoken`（D20）。两处读到的 key 只落 D14 的临时个人 provider 文件；JWT 只进内存与 JSON-RPC 参数，不落盘。
 - 从 zcode-acp 搬来的代码保留 Apache-2.0 版权声明，记入 `NOTICE`。
 - 排障看 `~/.zcode/cli/log/zcode-YYYY-MM-DD.jsonl`。JSON-RPC 错误的细节在 `error.data.details`，`message` 只有一句概括。
-- `dsh-plugin/` 是 DSH 侧插件 dsh-zcode-executor 的源码（2026-10-11 subtree 并入，旧 Gitea 仓库冻结）：TypeScript + pnpm 独立包，与 CLI 唯一耦合是 `watch --json` 行协议。开发、测试、安装见其 [docs/dsh-plugin.md](docs/dsh-plugin.md) 与目录内 README；版本独立发版，不进 `sync-doc-version.mjs`。
+- DSH 插件定义在根 `package.json`（`dsh` 字段 + `cordis.patch.yml`），npm 包名即插件，桌面端插件页直装；`dsh-plugin/` 是其 TypeScript 源码与构建产物（lib 入库），2026-10-11 subtree 并入，旧 Gitea 仓库冻结。与 CLI 唯一耦合是 `watch --json` 行协议。开发、测试见其 [docs/dsh-plugin.md](docs/dsh-plugin.md) 与目录内 README；peer 依赖全部 optional，CLI 全局安装保持零依赖。
 
 ## 发版
 
