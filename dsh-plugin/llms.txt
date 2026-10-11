@@ -1,0 +1,62 @@
+# dsh-zcode-executor
+
+> DSH（DeepSeek Harness）插件，把本机的 zcode-executor 派单执行器接进 DSH。三件套：SKILL.md 派单教学
+> （软链 `~/.dsh/skills/zcode-executor` + systemPrompt 公告）、官方右侧栏「zcode 任务」实时观察面板
+> （三段：待处理 / 执行中 / 已结束，回复按 Markdown 渲染、约 1 秒刷新、零额度）、闸门边界不变——
+> 面板只看不应答，派单智能体按 skill 的授权与安全条件处理挂起，仅需人工决定的转用户。
+
+## Key facts
+
+- 一个 bundle 插件，MIT，v1 只 `link:` 装本机 desktop profile、不发 npm。安装纪律：包名要同时出现在
+  `~/.dsh/profiles/desktop/package.json` 的 `dependencies` 与 `dsh.profile.bundles` 两处——bundles 不加
+  只装包等于没启用（加载器只挂 bundles 里的包；CLI 拒绝 `--profile desktop`，桌面端在 App 插件页装或手工
+  改 profile）。装完 `pnpm install` + `npm run build`，重启 DSH 桌面端生效。
+- 行协议契约：服务端 spawn `zcode-executor watch --json`（cwd 取用户主目录 → hello.repo 为 null →
+  全量会话，按仓库过滤归客户端），stdout 逐行 NDJSON（hello / session / synced / removed；快照字段表见
+  zcode-executor 仓库 PRD 第 4 节）。协议只加字段不改含义，插件对缺字段容错降级。两仓唯一耦合面就是这条流。
+- 服务端三路由（全部先过 `connection.admit`，非 GET 一律 405 + `Allow: GET`）：
+  `GET /zcode-executor/stream`（NDJSON 推送，已同步的新客户端先补一轮全量）、
+  `GET /zcode-executor/snapshot`（一次性全量，轮询兜底）、
+  `GET /zcode-executor/repo?cwd=…`（git 共同数据目录判所属仓库，进程内缓存）。
+  0.2.0 起三条路由的请求都可带 `?sessionId=<会话 id>`（插件桥凭它改道）：其中 repo 按
+  它解析会话 cwd（宿主 sessions 服务 `get(id).header.cwd`，与 `?cwd=` 同给时以 sessionId
+  为准，解析不出回 `{repo:null}`）；stream / snapshot 是整机数据，服务端不读该参数。
+- 远程会话（zen-remote 插件桥，0.2.0）：装 zen-remote 2.1+ 时插件经
+  `ctx.inject(['zenRemote'])` 登记桥声明（版本运行时读 package.json；stream/snapshot 是
+  scope 'server' 整机数据要主服务端主人同意，repo 是 scope 'session'）。子客户端的远程
+  会话里面板显示主服务端任务，「本项目」按主服务端上该会话的仓库；客户端「侧」= 主会话
+  id 是否 `zr~` 前缀（`zr~<serverId>~<id>` 虚拟 id）：侧变化关流清屏重开、同侧换会话不
+  重开；未桥接（503 `zr-plugin-unbridged`，头 `x-zen-remote: unbridged`）时横幅给中文
+  原因、不退化为本机数据、重试节奏放宽到不短于 5 秒，桥恢复自动接上。
+- watch 子进程生命周期：synced 前退出 = failed（起不来，不重试——多半 execPath 配错）；
+  synced 后意外退出 = down，5 秒自动重起，重起到下个 synced 之间的快照只作新基线。
+- 客户端：`createSnapshotStore` 流式读 stream（首响应 15 秒闹钟防服务器收 TCP 不回的永久挂起），
+  断流退 snapshot 1 秒轮询 + 3 秒重试流，流恢复即停轮询、恢复不补弹；另有安全网轮询
+  （safetyPollMs=5000，2026-10-07 补：宿主传输层疑似缓冲流式小行——首轮大块能到、中途增量不到、
+  流没断退化不启动；流活着时也低频拉 snapshot，正常时空转、被缓冲时 ≤5 秒必达）。连接四态
+  starting / live / down /
+  failed 各说各话：transport 全断合成 down「实时连接中断」但不覆盖服务端 failed；401/403 是
+  「无权访问（admit 拒绝）……重新登录 DSH 后自动恢复」，不说「连接中断」。
+- 当前项目判定：主会话（`retainedBy.mainView > 0` 的第一行）的 id 与 cwd——id 定数据「侧」
+  （本机 / 远程主服务端，见上条），cwd 定过滤仓库（无会话退工作区路径，repo 路由换过滤仓库；
+  有主会话时 repo 请求带 `?sessionId=` 由服务端按会话 cwd 判）；
+  面板「本项目 / 全部项目」chip 切换。信息架构与 zcode-executor 的 Claude Code mod 对齐（已结束 20 条上限、
+  回复默认收起一行可展开（2026-10-07 用户改规格，原两行；挂起/中断卡也带最新回复）、挂起卡片带工具名与原因、
+  闲时排队显示排位、已结束 30 分钟内成卡片更久缩一行且行可点开成卡片（原 10 分钟/不可点）），颜色全取宿主 `--dsw-alias-*` 主题令牌
+  （状态色是 `state-*-primary` 三段式真名、带字面量兜底——2026-10-07 真机全灰阶事故的教训：
+  短名不存在会导致整条声明作废；preview 自检有令牌对账断言）。
+- 配置三项（全 volatile，改动经 `src/reload.ts` 指纹守卫热重载插件行生效——监听 `loader/volatile-update`
+  + 2 秒轮询兜底，变了 `fiber.restart`，不重启宿主）：`execPath`（缺省 PATH 里的 `zcode-executor`；
+    GUI 启动的宿主 PATH 里连 node 都没有，配绝对路径包装脚本，见 README「execPath 与 GUI 宿主的 PATH」）、
+  `watchMode`（`always` 默认常驻 / `on-demand` 按流活跃连接数起停）、`announceToAgent`（默认开）。
+- 明确不做：面板应答控件（approve / deny / answer）、智能体工具、slash 命令、toast、tab 角标、
+  英文文案、发 npm。宿主缺 webServer/connection/sidebarRightTabs 服务时对应半场整体不挂载、插件照常加载。
+
+## Docs
+
+- README.md — 安装（link: 两处登记 + 重启）、配置、架构、故障排查、已知边界、发布前 checklist。
+- SPEC.md — 需求、实现决定、测试缝选取、Out of Scope；tasks/plan.md + tasks/todo.md — 任务与检查点
+  （A/B/C，真机 C1–C10；T6 机器侧已完成——预览 + mockup 比对修复过，真机检查点待验收）。
+- 测试与构建命令：`node --test "test/*.test.mjs"`（111 用例，零额度，直读 src/*.ts 靠 Node 类型剥离、
+  本机 v22.22.3 实测可用）；`npm run build`（tsc 两套 tsconfig + scripts/build-client.mjs 内联打包客户端，
+  产物 lib/ 入库）；`npm run verify`（两套 tsconfig --noEmit）。

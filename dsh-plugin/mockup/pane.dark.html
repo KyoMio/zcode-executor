@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>zcode 任务 · DSH 右侧栏观察面板样板</title>
+<!--
+  dsh-zcode-executor 观察面板样板（自包含 HTML，浏览器直接打开）。
+  数据是手工摆的样例，覆盖：挂起审批、执行中（含回复/工具）、闲时排队、刚结束卡片、已结束行、断连横幅。
+  面板宽 348px，按 DSH 官方右侧栏密度画。
+
+  与真实实现的对应关系（落成 React 组件时照此搬运）：
+  · 主题：变量名用官方 --dsw-alias-* 令牌 + body[data-ds-dark-theme] 深浅钩子；
+    真实插件里这些令牌由宿主提供，只需 var() 引用（样板里为了独立打开才自带取值）。
+  · 样式注入：真实实现照 zen-remote 的做法，TS 模板字符串 CSS + <style data-plugin="dsh-zcode-executor">。
+  · 图标：一套 20×20、1.6px 圆角描边的 SVG 家族（本文件 <symbol> 部分）；
+    执行中（脉冲）与闲时排队（转弧）是动态图标，内联 SVG + CSS 关键帧——对应 CC mod pane.mjs 的图片模式动画，
+    在这里是真 DOM 动画。静态图标将来优先取宿主 Icon*Regular 同风格替换。
+  · 信息架构与文案：与 zcode-executor hooks/view.mjs 对齐（三段、结果文案表、10 分钟内成卡片）。
+  · 面板只看不应答：没有任何 approve/deny/answer 控件（AGENTS.md 硬约束）。
+-->
+<style>
+  /* ---- 主题令牌：真实插件由宿主提供，这里自带近似取值以便独立预览 ---- */
+  :root {
+    --dsw-alias-bg-base: #f4f5f7;            /* 应用底 */
+    --dsw-alias-bg-layer-1: #ffffff;         /* 面板/卡片面 */
+    --dsw-alias-bg-layer-2: #eef0f3;         /* 次级面（代码块、分段控件槽） */
+    --dsw-alias-bg-layer-3: #e4e7ec;
+    --dsw-alias-border-l1: #e6e8ec;
+    --dsw-alias-border-l2: #d6dae1;
+    --dsw-alias-label-primary: #1b1f26;
+    --dsw-alias-label-secondary: #4d5462;
+    --dsw-alias-label-tertiary: #767e8c;
+    --dsw-alias-label-dimmed: #9aa1ad;
+    --dsw-alias-label-caption: #aab0ba;
+    --dsw-alias-interactive-bg-hover: rgba(27, 31, 38, .055);
+    --dsw-alias-state-success-primary: #1a7f37;
+    --dsw-alias-state-warn-primary: #9a6700;
+    --dsw-alias-state-error-primary: #cf222e;
+    --dsw-alias-state-idle-primary: #6e7681;
+    --dsw-alias-state-business-primary: #4f6ef7;
+    --dsw-focus-ring-color: #4176e6;
+    /* 插件自有派生色（同风格状态色，深浅各配） */
+    --zxe-ok: var(--dsw-alias-state-success-primary);
+    --zxe-warn: var(--dsw-alias-state-warn-primary);
+    --zxe-err: var(--dsw-alias-state-error-primary);
+    --zxe-dim: var(--dsw-alias-state-idle-primary);
+    --zxe-acc: var(--dsw-alias-state-business-primary);
+  }
+  body[data-ds-dark-theme] {
+    --dsw-alias-bg-base: #101318;
+    --dsw-alias-bg-layer-1: #161a21;
+    --dsw-alias-bg-layer-2: #1d222b;
+    --dsw-alias-bg-layer-3: #262c36;
+    --dsw-alias-border-l1: #262c36;
+    --dsw-alias-border-l2: #333a46;
+    --dsw-alias-label-primary: #e8ebf0;
+    --dsw-alias-label-secondary: #aeb6c2;
+    --dsw-alias-label-tertiary: #828b99;
+    --dsw-alias-label-dimmed: #5d6570;
+    --dsw-alias-label-caption: #4d545e;
+    --dsw-alias-interactive-bg-hover: rgba(232, 235, 240, .07);
+    --dsw-alias-state-success-primary: #3fb950;
+    --dsw-alias-state-warn-primary: #d29922;
+    --dsw-alias-state-error-primary: #f85149;
+    --dsw-alias-state-idle-primary: #8b929d;
+    --dsw-alias-state-business-primary: #7aaaff;
+    --dsw-focus-ring-color: #7aaaff;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font: 12.5px/1.55 -apple-system, "SF Pro Text", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+    color: var(--dsw-alias-label-primary);
+    background: var(--dsw-alias-bg-base);
+    -webkit-font-smoothing: antialiased;
+  }
+  code, pre, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11.5px; }
+
+  /* ---- 舞台：模拟桌面 App，右侧栏贴右 ---- */
+  .stage { display: flex; justify-content: flex-end; height: 100vh; }
+  .stage-note {
+    position: fixed; left: 16px; bottom: 14px; color: var(--dsw-alias-label-dimmed);
+    font-size: 11px; user-select: none;
+  }
+
+  /* ---- 右侧栏面板（官方 chrome 由宿主画，这里只摆标题行示意） ---- */
+  .sidebar {
+    width: 348px; height: 100%;
+    background: var(--dsw-alias-bg-layer-1);
+    border-left: 1px solid var(--dsw-alias-border-l2);
+    display: flex; flex-direction: column;
+  }
+  .tabbar { /* 宿主提供的 tab 标题行，仅示意 */
+    display: flex; align-items: center; gap: 8px;
+    height: 38px; padding: 0 12px; flex: none;
+    border-bottom: 1px solid var(--dsw-alias-border-l1);
+  }
+  .tabbar .t-ico { display: grid; place-items: center; color: var(--dsw-alias-label-secondary); }
+  .tabbar .t-title { font-weight: 600; font-size: 12.5px; }
+  .tabbar .t-sp { flex: 1; }
+  .tabbar .t-btn {
+    width: 24px; height: 24px; border: 0; border-radius: 6px; background: none;
+    color: var(--dsw-alias-label-dimmed); display: grid; place-items: center; cursor: default;
+  }
+
+  .pane { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+  .pane::-webkit-scrollbar { width: 8px; }
+  .pane::-webkit-scrollbar-thumb { background: var(--dsw-alias-border-l2); border-radius: 4px; }
+
+  /* ---- 摘要行 ---- */
+  .summary {
+    position: sticky; top: 0; z-index: 3;
+    display: flex; align-items: center; gap: 6px;
+    padding: 10px 12px 8px;
+    background: var(--dsw-alias-bg-layer-1);
+    border-bottom: 1px solid var(--dsw-alias-border-l1);
+  }
+  .count {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 1px 8px 1px 6px; border-radius: 999px; text-decoration: none;
+    border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-2);
+    color: var(--dsw-alias-label-secondary); font-size: 11.5px;
+  }
+  .count b { font-weight: 600; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
+  .count .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
+  .count.c-todo { --c: var(--zxe-warn); } .count.c-todo .dot { background: var(--zxe-warn); }
+  .count.c-doing { --c: var(--zxe-ok); } .count.c-doing .dot { background: var(--zxe-ok); }
+  .count.c-done { --c: var(--zxe-dim); } .count.c-done .dot { background: var(--zxe-dim); }
+  .count:hover { background: var(--dsw-alias-interactive-bg-hover); }
+  .live {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+    color: var(--dsw-alias-label-tertiary); font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .live .mono { letter-spacing: .2px; }
+  .live[data-link="down"] { color: var(--zxe-err); }
+
+  /* ---- 范围切换（SegmentedControl 风格） ---- */
+  .scopebar {
+    display: flex; gap: 8px; align-items: center;
+    padding: 8px 12px 0;
+  }
+  .seg {
+    display: inline-flex; padding: 2px; border-radius: 8px;
+    background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l1);
+  }
+  .seg button {
+    border: 0; background: none; cursor: pointer; border-radius: 6px;
+    padding: 2px 10px; font: inherit; font-size: 11.5px; color: var(--dsw-alias-label-tertiary);
+  }
+  .seg button[aria-pressed="true"] {
+    background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
+    box-shadow: 0 1px 2px rgba(0,0,0,.10); font-weight: 500;
+  }
+  .scope-note { font-size: 11px; color: var(--dsw-alias-label-dimmed); }
+
+  /* ---- 断连横幅 ---- */
+  .banner {
+    display: none; margin: 8px 12px 0; padding: 6px 10px;
+    border-radius: 8px; font-size: 11.5px;
+    color: var(--zxe-err); background: color-mix(in srgb, var(--zxe-err) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--zxe-err) 28%, transparent);
+  }
+  .sidebar[data-link="down"] .banner { display: block; }
+
+  /* ---- 分段标题（吸顶） ---- */
+  .sechead {
+    position: sticky; top: 0; z-index: 2;
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 14px 12px 6px;
+    background: var(--dsw-alias-bg-layer-1);
+    border-bottom: 1px solid var(--dsw-alias-border-l1);
+    font-size: 11px; font-weight: 600; letter-spacing: .04em;
+    color: var(--dsw-alias-label-secondary);
+  }
+  .sechead .n { color: var(--dsw-alias-label-dimmed); font-weight: 400; }
+  .sechead { scroll-margin-top: 40px; }
+
+  /* ---- 卡片 ---- */
+  .cards { padding: 8px 12px 4px; display: flex; flex-direction: column; gap: 8px; }
+  .card {
+    --c: var(--zxe-dim);
+    --tint: color-mix(in srgb, var(--c) 6%, transparent);
+    border: 1px solid var(--dsw-alias-border-l1);
+    border-left: 3px solid var(--c);
+    background: linear-gradient(90deg, var(--tint), transparent 42%), var(--dsw-alias-bg-layer-1);
+    border-radius: 10px; padding: 9px 10px 9px 11px;
+  }
+  .card.k-pend  { --c: var(--zxe-warn); }
+  .card.k-stale { --c: var(--zxe-err); }
+  .card.k-run   { --c: var(--zxe-ok); }
+  .card.k-queue { --c: var(--zxe-acc); }
+  .card.k-recent{ --c: var(--zxe-dim); }
+  .card.k-recent[data-outcome="done"]   { --c: var(--zxe-ok); }
+  .card.k-recent[data-outcome="timeout"]{ --c: var(--zxe-warn); }
+  .card.k-recent[data-outcome="failed"] { --c: var(--zxe-err); }
+
+  .chead { display: flex; align-items: center; gap: 7px; }
+  .sticon {
+    flex: none; width: 22px; height: 22px; border-radius: 6px;
+    display: grid; place-items: center;
+    background: color-mix(in srgb, var(--c) 13%, transparent);
+    color: var(--c);
+  }
+  .clabel { font-weight: 600; font-size: 12.5px; }
+  .ctitle { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .corner {
+    margin-left: auto; flex: none; max-width: 46%;
+    font-size: 10.5px; color: var(--dsw-alias-label-tertiary);
+    border: 1px solid var(--dsw-alias-border-l1); border-radius: 999px;
+    background: var(--dsw-alias-bg-layer-2); padding: 0 7px;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .meta {
+    margin-top: 3px; font-size: 11px; color: var(--dsw-alias-label-dimmed);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .repotag { display: none; }
+  body[data-scope="all"] .repotag { display: inline; }
+
+  /* 挂起正文：命令/参数代码块 */
+  .pend-body { margin-top: 7px; }
+  .pend-body pre {
+    margin: 0; padding: 7px 9px; border-radius: 7px;
+    background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l1);
+    white-space: pre-wrap; word-break: break-all; color: var(--dsw-alias-label-secondary);
+  }
+  .reason { margin-top: 6px; font-size: 11.5px; color: var(--dsw-alias-label-secondary); }
+  .reason::before { content: ""; }
+  .hint { margin-top: 6px; font-size: 11px; color: var(--dsw-alias-label-dimmed); }
+
+  /* 回复区（Markdown）：默认收起两行，点开全文 */
+  .reply { margin-top: 8px; border-left: 2px solid color-mix(in srgb, var(--zxe-ok) 45%, transparent); padding-left: 9px; }
+  .reply .peek, .reply .full { color: var(--dsw-alias-label-secondary); font-size: 12px; }
+  .reply .peek p { margin: 0 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .reply .peek p::after { content: " …"; color: var(--dsw-alias-label-dimmed); }
+  .reply .full { display: none; }
+  .reply.open .full { display: block; }
+  .reply.open .peek { display: none; }
+  .reply .full p { margin: 0 0 6px; }
+  .reply .full ul { margin: 0 0 6px; padding-left: 18px; }
+  .reply .full li { margin: 2px 0; }
+  .reply code {
+    background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l1);
+    border-radius: 4px; padding: 0 4px;
+  }
+  .reply pre {
+    margin: 4px 0 6px; padding: 7px 9px; border-radius: 7px;
+    background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l1);
+    overflow-x: auto; color: var(--dsw-alias-label-secondary);
+  }
+  .fold {
+    margin-top: 4px; border: 0; background: none; cursor: pointer; padding: 1px 0;
+    font: inherit; font-size: 11px; color: var(--dsw-alias-label-tertiary);
+  }
+  .fold:hover { color: var(--dsw-alias-label-primary); text-decoration: underline; }
+  .fold:focus-visible { outline: 2px solid var(--dsw-focus-ring-color); outline-offset: 1px; border-radius: 4px; }
+
+  /* 工具行 */
+  .tools { margin-top: 7px; display: flex; flex-direction: column; gap: 2px; }
+  .tool { display: flex; gap: 7px; align-items: baseline; min-width: 0; font-size: 11.5px; }
+  .tool .g { flex: none; width: 14px; text-align: center; font-weight: 700; }
+  .tool .tn { flex: none; font-weight: 600; }
+  .tool .ts { flex: 1; min-width: 0; color: var(--dsw-alias-label-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tool.active .g, .tool.active .tn { color: var(--zxe-ok); }
+  .tool.ok .g { color: var(--dsw-alias-label-dimmed); }
+  .tool.ok .tn { color: var(--dsw-alias-label-secondary); }
+  .tool.bad .g, .tool.bad .tn { color: var(--zxe-err); }
+  .tool.active .ts { color: var(--dsw-alias-label-secondary); }
+
+  /* 已结束：一行一条 */
+  .rows { padding: 4px 12px 14px; display: flex; flex-direction: column; }
+  .row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 2px; border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 60%, transparent);
+    font-size: 12px; color: var(--dsw-alias-label-secondary);
+  }
+  .row:last-child { border-bottom: 0; }
+  .row .sticon { width: 18px; height: 18px; border-radius: 5px; background: none; }
+  .row .rl { flex: none; width: 52px; font-weight: 600; font-size: 11.5px; }
+  .row .rt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-primary); }
+  .row .rrepo { flex: none; font-size: 11px; color: var(--dsw-alias-label-dimmed); display: none; }
+  body[data-scope="all"] .row .rrepo { display: inline; }
+  .row .rat { flex: none; color: var(--dsw-alias-label-dimmed); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .row.r-done .sticon, .row.r-done .rl { color: var(--zxe-ok); }
+  .row.r-timeout .sticon, .row.r-timeout .rl { color: var(--zxe-warn); }
+  .row.r-failed .sticon, .row.r-failed .rl { color: var(--zxe-err); }
+  .row.r-cancel .sticon, .row.r-cancel .rl,
+  .row.r-idle .sticon, .row.r-idle .rl,
+  .row.r-exited .sticon, .row.r-exited .rl { color: var(--zxe-dim); }
+
+  /* ---- 图标族 ---- */
+  .icon { display: block; }
+  .icon use { pointer-events: none; }
+
+  /* 动态图标：执行中脉冲（呼吸点 + 扩散环） */
+  .apulse .p-dot { animation: zxe-breathe 1.6s ease-in-out infinite; }
+  .apulse .p-ring { transform-origin: 10px 10px; animation: zxe-ring 1.6s ease-out infinite; }
+  @keyframes zxe-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .6; } }
+  @keyframes zxe-ring { 0% { transform: scale(1); opacity: .5; } 75%, 100% { transform: scale(2.05); opacity: 0; } }
+  /* 动态图标：闲时排队（匀速转弧） */
+  .aqueue .q-arc { transform-origin: 10px 10px; animation: zxe-spin 1.4s linear infinite; }
+  @keyframes zxe-spin { to { transform: rotate(360deg); } }
+  .apulse .p-dot, .apulse .p-ring { fill: none; stroke: var(--zxe-ok); stroke-width: 1.6; }
+  .apulse .p-dot { fill: var(--zxe-ok); stroke: none; }
+  .aqueue circle { fill: none; stroke-width: 2; }
+  .aqueue .q-track { stroke: color-mix(in srgb, var(--zxe-acc) 25%, transparent); }
+  .aqueue .q-arc { stroke: var(--zxe-acc); stroke-linecap: round; }
+  @media (prefers-reduced-motion: reduce) {
+    .apulse .p-dot, .apulse .p-ring, .aqueue .q-arc { animation: none; }
+  }
+
+  /* ---- 样板专用：面板外的演示控件与图标一览（不进正式面板） ---- */
+  .controls {
+    position: fixed; left: 16px; top: 16px; width: 250px;
+    background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l2);
+    border-radius: 12px; padding: 12px 14px; font-size: 12px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.14);
+  }
+  .controls h3 { margin: 0 0 8px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+  .controls .btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .controls button {
+    font: inherit; font-size: 11.5px; cursor: pointer; border-radius: 7px;
+    border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-2);
+    color: var(--dsw-alias-label-secondary); padding: 3px 9px;
+  }
+  .controls button:hover { background: var(--dsw-alias-interactive-bg-hover); }
+  .controls .cap { margin-top: 8px; color: var(--dsw-alias-label-dimmed); font-size: 11px; }
+  .iconlab {
+    position: fixed; left: 16px; top: 210px; width: 250px;
+    background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l2);
+    border-radius: 12px; padding: 12px 14px;
+  }
+  .iconlab h3 { margin: 0 0 8px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+  .iconlab .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px 4px; }
+  .iconlab .it { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10px; color: var(--dsw-alias-label-dimmed); }
+  .iconlab .it .icon { color: var(--dsw-alias-label-secondary); }
+  .iconlab .it.dy .icon { color: var(--zxe-ok); }
+  .iconlab .it.dyq .icon { color: var(--zxe-acc); }
+  .iconlab .cap { margin-top: 8px; color: var(--dsw-alias-label-dimmed); font-size: 10.5px; }
+  @media (max-width: 900px) { .controls, .iconlab { display: none; } }
+</style>
+</head>
+<body data-scope="proj" data-ds-dark-theme="">
+
+<!-- 静态图标族：20×20 / 1.6px 圆头描边，风格与宿主 Icon*Regular 对齐 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-pause" viewBox="0 0 20 20"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.2"/><path d="M8 7.7v4.6M12 7.7v4.6"/></g></symbol>
+    <symbol id="i-question" viewBox="0 0 20 20"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.2"/><path d="M7.6 7.9c.2-1.5 1.2-2.4 2.5-2.4 1.4 0 2.4.9 2.4 2.1 0 .8-.4 1.3-1.1 1.8-.7.5-1 1-1 1.7"/></g><circle cx="10" cy="13.9" r="1" fill="currentColor"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 20 20"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.7 17.2 16.3H2.8Z"/><path d="M10 8.3v3.4"/></g><circle cx="10" cy="14.2" r="1" fill="currentColor"/></symbol>
+    <symbol id="i-done" viewBox="0 0 20 20"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.2"/><path d="m7.1 10.2 2 2 3.7-4.1"/></g></symbol>
+    <symbol id="i-timeout" viewBox="0 0 20 20"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.2"/><path d="M10 6.2v4l2.8 1.7"/></g></symbol>
+    <symbol id="i-fail" viewBox="0 0 20 20"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.2"/><path d="m7.4 7.4 5.2 5.2M12.6 7.4 7.4 12.6"/></g></symbol>
+    <symbol id="i-cancel" viewBox="0 0 20 20"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.2"/><path d="M7.4 10h5.2"/></g></symbol>
+    <symbol id="i-idle" viewBox="0 0 20 20"><g fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="7.2"/></g><circle cx="10" cy="10" r="1.6" fill="currentColor"/></symbol>
+    <symbol id="i-exited" viewBox="0 0 20 20"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.2"/><path d="M7.7 12.3l4.6-4.6M8.5 7.7h3.8v3.8"/></g></symbol>
+    <symbol id="i-tab" viewBox="0 0 20 20"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="13" height="13" rx="3"/><path d="M7 12.5V10c0-1.7 1.3-3 3-3s3 1.3 3 3v2.5"/></g></symbol>
+  </defs>
+</svg>
+
+<div class="stage">
+
+  <aside class="sidebar" id="sidebar" data-link="live">
+    <!-- 宿主画的 tab 标题行（示意） -->
+    <div class="tabbar">
+      <span class="t-ico"><svg class="icon" width="16" height="16"><use href="#i-tab"/></svg></span>
+      <span class="t-title">zcode 任务</span>
+      <span class="t-sp"></span>
+      <span class="t-btn"><svg class="icon" width="14" height="14"><use href="#i-idle"/></svg></span>
+      <span class="t-btn"><svg class="icon" width="14" height="14"><use href="#i-cancel"/></svg></span>
+    </div>
+
+    <div class="pane">
+      <!-- 摘要行：三段计数 + 实时指示（动态脉冲点） -->
+      <div class="summary">
+        <a class="count c-todo" href="#sec-todo"><span class="dot"></span>待处理 <b>1</b></a>
+        <a class="count c-doing" href="#sec-doing"><span class="dot"></span>执行中 <b>2</b></a>
+        <a class="count c-done" href="#sec-done"><span class="dot"></span>已结束 <b>6</b></a>
+        <span class="live" id="live" data-link="live">
+          <svg class="apulse" width="12" height="12" viewBox="0 0 20 20" aria-hidden="true"><circle class="p-ring" cx="10" cy="10" r="4.4"/><circle class="p-dot" cx="10" cy="10" r="4"/></svg>
+          <span class="mono" id="clock">14:32:08</span>
+        </span>
+      </div>
+
+      <!-- 范围切换：默认本项目，可切全部 -->
+      <div class="scopebar">
+        <span class="seg" role="group" aria-label="显示范围">
+          <button type="button" data-scope-btn="proj" aria-pressed="true">本项目</button>
+          <button type="button" data-scope-btn="all" aria-pressed="false">全部项目</button>
+        </span>
+        <span class="scope-note" id="scopeNote">zcode-executor</span>
+      </div>
+
+      <!-- 断连横幅（watch 意外退出，5 秒后重连） -->
+      <div class="banner" id="banner">实时连接中断（watch 已退出），5 秒后重连。重连完成前的变化不补提示。</div>
+
+      <!-- 待处理 -->
+      <div class="sechead" id="sec-todo">待处理 <span class="n">1</span></div>
+      <div class="cards">
+        <article class="card k-pend" data-project="zcode-executor">
+          <div class="chead">
+            <span class="sticon"><svg class="icon" width="16" height="16"><use href="#i-pause"/></svg></span>
+            <span class="clabel">挂起：审批请求（Bash）</span>
+            <span class="corner elapsed" data-min="3">已等待 3 分钟</span>
+          </div>
+          <div class="meta">x_9f31c2a0 · tasks/T4-board.md</div>
+          <div class="pend-body">
+            <pre class="mono">rm -rf node_modules && npm ci</pre>
+            <div class="reason">原因：含删除操作，慢判转人工——任何越出执行副本的写入或删除一律转人工。</div>
+            <div class="hint">由派单智能体在对话中处理</div>
+          </div>
+        </article>
+      </div>
+
+      <!-- 执行中 -->
+      <div class="sechead" id="sec-doing">执行中 <span class="n">2</span></div>
+      <div class="cards">
+        <article class="card k-run" data-project="zcode-executor">
+          <div class="chead">
+            <span class="sticon"><svg class="apulse" width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle class="p-ring" cx="10" cy="10" r="4.4"/><circle class="p-dot" cx="10" cy="10" r="4"/></svg></span>
+            <span class="clabel">执行中</span>
+            <span class="ctitle">T2-auth-flow</span>
+            <span class="corner elapsed" data-min="6">已运行 6 分钟</span>
+          </div>
+          <div class="meta">x_a1b2c3d4 · tasks/T2-auth.md</div>
+          <div class="reply" data-reply>
+            <div class="peek">
+              <p>会话过期的问题定位到了：<code>refresh()</code> 在 401 后没有重试，token 就断了。</p>
+              <p>修法是给 client 加一层重试队列，过期时先续 token 再重放原请求。</p>
+            </div>
+            <div class="full">
+              <p>会话过期的问题定位到了：<code>refresh()</code> 在 401 后没有重试，token 就断了。</p>
+              <p>修法是给 client 加一层重试队列，过期时先续 token 再重放原请求。要点：</p>
+              <ul>
+                <li><code>authFetch()</code> 包一层，401 时挂进队列等续期；</li>
+                <li>并发请求只触发一次 <code>refresh()</code>，其余共享同一个 Promise；</li>
+                <li>续期失败统一抛 <code>SessionExpired</code>，路由层跳登录。</li>
+              </ul>
+              <pre class="mono">const r = await fetch(url, init);
+if (r.status === 401 &amp;&amp; !init.__retried) {
+  await refreshOnce();
+  return authFetch(url, { ...init, __retried: true });
+}</pre>
+              <p>改完跑 <code>npm test</code>，两处旧用例要跟着改 mock。</p>
+            </div>
+            <button class="fold" type="button" data-fold>展开回复</button>
+          </div>
+          <div class="tools">
+            <div class="tool active"><span class="g">▸</span><span class="tn">Bash</span><span class="ts mono">npm test -- --runInBand</span></div>
+            <div class="tool ok"><span class="g">✓</span><span class="tn">Edit</span><span class="ts mono">src/auth/session.ts</span></div>
+            <div class="tool ok"><span class="g">✓</span><span class="tn">Read</span><span class="ts mono">docs/SPEC.md</span></div>
+            <div class="tool bad"><span class="g">✕</span><span class="tn">Bash</span><span class="ts mono">npm run lint</span></div>
+          </div>
+        </article>
+
+        <article class="card k-queue" data-project="zcode-executor">
+          <div class="chead">
+            <span class="sticon"><svg class="aqueue" width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle class="q-track" cx="10" cy="10" r="6.6"/><circle class="q-arc" cx="10" cy="10" r="6.6" stroke-dasharray="10.4 31"/></svg></span>
+            <span class="clabel">闲时排队中，第 2 位</span>
+            <span class="corner elapsed" data-min="12">已排 12 分钟</span>
+          </div>
+          <div class="meta">x_77aa01ff · tasks/T5-rename.md · 等服务器放出闲时算力</div>
+        </article>
+      </div>
+
+      <!-- 已结束：10 分钟内成卡片，之后一行一条（上限 20 条，超出滚动） -->
+      <div class="sechead" id="sec-done">已结束 <span class="n">最近 6 条</span></div>
+      <div class="cards">
+        <article class="card k-recent" data-outcome="done" data-project="zcode-executor">
+          <div class="chead">
+            <span class="sticon"><svg class="icon" width="16" height="16"><use href="#i-done"/></svg></span>
+            <span class="clabel">已完成</span>
+            <span class="ctitle">T1-api-client</span>
+            <span class="corner">14:26</span>
+          </div>
+          <div class="meta">x_4e0b19cc · tasks/T1-api.md<span class="repotag"> · zcode-executor</span></div>
+          <div class="reply" data-reply>
+            <div class="peek">
+              <p>client 封装完成，四个端点都有测试覆盖，<code>npm test</code> 41 个用例全绿。</p>
+              <p>分页游标按你说的放到了响应头 <code>X-Next</code>，没动响应体结构。</p>
+            </div>
+            <div class="full">
+              <p>client 封装完成，四个端点都有测试覆盖，<code>npm test</code> 41 个用例全绿。</p>
+              <p>分页游标按你说的放到了响应头 <code>X-Next</code>，没动响应体结构。改动集中在 <code>src/client/index.ts</code>，公开面只有 <code>createClient()</code> 一个入口。</p>
+            </div>
+            <button class="fold" type="button" data-fold>展开回复</button>
+          </div>
+        </article>
+      </div>
+      <div class="rows">
+        <div class="row r-timeout" data-project="zcode-executor">
+          <svg class="icon sticon-i" width="15" height="15" style="color:var(--zxe-warn)"><use href="#i-timeout"/></svg>
+          <span class="rl">已超时</span><span class="rt">T0-probe · 基线探针</span>
+          <span class="rrepo">zcode-executor</span><span class="rat mono">14:02</span>
+        </div>
+        <div class="row r-failed" data-project="zcode-executor">
+          <svg class="icon" width="15" height="15" style="color:var(--zxe-err)"><use href="#i-fail"/></svg>
+          <span class="rl">执行失败</span><span class="rt">T3-flaky-test</span>
+          <span class="rrepo">zcode-executor</span><span class="rat mono">13:44</span>
+        </div>
+        <div class="row r-cancel foreign" data-project="zeta-base">
+          <svg class="icon" width="15" height="15" style="color:var(--zxe-dim)"><use href="#i-cancel"/></svg>
+          <span class="rl">已取消</span><span class="rt">T6-bench</span>
+          <span class="rrepo">zeta-base</span><span class="rat mono">12:51</span>
+        </div>
+        <div class="row r-idle" data-project="zcode-executor">
+          <svg class="icon" width="15" height="15" style="color:var(--zxe-dim)"><use href="#i-idle"/></svg>
+          <span class="rl">空闲</span><span class="rt">T9-scratch · 草稿会话</span>
+          <span class="rrepo">zcode-executor</span><span class="rat mono">11:20</span>
+        </div>
+        <div class="row r-exited" data-project="zcode-executor">
+          <svg class="icon" width="15" height="15" style="color:var(--zxe-dim)"><use href="#i-exited"/></svg>
+          <span class="rl">已退出</span><span class="rt">x_5f0d21ab</span>
+          <span class="rrepo">zcode-executor</span><span class="rat mono">09:03</span>
+        </div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- ======== 样板控件（不进正式面板） ======== -->
+<div class="controls">
+  <h3>样板控件 · 不属于面板</h3>
+  <div class="btns">
+    <button type="button" id="btnTheme">切换 浅色 / 深色</button>
+    <button type="button" id="btnLink">模拟断连（5 秒恢复）</button>
+  </div>
+  <div class="cap">范围切换用面板顶部「本项目 / 全部项目」；「全部」会多出一条 zeta-base 的会话并显示仓库名。摘要行的计数可点跳分段。</div>
+</div>
+
+<div class="iconlab">
+  <h3>状态图标族 · 20/1.6px 圆头描边</h3>
+  <div class="grid">
+    <span class="it dy"><svg class="apulse" width="18" height="18" viewBox="0 0 20 20"><circle class="p-ring" cx="10" cy="10" r="4.4"/><circle class="p-dot" cx="10" cy="10" r="4"/></svg>执行中*</span>
+    <span class="it dyq"><svg class="aqueue" width="18" height="18" viewBox="0 0 20 20"><circle class="q-track" cx="10" cy="10" r="6.6"/><circle class="q-arc" cx="10" cy="10" r="6.6" stroke-dasharray="10.4 31"/></svg>排队*</span>
+    <span class="it"><svg class="icon" width="18" height="18"><use href="#i-pause"/></svg>挂起审批</span>
+    <span class="it"><svg class="icon" width="18" height="18"><use href="#i-question"/></svg>挂起提问</span>
+    <span class="it"><svg class="icon" width="18" height="18"><use href="#i-warn"/></svg>中断</span>
+    <span class="it"><svg class="icon" width="18" height="18"><use href="#i-done"/></svg>已完成</span>
+    <span class="it"><svg class="icon" width="18" height="18"><use href="#i-timeout"/></svg>已超时</span>
+    <span class="it"><svg class="icon" width="18" height="18"><use href="#i-fail"/></svg>执行失败</span>
+    <span class="it"><svg class="icon" width="18" height="18"><use href="#i-cancel"/></svg>已取消</span>
+    <span class="it"><svg class="icon" width="18" height="18"><use href="#i-idle"/></svg>空闲</span>
+    <span class="it"><svg class="icon" width="18" height="18"><use href="#i-exited"/></svg>已退出</span>
+    <span class="it dy"><svg class="apulse" width="18" height="18" viewBox="0 0 20 20"><circle class="p-ring" cx="10" cy="10" r="4.4"/><circle class="p-dot" cx="10" cy="10" r="4"/></svg>实时*</span>
+  </div>
+  <div class="cap">带 * 的两个是动态图标（CSS 关键帧）；真实实现里优先换成宿主同风格 Icon*Regular，动态图标保留自绘。</div>
+</div>
+
+<script>
+  // 样板交互：主题、范围、断连恢复、回复折叠、时钟与时长走字。
+  // 真实实现里这些状态来自 zcode-executor watch --json 的快照流（view.mjs 的 applyLine 同款纯函数）。
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+
+  // 主题：真实实现里宿主已经切好 body[data-ds-dark-theme]，插件只需用令牌，这里手动切。
+  $('#btnTheme').addEventListener('click', () => {
+    const dark = document.body.toggleAttribute('data-ds-dark-theme');
+    $('#btnTheme').textContent = dark ? '当前深色 · 点切浅色' : '切换 浅色 / 深色';
+  });
+
+  // 范围：本项目过滤掉其他仓库的会话；全部项目显示并标注仓库名。
+  $$('[data-scope-btn]').forEach((btn) => btn.addEventListener('click', () => {
+    document.body.dataset.scope = btn.dataset.scopeBtn;
+    $$('[data-scope-btn]').forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
+    $('#scopeNote').textContent = btn.dataset.scopeBtn === 'all' ? '显示全部项目' : 'zcode-executor';
+  }));
+  // 默认隐藏其他仓库（.foreign），切「全部」时显示
+  const style = document.createElement('style');
+  style.textContent = 'body:not([data-scope="all"]) .foreign { display: none; }';
+  document.head.appendChild(style);
+
+  // 断连：横幅 + 实时指示变红，5 秒后自动恢复（对应服务端重起 watch）
+  $('#btnLink').addEventListener('click', () => {
+    const sb = $('#sidebar');
+    sb.dataset.link = 'down';
+    $('#live').dataset.link = 'down';
+    $('#banner').textContent = '实时连接中断（watch 已退出），5 秒后重连。重连完成前的变化不补提示。';
+    setTimeout(() => {
+      sb.dataset.link = 'live';
+      $('#live').dataset.link = 'live';
+    }, 5000);
+  });
+
+  // 回复折叠：真实实现里判定用 view.mjs 的 replyFold（有内容的行超过 2 行才折叠）
+  $$('[data-fold]').forEach((btn) => btn.addEventListener('click', () => {
+    const reply = btn.closest('[data-reply]');
+    const open = reply.classList.toggle('open');
+    btn.textContent = open ? '收起' : '展开回复';
+  }));
+
+  // 实时时钟 + 「已运行 N 分钟」每分钟走字
+  const two = (n) => String(n).padStart(2, '0');
+  const clock = $('#clock');
+  const tickClock = () => {
+    const d = new Date();
+    clock.textContent = `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
+  };
+  tickClock();
+  setInterval(tickClock, 1000);
+  setInterval(() => {
+    $$('.elapsed').forEach((el) => {
+      const m = Number(el.dataset.min || 0) + 1;
+      el.dataset.min = m;
+      const kind = el.textContent.startsWith('已等待') ? '已等待' : el.textContent.startsWith('已排') ? '已排' : '已运行';
+      el.textContent = `${kind} ${m} 分钟`;
+    });
+  }, 60000);
+</script>
+</body>
+</html>

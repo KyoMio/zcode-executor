@@ -1,0 +1,12 @@
+# dsh-zcode-executor — bundle patch layer（一个包，一行 insert）
+#
+# 当 profile 的 dsh.profile.bundles 列了这个包时整层生效
+# （`dsh plugin add` 会自动写进去；v1 只 link: 装本机 desktop profile）。
+#
+# 行 id 必须是 `zcode-executor`：行 id 是设置页寻址本插件 volatile Config
+# 的条目 id（同 dsh-llm-verifier / dsh-auto-approve 的约束），不是包名。
+- insert:
+    # host 半边：watch 子进程管理与 stream/snapshot/repo 路由（Task 3 起）；
+    # 浏览器半边（右栏「zcode 任务」面板）经 package.json 的 dsh.client 发现。
+    - id: zcode-executor
+      name: dsh-zcode-executor
