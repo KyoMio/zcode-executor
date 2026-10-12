@@ -16,8 +16,15 @@ import { ExecutorError } from '../lib/errors.mjs';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const tempDirs = [];
+// 红线放行 os.tmpdir() 前缀后，夹具不能住在系统临时目录里（否则「执行副本外」用例全被放行）。
+// 进程 TMPDIR 指到专门的空目录，夹具照旧建在原临时目录下，越界语义不变（同 review.test）。
+const tmpIsolate = fs.mkdtempSync(path.join(os.tmpdir(), 'zcx-gate-isolated-'));
+process.env.TMPDIR = path.join(tmpIsolate, 'tmp');
+fs.mkdirSync(process.env.TMPDIR);
+tempDirs.push(tmpIsolate);
 function makeCwd() {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'zcx-gate-')));
+  fs.mkdirSync(path.join(tmpIsolate, 'fixtures'), { recursive: true });
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(tmpIsolate, 'fixtures', 'zcx-gate-')));
   tempDirs.push(dir);
   return dir;
 }

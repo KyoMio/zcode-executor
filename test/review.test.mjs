@@ -15,7 +15,14 @@ import { ExecutorError } from '../lib/errors.mjs';
 
 // ── 临时目录夹具 ──
 const tempDirs = [];
-function makeTempDir(base = os.tmpdir()) {
+// 红线放行 os.tmpdir() 前缀后，夹具不能住在系统临时目录里（否则「执行副本外」用例全被放行）。
+// 把进程 TMPDIR 指到专门的空目录，夹具照旧建在原临时目录下，越界语义不变。
+const tmpIsolate = fs.mkdtempSync(path.join(os.tmpdir(), 'zcx-review-isolated-'));
+process.env.TMPDIR = path.join(tmpIsolate, 'tmp');
+fs.mkdirSync(process.env.TMPDIR);
+tempDirs.push(tmpIsolate);
+function makeTempDir(base = path.join(tmpIsolate, 'fixtures')) {
+  fs.mkdirSync(base, { recursive: true });
   const dir = fs.mkdtempSync(path.join(base, 'zcx-review-'));
   tempDirs.push(dir);
   return dir;
@@ -49,6 +56,28 @@ test('checkHardRules：Write 到执行副本外命中，why 带路径', () => {
   assert.equal(res.hit, true);
   assert.equal(res.ruleId, 'outside-worktree');
   assert.ok(res.why.includes(target), `why 应带路径，实际：${res.why}`);
+});
+
+test('checkHardRules：Write 到执行副本外的系统临时目录不命中（tmp 白名单）', () => {
+  const cwd = makeCwd();
+  const res = checkHardRules(
+    { toolName: 'Write', input: { file_path: path.join(os.tmpdir(), 'zcx-allowed-', 'scratch.txt') } },
+    { cwd },
+  );
+  assert.deepEqual(res, { hit: false, ruleId: null });
+});
+
+test('checkHardRules：tmp 白名单只认路径本身，符号链接穿到别处照旧判', () => {
+  const cwd = makeCwd();
+  const outside = makeCwd();
+  const target = path.join(outside, 'real.txt');
+  fs.writeFileSync(target, 'x');
+  const link = path.join(os.tmpdir(), 'zcx-review-link-', 'l.txt');
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  tempDirs.push(path.dirname(link));
+  fs.symlinkSync(target, link);
+  const res = checkHardRules({ toolName: 'Write', input: { file_path: link } }, { cwd });
+  assert.equal(res.hit, true);
 });
 
 test('checkHardRules：../ 越出执行副本命中', () => {

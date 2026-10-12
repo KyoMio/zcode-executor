@@ -38,6 +38,10 @@ description: 把一件已经想清楚的开发任务交给本机 ZCode（GLM）�
 ```bash
 # 1. 先写任务单（模板 templates/task.md）
 #    验收标准要能被机器检查：跑什么命令、看什么文件、期望什么输出
+#    合理拆分任务：一单只做一件能独立验收的事；估计要改很多文件或跑很久测试的活儿，
+#    拆成多单串行投（前一单过了再投下一单），别塞成一单
+#    回合默认超时 30 分钟（--timeout 1800）：任务较复杂（长测试、大范围改动）时，
+#    派单手动给更长的 --timeout，超时会把当前回合取消、重投浪费额度
 
 # 2. 给仓库建执行副本（每个仓库一个，按任务切分支）
 WT=~/.zcode-executor/worktrees/<仓库名>
@@ -90,6 +94,8 @@ git -C "$WT" checkout -b task/T-yyy main              # 切新分支：在执行
 - **思考等级默认 `high`，都不用调。** Flash 类模型不要往低调，实测效果差。
 - provider 优先账号型个人版 coding plan（App 账号登录后的 key），其次账号型团队版，再次 `config.json` 里的 coding plan；同名模型在多个 provider 下并存时不用管，插件自己选对，要换就在插件配置里写 `preferredProvider`（如 `account:bigmodel-team-coding-plan`）。
 - 模型和思考等级建会话时定，同一条会话后续投递沿用。难活别复用之前建的 fast 会话，新开一条。
+- **原 zcode 会话上下文超过 1M token 就换新会话派单。** 会话越长每次投递的固定开销越大、执行效率越低；
+  旧会话攒的上下文对新任务多半是噪声。新任务一律新会话（必要时配新副本），把任务单和必要 diff 移交过去。
 
 可选启用 Jev 前筛时，编辑 `~/.zcode-executor/config.json`；**不要**把真实 key 放进命令参数、环境变量、任务单、聊天消息或仓库文件：
 
