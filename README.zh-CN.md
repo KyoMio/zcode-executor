@@ -266,7 +266,7 @@ Claude 投递时面板会自动打开；状态栏汇总「N 个回合执行中�
 | 字段 | 默认 | 含义 |
 | --- | --- | --- |
 | `allowedRoots` | `["~/.zcode-executor/worktrees"]` | `new --cwd` 允许指向的目录（解析符号链接后比对） |
-| `waitTimeoutSec` | `1800` | `send --wait` 超时，到点停掉回合 |
+| `waitTimeoutSec` | `3600` | `send --wait` 超时，到点停掉回合 |
 | `preferredProvider` | 账号型个人版 › 账号型团队版 › `config.json` 里的 coding plan | 同名模型在多个 provider 下时选哪个，例如 `account:bigmodel-team-coding-plan` |
 | `tiers` | 按名字自动分 | 手动指定 `fast` / `strong` 的模型 |
 | `review` | `{enabled, model, thought:"low", fastMaxTokens:300, slowMaxTokens:2000, timeoutMs:60000}` | 模型审批：开关、ZCode 模型（默认 `fast` 档）、思考等级、两段预算、单次超时 |

@@ -278,7 +278,7 @@ An off-peak send runs the turn on the Coding Plan subscription's free off-peak c
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `allowedRoots` | `["~/.zcode-executor/worktrees"]` | Directories `new --cwd` may point into (symlinks resolved) |
-| `waitTimeoutSec` | `1800` | `send --wait` timeout; the turn is stopped when it fires |
+| `waitTimeoutSec` | `3600` | `send --wait` timeout; the turn is stopped when it fires |
 | `preferredProvider` | account individual plan › account team plan › `config.json` coding plan | Which provider to pick when the same model exists under several, e.g. `account:bigmodel-team-coding-plan` |
 | `tiers` | auto by name | Override which model is `fast` / `strong` |
 | `review` | `{enabled, model, thought:"low", fastMaxTokens:300, slowMaxTokens:2000, timeoutMs:60000}` | Model review: on/off, ZCode model (default: the `fast` tier), thought level, token budgets, per-call timeout |

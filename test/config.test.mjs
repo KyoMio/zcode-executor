@@ -41,7 +41,7 @@ test('loadConfig：没有配置文件时全默认', async () => {
     const config = loadConfig(home);
     assert.equal(config.home, home);
     assert.deepEqual(config.allowedRoots, [path.join(home, 'worktrees')]);
-    assert.equal(config.waitTimeoutSec, 1800);
+    assert.equal(config.waitTimeoutSec, 3600);
     assert.equal(config.preferredProvider, undefined);
     assert.deepEqual(config.tiers, {});
     assert.deepEqual(config.environment, []);

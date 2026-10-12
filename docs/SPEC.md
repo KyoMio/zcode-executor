@@ -130,7 +130,7 @@ Jev 快筛：
   ```json
   {
     "allowedRoots": ["~/.zcode-executor/worktrees"],
-    "waitTimeoutSec": 1800,
+    "waitTimeoutSec": 3600,
     "preferredProvider": "builtin:bigmodel-coding-plan",
     "tiers": { "fast": "GLM-5.3-Flash", "strong": "GLM-5.3" },
     "review": {
