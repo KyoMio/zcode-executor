@@ -142,7 +142,7 @@ test('approve 全链路：应答 {decision:allow}、回合 done、events 有 exe
       const last = JSON.parse(await readFile(path.join(env.runsDir, 'last.json'), 'utf8').catch(() => '{}'));
       return last.outcome === 'done' ? last : undefined;
     },
-    { timeoutMs: 15000 },
+    { timeoutMs: 60_000 },
   );
   assert.equal(existsSync(path.join(env.runsDir, 'pending.json')), false);
   const answers = readRecord(env.recordPath).filter((m) => m.id !== undefined && m.method === undefined);
@@ -398,7 +398,7 @@ test('同一回合两个挂起：approve 后 applied true 且不等满 5 秒（�
       const last = JSON.parse(await readFile(path.join(env.runsDir, 'last.json'), 'utf8').catch(() => '{}'));
       return last.outcome === 'done' ? last : undefined;
     },
-    { timeoutMs: 15000 },
+    { timeoutMs: 60_000 }, // CI 慢机全链路可超 15 秒（2026-10-12 publish 实挂）,
   );
 });
 
@@ -464,7 +464,7 @@ test('events.jsonl 混入 {method,params} 通知行与坏行 → approve 仍报 
       const last = JSON.parse(await readFile(path.join(env.runsDir, 'last.json'), 'utf8').catch(() => '{}'));
       return last.outcome === 'done' ? last : undefined;
     },
-    { timeoutMs: 15000 },
+    { timeoutMs: 60_000 },
   );
 });
 
