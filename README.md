@@ -359,6 +359,9 @@ Newly started runners read the configuration; existing runners do not hot-reload
 - **Allow only when allowed.** Automatic approval and `approve` both require an `allow_once` option; there is no "always allow".
 - **Secrets are tightly scoped.** ZCode's provider key still goes only to the app-server path. The optional Jev key is the one deliberate persistent secret: it lives only in owner-protected `config.json`, is sent only as Jev authorization, and is never copied to events, pending state, runner logs or the app-server process.
 - **Answers are bound to requests.** Every `approve`/`deny`/`answer` carries the request id; stale answers are discarded.
+- **The gate guards itself.** Anything that touches zcode-executor's own data directory (except the default `worktrees/` root and the current session's worktree) or invokes the `zcode-executor` CLI stops for a human. The executor runs as the same OS user as the runner, so this only catches plain spellings: variable splicing or a script written first and run later is not recognised and still relies on model review and the human.
+- **The approval basis is frozen at send time.** The task file is snapshotted when the turn is queued and model review reads only the snapshot; editing the task file afterwards cannot change what review sees as "what the user said".
+- **Host-agent credentials are not passed down.** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GITHUB_TOKEN`, `GH_TOKEN` and similar variables are stripped when ZCode is spawned; add `--deny "WebFetch WebSearch"` when the task does not need network access. This removes those two tools; Bash, js and MCP tools can still access the network.
 
 ## Development
 

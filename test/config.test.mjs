@@ -2,7 +2,7 @@
 // 全部用临时目录，不读真机 ~/.zcode-executor，不碰 zcode 的配置。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, writeFile, readFile, readdir, rm, symlink } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, stat, writeFile, readFile, readdir, rm, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ExecutorError } from '../lib/errors.mjs';
@@ -135,6 +135,32 @@ test('writeJsonAtomic：写出的文件可读回；目录不存在自动建；�
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+const noPosixModes = process.platform === 'win32' && 'Windows 没有 POSIX 权限位，也不能随手建符号链接';
+
+test('writeJsonAtomic：落盘只给当前用户（0600），覆盖旧文件后也一样（审计 D5）', { skip: noPosixModes }, async () => {
+  const dir = await tmp('zcode-config-test-');
+  const file = path.join(dir, 'state.json');
+  await writeFile(file, '{}', { mode: 0o644 });
+  await chmod(file, 0o644);
+  writeJsonAtomic(file, { phase: 'running' });
+  assert.equal((await stat(file)).mode & 0o777, 0o600);
+});
+
+test('writeJsonAtomic：临时文件名猜不到——别人预先放在旧名字上的符号链接不会被写穿（审计 D9-②）', { skip: noPosixModes }, async () => {
+  const dir = await tmp('zcode-config-test-');
+  const file = path.join(dir, 'answer.json');
+  const victim = path.join(dir, 'victim.txt');
+  await writeFile(victim, '别人的文件');
+  // 旧实现的临时文件名是 <目标>.<pid>.tmp：pid 看得到，提前占住这个名字就能让写入落到别处
+  const predictable = `${file}.${process.pid}.tmp`;
+  await symlink(victim, predictable);
+  writeJsonAtomic(file, { decision: 'deny' });
+  assert.equal(await readFile(victim, 'utf8'), '别人的文件');
+  assert.equal((await lstat(file)).isSymbolicLink(), false);
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { decision: 'deny' });
+  assert.equal((await lstat(predictable)).isSymbolicLink(), true, '不是自己建的文件不动它');
 });
 
 test('loadConfig：review.slowMaxTokens 校验——正数收下、非法抛 ExecutorError(1)', async () => {

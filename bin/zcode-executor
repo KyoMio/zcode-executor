@@ -6,6 +6,10 @@ import process from 'node:process';
 import { ExecutorError } from '../lib/errors.mjs';
 import { redactSecrets } from '../lib/scrub.mjs';
 import { COMMANDS, USAGE } from '../lib/cli/common.mjs';
+import { guardOutput } from '../lib/cli/terminal.mjs';
+
+// 先于任何输出：执行端可控的文本不带着终端控制字符上屏（审计 D9-①，lib/cli/terminal.mjs）
+guardOutput(process.stdout, process.stderr);
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
