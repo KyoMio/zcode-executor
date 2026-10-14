@@ -236,11 +236,14 @@ test('spawn：显式 personalProviderFile 压过 env 里的（模型表按显式
 });
 
 test('spawn：宿主代理自己的凭据环境变量不带给子进程，经 opts.env 整份转交的也一样，别的变量照常（审计 D4）', async () => {
-  const withheld = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'GEMINI_API_KEY', 'XAI_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN'];
-  const kept = ['ZCX_TEST_ORDINARY_VAR', 'PATH'];
-  const saved = Object.fromEntries([...withheld, 'ZCX_TEST_ORDINARY_VAR'].map((name) => [name, process.env[name]]));
+  const withheld = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'GEMINI_API_KEY', 'XAI_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN',
+    // 名单外、按名字规则剔的（*_TOKEN / *_KEY / *_SECRET，不分大小写）
+    'ZCX_TEST_CLOUD_API_TOKEN', 'ZCX_TEST_SIGNING_KEY', 'zcx_test_session_secret'];
+  const kept = ['ZCX_TEST_ORDINARY_VAR', 'ZCX_TEST_TOKENIZER', 'ZCODE_ZCX_TEST_SECRET', 'PATH'];
+  const extraKept = kept.filter((name) => name !== 'PATH');
+  const saved = Object.fromEntries([...withheld, ...extraKept].map((name) => [name, process.env[name]]));
   for (const name of withheld) process.env[name] = `host-secret-${name}`;
-  process.env.ZCX_TEST_ORDINARY_VAR = '1';
+  for (const name of extraKept) process.env[name] = '1';
   const mock = await startMock({ script: { reportEnv: [...withheld, ...kept] } });
   mockDirs.push(mock.dir);
   try {
@@ -572,7 +575,8 @@ test('未知反向请求回 -32601，应答进了记录文件', async () => {
 test('子进程 stderr 经 onStderr 收到并带 zcode: 前缀', async () => {
   await withMock({}, {}, async ({ stderrLines }) => {
     await waitFor(() => (stderrLines.some((l) => l.startsWith('zcode: mock: started')) ? true : undefined));
-    assert.ok(stderrLines[0].includes('version='));
+    // 宿主环境里有凭据形状的变量时，第一行可能是「没带给 zcode」的说明，按内容找 started 那行
+    assert.ok(stderrLines.find((l) => l.startsWith('zcode: mock: started')).includes('version='));
   });
 });
 
