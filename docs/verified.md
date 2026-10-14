@@ -2,6 +2,12 @@
 
 写的是当时的情况。文件、版本、命令用之前先确认还在。
 
+## 3.15.3 核对（2026-10-14，App 3.15.3 / CLI 0.16.9，零 token）
+
+- 升级核对，不需要改代码。`doctor` 五步全过（选中账号型个人版）；`scripts/probe.mjs` 全绿（握手、create/subscribe/list/resume/close，与 3.14.5 结果一致）。`npm test` 803/803。
+- 源码核对 zcode.cjs：`session/*`、`v4/command`、`workspace/generateText|cancelGenerateText`、`provider/updateAccountConfig`、`interaction/request*`、`modelSelection`/`selectionScope`/`requestedDelivery`、`zcodejwttoken` 全在；start plan 端点 `zcode.z.ai/api/v1/zcode-plan/anthropic` 与 GLM-5.3/5.3-Flash 模型在。内置 provider 文件十种账号 provider 全保留。
+- 花额度回合未跑（协议面与 3.14.5 无差异，风险低）；完整闲时投递仍未在新版重跑，`OFFPEAK_VERIFIED_APP` 保持 3.14.1。
+
 ## start plan 投递重开真机（2026-10-09，App 3.14.5，拣回 e26fedb 实现后）
 
 - 协议面零成本核对：`provider/updateAccountConfig`、send 的 `modelSelection`/`modelExecution.selectionScope`、内置文件 start-plan 条目（模型 GLM-5.3-Flash/5.2/5-Turbo，端点 zcode.z.ai/api/v1/zcode-plan/anthropic）在 3.14.5 全部在。`npm test` 755/755。
