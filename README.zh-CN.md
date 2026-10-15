@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.png" width="128" alt="zcode-executor logo"></p>
+
 <h1 align="center">zcode-executor</h1>
 
 <p align="center">中文 · <a href="./README.md">English</a></p>
