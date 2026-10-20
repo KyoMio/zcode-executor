@@ -3,7 +3,10 @@
 // 防止改 dsh-plugin/ 时根定义漂移或漏构建。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { runInNewContext } from 'node:vm';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,6 +20,15 @@ test('根 package.json 带 DSH 插件定义，且 patch 文件在包根', () => 
   assert.ok(!existsSync(path.join(root, 'dsh-plugin', 'cordis.patch.yml')), 'dsh-plugin/ 里不应再有第二份 patch（定义只留根这一份）');
 });
 
+test('patch insert 的 name 是可 import 的 npm 包名（加载器按它 import）', () => {
+  const patch = readFileSync(path.join(root, pkg.dsh.bundle.patch), 'utf8');
+  const names = [...patch.matchAll(/^\s*name:\s*(\S+)\s*$/gm)].map(m => m[1]);
+  assert.ok(names.length > 0, 'insert 条目缺少 name');
+  for (const name of names) {
+    assert.equal(name, pkg.name, `insert name 必须等于包名 ${pkg.name}（旧包名残留会让插件行加载不到、状态「未运行」）`);
+  }
+});
+
 test('bundle 入口与 client 入口指向已构建的产物', () => {
   assert.equal(pkg.main, 'dsh-plugin/lib/index.js');
   for (const key of ['.', './client']) {
@@ -24,6 +36,40 @@ test('bundle 入口与 client 入口指向已构建的产物', () => {
     assert.ok(target, `exports["${key}"] 缺少 default`);
     assert.ok(existsSync(path.join(root, target)), `${target} 不存在——先 cd dsh-plugin && npm run build`);
   }
+});
+
+function clientRegistration(source) {
+  const registrations = [];
+  runInNewContext(source, {
+    window: { __ModuleLoader__: { load: registration => registrations.push(registration) } },
+  }, { timeout: 1000 });
+  assert.equal(registrations.length, 1, '客户端必须只注册一个模块工厂');
+  assert.equal(typeof registrations[0].factory, 'function');
+  return registrations[0];
+}
+
+test('发布的客户端工厂以根包名注册，和 patch import 的模块一致', () => {
+  const source = readFileSync(path.join(root, pkg.exports['./client'].default), 'utf8');
+  assert.equal(clientRegistration(source).id, pkg.name);
+});
+
+test('客户端构建读取根 package name，不使用子包名或当前工作目录', (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-client-build-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const plugin = path.join(dir, 'dsh-plugin');
+  mkdirSync(path.join(plugin, 'scripts'), { recursive: true });
+  mkdirSync(path.join(plugin, '.client-build', 'client'), { recursive: true });
+  copyFileSync(path.join(root, 'dsh-plugin/scripts/build-client.mjs'), path.join(plugin, 'scripts/build-client.mjs'));
+  const name = '@test/renamed-executor';
+  writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name }));
+  writeFileSync(path.join(plugin, 'package.json'), JSON.stringify({ name: 'dsh-zcode-executor' }));
+  writeFileSync(path.join(plugin, '.client-build/client/index.js'), 'exports.loaded = true;');
+  execFileSync(process.execPath, [path.join(plugin, 'scripts/build-client.mjs')], {
+    cwd: tmpdir(), timeout: 10_000,
+  });
+  const registration = clientRegistration(readFileSync(path.join(plugin, 'lib/client.js'), 'utf8'));
+  assert.equal(registration.id, name);
+  assert.equal(registration.factory(() => assert.fail('fixture 没有外部依赖')).loaded, true);
 });
 
 test('DSH 需要的产物都进 npm files（npm 包名直装才带得全）', () => {

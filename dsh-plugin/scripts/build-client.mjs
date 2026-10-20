@@ -1,6 +1,6 @@
 // 从 dsh-zen-remote 的 scripts/build-client.mjs 整份拷贝适配（T1）：改动是
-// 加载器 id 换成 dsh-zcode-executor（__ModuleLoader__.load 的 id 决定客户端
-// bundle 在宿主模块表里的标识），并删了对本包不适用的 lib/client.js.map 清理行
+// 加载器 id 取根 package.json 的 name（必须与宿主 import 的发布包名一致），
+// 并删了对本包不适用的 lib/client.js.map 清理行
 // （产物 sourceMap 在 .client-build/）。以下原始注释照搬，描述的是同一套机制。
 //
 // Wrap the tsc-compiled CommonJS client program into the DSH browser loader
@@ -12,6 +12,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, posix } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+const { name } = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'))
 const root = dirname(fileURLToPath(new URL('../package.json', import.meta.url)))
 const buildDir = join(root, '.client-build')
 const outputPath = join(root, 'lib', 'client.js')
@@ -81,7 +82,7 @@ const modules = order
   .join('\n')
 
 const wrapped = [
-  'window.__ModuleLoader__.load({ id: "dsh-zcode-executor", factory: (require) => {',
+  `window.__ModuleLoader__.load({ id: ${JSON.stringify(name)}, factory: (require) => {`,
   'var __modules = {};',
   modules,
   'var __cache = {};',

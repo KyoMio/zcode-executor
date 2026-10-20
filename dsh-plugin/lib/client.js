@@ -1,4 +1,4 @@
-window.__ModuleLoader__.load({ id: "dsh-zcode-executor", factory: (require) => {
+window.__ModuleLoader__.load({ id: "zcode-executor", factory: (require) => {
 var __modules = {};
 __modules["client/reducer.js"] = function (require, module, exports) {
 "use strict";

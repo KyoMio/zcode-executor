@@ -9,4 +9,6 @@
     # host 半边：watch 子进程管理与 stream/snapshot/repo 路由（Task 3 起）；
     # 浏览器半边（右栏「zcode 任务」面板）经 package.json 的 dsh.client 发现。
     - id: zcode-executor
-      name: dsh-zcode-executor
+      # name 是加载器 import 的模块名，必须是 npm 包名（d3cee88 上移定义后曾漏改成
+      # 旧包名 dsh-zcode-executor，导致插件行加载不到、状态一直「未运行」）。
+      name: zcode-executor
