@@ -18,7 +18,7 @@ const targets = [
     { file, label: '版本徽章', pattern: /badge\/version-v\d+\.\d+\.\d+[^"'\s]*-/, replace: `badge/version-v${version}-` },
     { file, label: '徽章 alt', pattern: /alt="v\d+\.\d+\.\d+[^"]*"/, replace: `alt="v${version}"` },
   ]),
-  ...['.claude-plugin/plugin.json', '.codex-plugin/plugin.json', '.github/plugin/plugin.json', '.grok-plugin/plugin.json', 'gemini-extension.json'].map((file) => ({
+  ...['.claude-plugin/plugin.json', '.codex-plugin/plugin.json', '.github/plugin/plugin.json', '.grok-plugin/plugin.json', '.antigravity-plugin/plugin.json', 'gemini-extension.json'].map((file) => ({
     file, label: 'version 字段', pattern: /"version": "[^"]+"/, replace: `"version": "${version}"`,
   })),
   { file: 'plugin.yaml', label: 'version 字段', pattern: /^version: .+$/m, replace: `version: ${version}` },

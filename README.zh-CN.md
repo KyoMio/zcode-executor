@@ -119,7 +119,7 @@ gemini extensions install https://github.com/kyomio/zcode-executor
 
 ### Antigravity
 
-Antigravity 就是改名的 Gemini CLI（`agy`），复用同一份扩展清单。
+Antigravity（`agy`）读原生 `.antigravity-plugin/plugin.json`，`skills/` 目录自动加载。
 
 ```bash
 agy plugin install https://github.com/kyomio/zcode-executor

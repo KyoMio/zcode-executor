@@ -14,6 +14,7 @@ const VERSIONED_JSON = [
   '.claude-plugin/plugin.json',
   '.codex-plugin/plugin.json',
   '.grok-plugin/plugin.json',
+  '.antigravity-plugin/plugin.json',
   '.github/plugin/plugin.json',
   'gemini-extension.json',
 ];
@@ -32,7 +33,7 @@ test('plugin.yaml 的 version: 行等于 package.json 的版本', () => {
 });
 
 test('package.json 的 files 覆盖每一个新增的适配文件或其所在目录', () => {
-  for (const entry of ['gemini-extension.json', '.grok-plugin', '.github/plugin', 'plugin.yaml', '__init__.py', 'hooks', 'types']) {
+  for (const entry of ['gemini-extension.json', '.grok-plugin', '.antigravity-plugin', '.github/plugin', 'plugin.yaml', '__init__.py', 'hooks', 'types']) {
     assert.ok(pkg.files.includes(entry), `files 数组应包含 ${entry}，不加就发不进 npm 包`);
   }
   assert.deepEqual(pkg.pi, { skills: ['./skills'] });
@@ -41,7 +42,7 @@ test('package.json 的 files 覆盖每一个新增的适配文件或其所在目
 
 test('新清单的关键字段照抄 .claude-plugin/plugin.json', () => {
   const base = JSON.parse(read('.claude-plugin/plugin.json'));
-  for (const file of ['.github/plugin/plugin.json', '.grok-plugin/plugin.json']) {
+  for (const file of ['.github/plugin/plugin.json', '.grok-plugin/plugin.json', '.antigravity-plugin/plugin.json']) {
     const manifest = JSON.parse(read(file));
     for (const key of ['name', 'description', 'author', 'repository', 'homepage', 'license', 'keywords']) {
       assert.deepEqual(manifest[key], base[key], `${file} 的 ${key} 应照抄 .claude-plugin/plugin.json`);

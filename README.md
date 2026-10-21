@@ -131,7 +131,7 @@ gemini extensions install https://github.com/kyomio/zcode-executor
 
 ### Antigravity
 
-Antigravity is Gemini CLI under its new name (`agy`) and reuses the same extension manifest.
+Antigravity (`agy`) loads the native `.antigravity-plugin/plugin.json`; skills under `skills/` load automatically.
 
 ```bash
 agy plugin install https://github.com/kyomio/zcode-executor

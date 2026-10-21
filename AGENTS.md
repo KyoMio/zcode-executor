@@ -34,7 +34,7 @@ Claude Code 插件。Claude 当工头：把一件想清楚的开发任务派给�
 ## 发版
 
 版本号只在 `package.json` 里改，其余位置（两份 README 的版本徽章、`.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、
-`.github/plugin/plugin.json`、`.grok-plugin/plugin.json`、`gemini-extension.json`、`plugin.yaml`）由 `scripts/sync-doc-version.mjs` 同步，
+`.github/plugin/plugin.json`、`.grok-plugin/plugin.json`、`.antigravity-plugin/plugin.json`、`gemini-extension.json`、`plugin.yaml`）由 `scripts/sync-doc-version.mjs` 同步，
 挂在 npm 的 `version` 生命周期脚本上；`npm test` 里的 `--check` 漏同步就挂。文档里的标记挪了位置要改那个脚本，找不到标记它直接非零退出。
 两份 README 测试徽章里的用例数不在同步范围，用例数变了要手改（还有 README「开发」一节和本文件开头的状态行）。
 
