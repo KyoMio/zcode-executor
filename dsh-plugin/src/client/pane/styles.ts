@@ -53,11 +53,15 @@ export const PANE_CSS = `
   align-items: center;
   gap: 6px;
   padding: 10px 16px 8px;
+  flex-wrap: wrap; /* 侧栏窄时计数与时钟整体换行，不挤扁 chip（文字竖排的根因） */
+  row-gap: 6px;
   background: var(--dsw-alias-bg-layer-1);
   border-bottom: 1px solid var(--dsw-alias-border-l1);
 }
 .zxe-count {
   display: inline-flex;
+  flex: none; /* 不参与压缩：压缩会把「待处理 1」挤成竖排 */
+  white-space: nowrap;
   align-items: center;
   gap: 5px;
   padding: 1px 8px 1px 6px;
@@ -79,6 +83,8 @@ export const PANE_CSS = `
 .zxe-live {
   margin-left: auto;
   display: inline-flex;
+  flex: none;
+  white-space: nowrap;
   align-items: center;
   gap: 6px;
   color: var(--dsw-alias-label-tertiary);
