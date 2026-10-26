@@ -2,6 +2,13 @@
 
 写的是当时的情况。文件、版本、命令用之前先确认还在。
 
+## 3.16.3 核对（2026-10-26，App 3.16.3 / CLI 0.17.0，零 token）
+
+- 升级核对，不需要改代码。`doctor` 五步全过（选中账号型团队版 key）。`scripts/probe.mjs` 未跑（协议面无差异）。
+- 源码核对 zcode.cjs：依赖的方法全在——`session/create|send|subscribe|stop|close|list|resume|fork|setMode`、`workspace/generateText|cancelGenerateText`、`v4/command|commands/query`、`interaction/requestPermission|requestUserInput|requestProviderRuntimeHeaders`；`turn.completed` 与 `resultType` 枚举（success/cancelled/error_max_turns/error_max_budget/error_during_execution/error_max_tool_calls）一字未变。线 D（v4 迁移）触发条件未出现。
+- 新增的全是 v4 扩展（`v4/attachment/*`、`v4/conversation/subscribe|resync|usage`、`v4/offPeak/lifecycle`、`workspace/hooks/trustGrant`、`session/compact|messages|read|goal|subagents|usage` 等），旧接口没删。`v4/conversation/subscribe` 出现——线 D 备料更全。
+- 花额度回合未跑；完整闲时投递未在新版重跑，`OFFPEAK_VERIFIED_APP` 保持 3.14.1。
+
 ## 3.15.3 核对（2026-10-14，App 3.15.3 / CLI 0.16.9，零 token）
 
 - 升级核对，不需要改代码。`doctor` 五步全过（选中账号型个人版）；`scripts/probe.mjs` 全绿（握手、create/subscribe/list/resume/close，与 3.14.5 结果一致）。`npm test` 803/803。
