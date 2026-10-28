@@ -8,7 +8,7 @@
 
 <p align="center">A plugin for Claude Code and other coding agents that hands a well-specified development task to the local <a href="https://zcode.z.ai">ZCode</a> agent (GLM), runs it in an isolated git worktree, guards every write with a hard-rule check plus a model-based review, and lets you verify the result with <code>git diff</code> and tests instead of trusting the agent's own report.</p>
 
-<p align="center"><img src="https://img.shields.io/badge/version-v0.6.0-5B4CF0" alt="v0.6.0"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-815%20passing-brightgreen" alt="Tests"></p>
+<p align="center"><img src="https://img.shields.io/badge/version-v0.6.0-5B4CF0" alt="v0.6.0"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-817%20passing-brightgreen" alt="Tests"></p>
 
 ## Why
 
@@ -286,6 +286,7 @@ An off-peak send runs the turn on the Coding Plan subscription's free off-peak c
 | `review` | `{enabled, model, thought:"low", fastMaxTokens:300, slowMaxTokens:2000, timeoutMs:60000}` | Model review: on/off, ZCode model (default: the `fast` tier), thought level, token budgets, per-call timeout |
 | `review.jev.apiKey` | absent | A non-blank key enables Jev pre-screening ahead of ZCode `fast` + `review.thought` (default `low`); absent or all-whitespace keeps the original ZCode chain |
 | `review.jev.proxy` | absent | Optional `http(s)://` proxy URL (userinfo allowed, sent as Basic `Proxy-Authorization`). Jev HTTPS requests then go through this proxy's CONNECT tunnel. Ignored when `review.jev.apiKey` is absent |
+| `review.jev.model` | `jev-latest` | Optional Jev model ID or alias. The screening threshold and schema were tuned against `jev-1.13.0`; pinning to a version restores the old behavior |
 | `environment` / `sensitive` | `[]` | Extra facts and sensitive locations shown to ZCode review calls (not sent to Jev) |
 
 ### Optional: enable Jev pre-screening
@@ -299,7 +300,7 @@ After hard-rule and allow_once checks
   → ZCode slow review: allow or ask a human
 ```
 
-- Five risk checks cover task-boundary conflicts, writes outside the workspace, credential exposure or sensitive-data exfiltration, destructive/external side effects, and unrelated actions. The current model is pinned to `jev-1.13.0`; all five probabilities must be at most `0.20` for early approval. This is a screening threshold, not a safety guarantee.
+- Five risk checks cover task-boundary conflicts, writes outside the workspace, credential exposure or sensitive-data exfiltration, destructive/external side effects, and unrelated actions. The model defaults to the `jev-latest` alias (configurable via `review.jev.model`); all five probabilities must be at most `0.20` for early approval. This is a screening threshold, not a safety guarantee.
 - Write/Edit/MultiEdit bodies are not sent to Jev; these actions currently skip pre-screening locally. Missing intent, truncated required input, or credentials that cannot be reliably redacted also cause a local skip, with **no Jev HTTP request**. Command complexity alone is not a reason to skip.
 - Jev flags, timeouts, network errors, and invalid responses go to the original ZCode fast screen—not directly to denial or mandatory slow review. A failed ZCode fast-screen call still asks a human.
 - Early passes can save subsequent review calls; other requests add serial latency. Jev currently has a 10-second total budget, separate from ZCode's `review.timeoutMs`. Actual speed and cost benefits depend on the pass rate.
@@ -382,7 +383,7 @@ Newly started runners read the configuration; existing runners do not hot-reload
 ## Development
 
 ```bash
-npm test          # 815 cases against a scripted mock app-server and mock off-peak server, plus a doc-version drift check; no tokens spent
+npm test          # 817 cases against a scripted mock app-server and mock off-peak server, plus a doc-version drift check; no tokens spent
 node --check lib/**/*.mjs
 ```
 

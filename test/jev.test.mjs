@@ -61,6 +61,7 @@ function makeScreen(replies, options = {}) {
   };
   const screen = createJevFastScreen({
     apiKey: options.apiKey ?? 'jev_test_secret_123456',
+    ...(options.model === undefined ? {} : { model: options.model }),
     fetchImpl,
     now: clock.now,
     sleep: clock.sleep,
@@ -105,7 +106,7 @@ test('请求只发送固定 state schema 与恰好五个 Noul', async () => {
   assert.ok(calls[0].init.signal instanceof AbortSignal);
 
   const request = JSON.parse(calls[0].init.body);
-  assert.equal(request.model, 'jev-1.13.0');
+  assert.equal(request.model, 'jev-latest'); // D25：缺省别名；validBody 回显 jev-1.13.0 属「别名解析」
   assert.deepEqual(Object.keys(request.state), ['intent', 'action']);
   assert.deepEqual(Object.keys(request.state.intent), ['taskContract', 'recentMessages']);
   assert.deepEqual(Object.keys(request.state.action), ['tool', 'arguments']);
@@ -356,14 +357,39 @@ test('响应 questions 必须恰好匹配且每项为有限范围内 Noul', asyn
   }
 });
 
-test('响应模型严格 pin，requestId 必须安全且不回显已知秘密', async () => {
+test('响应模型校验：别名请求接受别名回显与解析版本，钉版本严格一致（D25）', async () => {
+  // 非 jev 的 model 一律非法
   const wrong = makeScreen([response(validBody(0, { model: 'other-model' }))]);
   assert.equal((await wrong.screen(baseAction, baseContext)).metadata.errorCode, 'invalid_response');
+
+  // 默认别名 jev-latest：回显别名或解析出的版本号都接受（validBody 回显 jev-1.13.0 即后者）
+  const echo = makeScreen([response(validBody(0, { model: 'jev-latest' }))]);
+  assert.equal((await echo.screen(baseAction, baseContext)).decision, 'pass');
+  const resolved = makeScreen([response(validBody(0, { model: 'jev-1.14.0' }))]);
+  assert.equal((await resolved.screen(baseAction, baseContext)).decision, 'pass');
+
+  // 钉版本号：响应必须是同一版本，别的版本拒绝（保留 pin 的校准语义）
+  const pinned = (replies) => makeScreen(replies, { model: 'jev-1.13.0' });
+  assert.equal((await pinned([response(validBody(0, { model: 'jev-1.13.0' }))]).screen(baseAction, baseContext)).decision, 'pass');
+  assert.equal((await pinned([response(validBody(0, { model: 'jev-1.14.0' }))]).screen(baseAction, baseContext)).metadata.errorCode, 'invalid_response');
+
+  // requestId 必须安全且不回显已知秘密
   for (const id of ['bad\nvalue', 'x'.repeat(129), 'jev_test_secret_123456', 'prefix_CONTEXT_SECRET_suffix']) {
     const { screen } = makeScreen([response(validBody(), { headers: { 'x-typesafe-request-id': id } })]);
     const result = await screen(baseAction, { ...baseContext, knownSecrets: ['CONTEXT_SECRET'] });
     assert.equal(result.decision, 'pass');
     assert.equal('requestId' in result.metadata, false);
+  }
+});
+
+test('model 参数进入请求体；空白 model 拒绝构造（D25）', async () => {
+  const { screen, calls } = makeScreen([response(validBody(0, { model: 'jev-1.14.0' }))], { model: 'jev-1.14.0' });
+  const result = await screen(baseAction, baseContext);
+  assert.equal(result.decision, 'pass');
+  assert.equal(JSON.parse(calls[0].init.body).model, 'jev-1.14.0');
+  assert.equal(result.metadata.reviewModel, 'jev-1.14.0'); // 成功路径报实际答题版本
+  for (const bad of ['', '   ', 123]) {
+    assert.throws(() => createJevFastScreen({ apiKey: 'k', model: bad }), TypeError);
   }
 });
 
@@ -452,7 +478,7 @@ test('401/422 不重试；错误 metadata 不含 key、state 或 body', async ()
       outcome: 'error',
       metadata: {
         reviewer: 'jev',
-        reviewModel: 'jev-1.13.0',
+        reviewModel: 'jev-latest', // 错误路径报配置值（D25 缺省别名）
         reviewSchema: 'approval-v2',
         requestId: 'req_err',
         attempts: 1,

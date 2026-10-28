@@ -296,3 +296,21 @@ test('loadConfig：review.jev.proxy 非法时拒绝且不回显可能含凭据�
     });
   }
 });
+
+test('loadConfig：review.jev.model 接受非空字符串并 trim；空白与对象拒绝（D25）', async () => {
+  const home = await tmp('zcode-config-jev-');
+  const configPath = path.join(home, 'config.json');
+  await writeFile(configPath, JSON.stringify({ review: { jev: { apiKey: 'k', model: ' jev-1.14.0 ' } } }), { mode: 0o600 });
+  assert.equal(loadConfig(home).review.jev.model, 'jev-1.14.0');
+
+  for (const bad of ['', '   ', 123]) {
+    await writeFile(configPath, JSON.stringify({ review: { jev: { apiKey: 'k', model: bad } } }), { mode: 0o600 });
+    assert.throws(() => loadConfig(home), (err) => err instanceof ExecutorError && /review\.jev\.model/.test(err.message));
+  }
+
+  // 只配 model 不配 key：与 proxy 同一提醒口径
+  await writeFile(configPath, JSON.stringify({ review: { jev: { model: 'jev-latest' } } }), { mode: 0o600 });
+  const modelOnly = loadConfig(home);
+  assert.equal(modelOnly.review.jev.apiKey, undefined);
+  assert.ok(modelOnly.warnings.some((warning) => warning.includes('review.jev.model') && warning.includes('apiKey')));
+});

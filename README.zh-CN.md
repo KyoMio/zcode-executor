@@ -8,7 +8,7 @@
 
 <p align="center">一个 Claude Code 等多个编码代理都能用的插件：把一件想清楚的开发任务派给本机的 <a href="https://zcode.z.ai">ZCode</a>（GLM）执行，在隔离的 git worktree 里跑，每一次写操作都过「红线 + 模型审批」两道闸，最后用 <code>git diff</code> 和测试验收，而不是听执行端的自述。</p>
 
-<p align="center"><img src="https://img.shields.io/badge/version-v0.6.0-5B4CF0" alt="v0.6.0"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-815%20passing-brightgreen" alt="Tests"></p>
+<p align="center"><img src="https://img.shields.io/badge/version-v0.6.0-5B4CF0" alt="v0.6.0"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-817%20passing-brightgreen" alt="Tests"></p>
 
 ## 为什么
 
@@ -274,6 +274,7 @@ Claude 投递时面板会自动打开；状态栏汇总「N 个回合执行中�
 | `review` | `{enabled, model, thought:"low", fastMaxTokens:300, slowMaxTokens:2000, timeoutMs:60000}` | 模型审批：开关、ZCode 模型（默认 `fast` 档）、思考等级、两段预算、单次超时 |
 | `review.jev.apiKey` | 未配置 | 非空白 key 在 ZCode `fast` + `review.thought`（默认 `low`）前启用 Jev 前筛；缺失或全空白时保留原 ZCode 链 |
 | `review.jev.proxy` | 未配置 | 可选 `http(s)://` 代理地址（可带 `user:pass@`，以 Basic `Proxy-Authorization` 发送）。配置后 Jev 的 HTTPS 请求经该代理 CONNECT 隧道发出；未配 `review.jev.apiKey` 时不生效 |
+| `review.jev.model` | `jev-latest` | 可选 Jev 模型 ID 或别名。筛选阈值与 schema 是按 `jev-1.13.0` 定的；钉版本号可回到旧行为 |
 | `environment` / `sensitive` | `[]` | 给 ZCode 模型审批看的环境说明与敏感位置（不发送给 Jev） |
 
 ### 可选：启用 Jev 前筛
@@ -287,7 +288,7 @@ Claude 投递时面板会自动打开；状态栏汇总「N 个回合执行中�
   → ZCode 慢判：放行或转人工
 ```
 
-- 前筛检查五类风险：任务边界冲突、工作目录外写入、凭据暴露或敏感数据外发、破坏性或外部副作用、与任务无关的操作。当前固定 `jev-1.13.0`，五项概率均不高于 `0.20` 才可能提前通过；这是筛选阈值，不是安全保证。
+- 前筛检查五类风险：任务边界冲突、工作目录外写入、凭据暴露或敏感数据外发、破坏性或外部副作用、与任务无关的操作。模型缺省 `jev-latest` 别名（可经 `review.jev.model` 指定），五项概率均不高于 `0.20` 才可能提前通过；这是筛选阈值，不是安全保证。
 - Write/Edit/MultiEdit 的正文不发给 Jev，当前这类动作直接本地跳过前筛。缺少有效意图、必要输入被截断或无法可靠脱敏时也跳过，**不产生 Jev HTTP 请求**。命令复杂本身不是跳过理由。
 - Jev 标记风险、超时、网络错误或响应非法，都交给原 ZCode 快筛，而不是直接拒绝或强制慢判。原快筛调用失败仍转人工。
 - Jev 通过可省掉后续审批；未通过则多一段串行等待。Jev 当前总预算为 10 秒，独立于配置中的 ZCode `review.timeoutMs`；速度和费用收益取决于实际通过率。
@@ -370,7 +371,7 @@ zcode-executor doctor --json
 ## 开发
 
 ```bash
-npm test          # 815 个用例对剧本驱动的 mock app-server 与 mock 闲时服务跑，外加文档版本号一致性检查；不花 token
+npm test          # 817 个用例对剧本驱动的 mock app-server 与 mock 闲时服务跑，外加文档版本号一致性检查；不花 token
 node --check lib/**/*.mjs
 ```
 

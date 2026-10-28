@@ -59,11 +59,13 @@ try {
   const complete = createComplete({ client, workspace, selection, onRaw: (raw) => raws.push(raw) });
   const jevApiKey = config.review?.jev?.apiKey;
   const jevProxy = config.review?.jev?.proxy;
+  const jevModel = config.review?.jev?.model;
   const fastScreen = jevApiKey === undefined
     ? undefined
     : createJevFastScreen({
       apiKey: jevApiKey,
       knownSecrets: secrets,
+      ...(jevModel === undefined ? {} : { model: jevModel }),
       ...(jevProxy === undefined ? {} : { fetchImpl: createProxyFetch(jevProxy) }),
     });
   const review = createReview(complete, { fastScreen });
