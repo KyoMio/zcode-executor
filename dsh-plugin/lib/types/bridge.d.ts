@@ -38,10 +38,12 @@ export interface ZenRemoteSlice {
     };
 }
 /**
- * 本包版本，运行时读 package.json（不写死）：桥的两端按「plugin + version + 声明摘要」
- * 三者一致才算桥上，版本对不上子客户端就回未桥接。读不到（产物被单独拷走等极端情况）
- * 给 '0.0.0'——登记会被 zen-remote 判 version-mismatch 而不桥上，好过写死一个会过期
- * 的版本号骗两端握手。
+ * 本包版本，运行时读包根 package.json（不写死）：桥的两端按「plugin + version + 声明摘要」
+ * 三者一致才算桥上，版本对不上子客户端就回未桥接。路径上跳两级到包根——npm 包只发
+ * dsh-plugin/lib，dsh-plugin/package.json 不在 tarball 里，读它会 ENOENT 回退 '0.0.0'，
+ * 桥被 zen-remote 判 version-mismatch（2026-10-28 实机踩坑）；skill-link.ts 定包根同款。
+ * 读不到（产物被单独拷走等极端情况）给 '0.0.0'——登记会被 zen-remote 判 version-mismatch
+ * 而不桥上，好过写死一个会过期的版本号骗两端握手。
  */
 export declare const PACKAGE_VERSION: string;
 /**

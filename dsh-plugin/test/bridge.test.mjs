@@ -61,8 +61,8 @@ test('声明内容：三条路由，stream/snapshot 是 server 级（stream 标�
   ]);
 });
 
-test('版本取自 package.json（运行时读，不写死）：PACKAGE_VERSION 与包文件一致，声明缺省带上它', () => {
-  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+test('版本取自包根 package.json（npm 包只发 dsh-plugin/lib，须上跳两级）：PACKAGE_VERSION 与包根版本一致，声明缺省带上它', () => {
+  const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
   assert.equal(PACKAGE_VERSION, pkg.version);
   assert.equal(bridgeDeclaration().version, pkg.version);
 });
