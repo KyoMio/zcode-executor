@@ -126,7 +126,7 @@ Claude Code 负责想清楚一件开发任务，本机 ZCode（GLM）负责把�
   `doctor` 握手时把返回的 `settings.model.available` 里 `zcode-executor` 名下的模型和本地清单比对，缺的进警告。`config.json` 的 `tiers` 可覆盖。不按模型名写死，模型换代不用改代码。
 - **provider 优先账号型个人版 coding plan，其次账号型团队版，再次 `config.json` 里的 coding plan**（配置 `preferredProvider` 可改，如 `account:bigmodel-team-coding-plan`），国内 `bigmodel` 与国际 `zai` 站点哪个登录用哪个。
 - **不给 `--tier`** 用 `fast` 档，没有 `fast` 才用 `strong`。
-- **派活的思考等级默认 `high`**，模型没有 `high` 档就不传，跟模型默认。`--thought` 可覆盖。ZCode 模型审批默认 `low`，配置 `review.thought` 可改；若配置里有非空白 `review.jev.apiKey`，原快筛之前增加 Jev 前筛，ZCode 快筛与慢判仍用该思考等级。
+- **派活的思考等级默认 `high`**，模型没有 `high` 档就不传，跟模型默认。`--thought` 可覆盖。ZCode 模型审批默认 `low`，配置 `review.thought` 可改；若配置里有非空白 `review.jev.apiKey`，原快筛之前增加 Jev 前筛，ZCode 快筛与慢判仍用该思考等级。Jev 请求可配 `review.jev.proxy` 走 http(s) 代理（D24），不配 apiKey 时代理不生效。
 - **档位只有 `build`**。不开 `--mode`。
 - **`--deny`** 默认不拿掉任何工具。
 

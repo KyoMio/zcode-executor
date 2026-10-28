@@ -261,3 +261,38 @@ test('loadConfig：review.jev 与 apiKey 类型错误时拒绝且错误不序列
     return true;
   });
 });
+
+test('loadConfig：review.jev.proxy 接受 http(s) 地址并归一化；只配代理不配 key 时提醒不生效', async () => {
+  const home = await tmp('zcode-config-jev-');
+  const configPath = path.join(home, 'config.json');
+  await writeFile(configPath, JSON.stringify({
+    review: { jev: { apiKey: 'jev_proxy_secret', proxy: ' http://user:pass@127.0.0.1:8080 ' } },
+  }), { mode: 0o600 });
+
+  const config = loadConfig(home);
+  assert.equal(config.review.jev.proxy, 'http://user:pass@127.0.0.1:8080/');
+  assert.equal(config.warnings.some((warning) => warning.includes('review.jev')), false); // proxy 是认识的新键
+
+  // 只有代理没有 key：Jev 未启用，提醒代理不会使用（D24 启用契约不变）
+  await writeFile(configPath, JSON.stringify({ review: { jev: { proxy: 'http://127.0.0.1:8080' } } }), { mode: 0o600 });
+  const proxyOnly = loadConfig(home);
+  assert.equal(proxyOnly.review.jev.apiKey, undefined);
+  assert.equal(proxyOnly.review.jev.proxy, 'http://127.0.0.1:8080/');
+  assert.ok(proxyOnly.warnings.some((warning) =>
+    warning.includes('review.jev.proxy') && warning.includes('apiKey')));
+});
+
+test('loadConfig：review.jev.proxy 非法时拒绝且不回显可能含凭据的原值', async () => {
+  const home = await tmp('zcode-config-jev-');
+  const configPath = path.join(home, 'config.json');
+  for (const bad of [123, '   ', 'socks5://user:secret@127.0.0.1:1080']) {
+    await writeFile(configPath, JSON.stringify({ review: { jev: { apiKey: 'k', proxy: bad } } }), { mode: 0o600 });
+    assert.throws(() => loadConfig(home), (err) => {
+      assert.ok(err instanceof ExecutorError);
+      assert.equal(err.exitCode, 1);
+      assert.match(err.message, /review\.jev\.proxy/);
+      assert.equal(err.message.includes('secret'), false);
+      return true;
+    });
+  }
+});

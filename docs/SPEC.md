@@ -263,6 +263,7 @@ Jev 快筛：
 ### Jev 可选快筛
 
 - 启用契约只有一个：`~/.zcode-executor/config.json` 的 `review.jev.apiKey` 是非空白字符串（校验是否全空白，但传给 Authorization 时保留原值，不擅自改写密钥）；字段缺失或全空白字符串按未配置处理。环境变量不作为 Jev key 来源，避免来源优先级与 detached runner 继承差异。
+- `review.jev.proxy`（可选，D24）：非空 `http://` 或 `https://` 代理地址（可含 userinfo，走 Basic Proxy-Authorization）。配置后 Jev 的 HTTPS 请求经该代理的 CONNECT 隧道发出（`lib/review/proxy-fetch.mjs` 零依赖自实现；不使用环境变量代理——它在进程启动时才解析，detached runner 继承不可靠，且会漏给 app-server 子进程）。不改变启用契约：没有 `apiKey` 时 Jev 不启用、代理不使用，`loadConfig` 给 warning。socks 代理不支持。代理地址只在 `loadConfig` 校验形状，不校验可达性；代理不通按网络错误走既有重试与回退。
 - key 存在时，Jev 作为可选前筛，不替代原 ZCode fast + low 快筛。Jev pass 提前放行；其他结果进入原快筛，未通过再进入慢判。无 shadow、无并发竞速。key 不存在时原链路完全不变。
 - `config.json` 含 Jev key 时必须是普通文件且权限不宽于 `0600`（属主可读写，group/world 无权限）；权限过宽、符号链接或文件所有者不是当前 uid 时，`loadConfig` 以退出码 1 拒绝启动并只报告路径与修复方法，不回显 key。实现不能用“先 lstat、再按路径 read”的易竞态检查作为安全保证：发现 key 后须以 `O_NOFOLLOW` 重新打开，按同一 fd 的 `fstat` 校验并读取权威内容。无 Jev key 的既有配置不新增权限门槛。写配置的文档和示例一律要求 `chmod 600`；本项目若将来提供写配置命令，必须原子写并显式设 `0600`。
 - 顺序：红线 → `allow_once` 检查 → 可选 Jev 前筛 → 原 ZCode 快筛 → 必要时慢判 → 挂起。Jev flag/error/skip/adapter 异常全部进入原快筛；原快筛收到原 action/context，不接受 Jev 概率引导。原快筛调用失败仍 review-failed/ask，结果未通过才进入慢判，慢判出口不变。

@@ -8,7 +8,7 @@
 
 <p align="center">一个 Claude Code 等多个编码代理都能用的插件：把一件想清楚的开发任务派给本机的 <a href="https://zcode.z.ai">ZCode</a>（GLM）执行，在隔离的 git worktree 里跑，每一次写操作都过「红线 + 模型审批」两道闸，最后用 <code>git diff</code> 和测试验收，而不是听执行端的自述。</p>
 
-<p align="center"><img src="https://img.shields.io/badge/version-v0.5.7-5B4CF0" alt="v0.5.7"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-806%20passing-brightgreen" alt="Tests"></p>
+<p align="center"><img src="https://img.shields.io/badge/version-v0.5.7-5B4CF0" alt="v0.5.7"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-815%20passing-brightgreen" alt="Tests"></p>
 
 ## 为什么
 
@@ -273,6 +273,7 @@ Claude 投递时面板会自动打开；状态栏汇总「N 个回合执行中�
 | `tiers` | 按名字自动分 | 手动指定 `fast` / `strong` 的模型 |
 | `review` | `{enabled, model, thought:"low", fastMaxTokens:300, slowMaxTokens:2000, timeoutMs:60000}` | 模型审批：开关、ZCode 模型（默认 `fast` 档）、思考等级、两段预算、单次超时 |
 | `review.jev.apiKey` | 未配置 | 非空白 key 在 ZCode `fast` + `review.thought`（默认 `low`）前启用 Jev 前筛；缺失或全空白时保留原 ZCode 链 |
+| `review.jev.proxy` | 未配置 | 可选 `http(s)://` 代理地址（可带 `user:pass@`，以 Basic `Proxy-Authorization` 发送）。配置后 Jev 的 HTTPS 请求经该代理 CONNECT 隧道发出；未配 `review.jev.apiKey` 时不生效 |
 | `environment` / `sensitive` | `[]` | 给 ZCode 模型审批看的环境说明与敏感位置（不发送给 Jev） |
 
 ### 可选：启用 Jev 前筛
@@ -304,6 +305,19 @@ Claude 投递时面板会自动打开；状态栏汇总「N 个回合执行中�
   "review": {
     "jev": {
       "apiKey": "jev_请替换为你自己的密钥"
+    }
+  }
+}
+```
+
+可选：如果 Jev 端点直连不通、需要走代理，在同一个 `review.jev` 里加 `proxy`。支持 `http://` 或 `https://` 地址与 `user:pass@` 凭据；只有 Jev 的 HTTPS 请求走它，ZCode 派单链路与 app-server 的流量不受影响。不支持 `socks5://`：
+
+```json
+{
+  "review": {
+    "jev": {
+      "apiKey": "jev_请替换为你自己的密钥",
+      "proxy": "http://127.0.0.1:7890"
     }
   }
 }
@@ -356,7 +370,7 @@ zcode-executor doctor --json
 ## 开发
 
 ```bash
-npm test          # 806 个用例对剧本驱动的 mock app-server 与 mock 闲时服务跑，外加文档版本号一致性检查；不花 token
+npm test          # 815 个用例对剧本驱动的 mock app-server 与 mock 闲时服务跑，外加文档版本号一致性检查；不花 token
 node --check lib/**/*.mjs
 ```
 

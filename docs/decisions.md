@@ -447,3 +447,18 @@ runner 起来时已经推了表，registry 里的模型清单与 readState 一�
   登记簿格式要改、旧记录也没有这个字段，等现查成为瓶颈再做。
 - D23 留下的：`ApplyPatch` 的路径提取（等真机抓到补丁格式）；硬链接越界；宿主凭据环境变量名单做成可配置（有人因为少了 `GITHUB_TOKEN` 跑不通再说）；
   审批探针改用不比对内容的管道命令（`diff-files` / `diff-index` / `ls-files`）并处理子模块，彻底不让仓库配置借它跑程序。
+
+## D24 Jev 快筛可配代理：`review.jev.proxy`，CONNECT 隧道自实现，不走环境变量代理
+
+定了什么（2026-10-28，用户要求给 Jev 请求加代理）：`~/.zcode-executor/config.json` 的 `review.jev.proxy`（非空 `http://`/`https://` URL，
+可含 userinfo 走 Basic Proxy-Authorization）配置后，Jev 快筛的 HTTP 请求经该代理的 CONNECT 隧道发出。实现是 `lib/review/proxy-fetch.mjs`
+零依赖自实现（`http.request` 发 CONNECT、隧道上套目标 TLS、`http(s).request` 的 `createConnection` 接管隧道 socket），包成 jev.mjs
+fetchImpl seam 需要的最小 Response。启用契约不变：仍只有非空白 `review.jev.apiKey` 启用 Jev；只配代理不配 key 时 `loadConfig` 给
+warning、代理不使用。deadline、重试、skip 与 ZCode 回退逻辑不变；代理不通按 network_error 走既有重试后回退。
+
+为什么：Jev 端点在境外，直连不稳定。不用 `NODE_USE_ENV_PROXY`：它只在进程启动时解析 env（undici 官方文档，Node ≥22.21 才有），
+detached runner 的 env 继承不可靠（与 D15 的 key 同理走 config.json），且代理 env 经 spawn 传下去会漏给 app-server 子进程，改变派单
+主链路的网络行为。零依赖约束（RULES §1）排除 undici `ProxyAgent`。
+
+什么情况下重开：需要 socks 代理或代理侧 mTLS；Node 原生提供运行期可设的 fetch 代理 API；Jev 之外的出站请求也需要代理时，把
+proxy-fetch 提升为工作流层共用模块。测试未覆盖 https 目标的隧道内 TLS 握手（零依赖下无法在测试里自签证书），真机验证后补 verified.md。

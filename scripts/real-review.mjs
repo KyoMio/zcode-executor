@@ -15,6 +15,7 @@ import { EXECUTOR_PROVIDER_ID, pickProvider, writePersonalProviderFile } from '.
 import { AppServerClient } from '../lib/appserver.mjs';
 import { createComplete } from '../lib/review/complete.mjs';
 import { createJevFastScreen } from '../lib/review/jev.mjs';
+import { createProxyFetch } from '../lib/review/proxy-fetch.mjs';
 import { createReview } from '../lib/review/run.mjs';
 
 const note = (msg) => process.stderr.write(`real-review: ${msg}\n`);
@@ -57,9 +58,14 @@ try {
   const raws = [];
   const complete = createComplete({ client, workspace, selection, onRaw: (raw) => raws.push(raw) });
   const jevApiKey = config.review?.jev?.apiKey;
+  const jevProxy = config.review?.jev?.proxy;
   const fastScreen = jevApiKey === undefined
     ? undefined
-    : createJevFastScreen({ apiKey: jevApiKey, knownSecrets: secrets });
+    : createJevFastScreen({
+      apiKey: jevApiKey,
+      knownSecrets: secrets,
+      ...(jevProxy === undefined ? {} : { fetchImpl: createProxyFetch(jevProxy) }),
+    });
   const review = createReview(complete, { fastScreen });
   const action = {
     toolName: 'Write',

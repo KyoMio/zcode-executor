@@ -8,7 +8,7 @@
 
 <p align="center">A plugin for Claude Code and other coding agents that hands a well-specified development task to the local <a href="https://zcode.z.ai">ZCode</a> agent (GLM), runs it in an isolated git worktree, guards every write with a hard-rule check plus a model-based review, and lets you verify the result with <code>git diff</code> and tests instead of trusting the agent's own report.</p>
 
-<p align="center"><img src="https://img.shields.io/badge/version-v0.5.7-5B4CF0" alt="v0.5.7"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-806%20passing-brightgreen" alt="Tests"></p>
+<p align="center"><img src="https://img.shields.io/badge/version-v0.5.7-5B4CF0" alt="v0.5.7"> <a href="https://www.npmjs.com/package/zcode-executor"><img src="https://img.shields.io/npm/v/zcode-executor?label=npm" alt="npm"></a> <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"> <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node"> <img src="https://img.shields.io/badge/tests-815%20passing-brightgreen" alt="Tests"></p>
 
 ## Why
 
@@ -285,6 +285,7 @@ An off-peak send runs the turn on the Coding Plan subscription's free off-peak c
 | `tiers` | auto by name | Override which model is `fast` / `strong` |
 | `review` | `{enabled, model, thought:"low", fastMaxTokens:300, slowMaxTokens:2000, timeoutMs:60000}` | Model review: on/off, ZCode model (default: the `fast` tier), thought level, token budgets, per-call timeout |
 | `review.jev.apiKey` | absent | A non-blank key enables Jev pre-screening ahead of ZCode `fast` + `review.thought` (default `low`); absent or all-whitespace keeps the original ZCode chain |
+| `review.jev.proxy` | absent | Optional `http(s)://` proxy URL (userinfo allowed, sent as Basic `Proxy-Authorization`). Jev HTTPS requests then go through this proxy's CONNECT tunnel. Ignored when `review.jev.apiKey` is absent |
 | `environment` / `sensitive` | `[]` | Extra facts and sensitive locations shown to ZCode review calls (not sent to Jev) |
 
 ### Optional: enable Jev pre-screening
@@ -316,6 +317,19 @@ Never put a real key in a command argument, shell environment, checked-in exampl
   "review": {
     "jev": {
       "apiKey": "jev_REPLACE_WITH_YOUR_KEY"
+    }
+  }
+}
+```
+
+Optional: if Jev requests must go through a proxy (e.g. the endpoint is unreachable directly), add `proxy` under the same `review.jev` object. It accepts an `http://` or `https://` proxy URL and supports `user:pass@` credentials. Only Jev's HTTPS calls use it—the ZCode dispatch chain and app-server traffic are unaffected. `socks5://` is not supported:
+
+```json
+{
+  "review": {
+    "jev": {
+      "apiKey": "jev_REPLACE_WITH_YOUR_KEY",
+      "proxy": "http://127.0.0.1:7890"
     }
   }
 }
@@ -368,7 +382,7 @@ Newly started runners read the configuration; existing runners do not hot-reload
 ## Development
 
 ```bash
-npm test          # 806 cases against a scripted mock app-server and mock off-peak server, plus a doc-version drift check; no tokens spent
+npm test          # 815 cases against a scripted mock app-server and mock off-peak server, plus a doc-version drift check; no tokens spent
 node --check lib/**/*.mjs
 ```
 

@@ -59,6 +59,42 @@ test('createConfiguredFastScreen：仅非空 config key 启用，disabled 与无
   assert.equal(calls[0].body.includes('provider-secret'), false);
 });
 
+test('createConfiguredFastScreen：代理只随 key 生效，显式 fetchImpl 优先于代理（D24）', async () => {
+  // 只配代理不配 key：不启用，保持 ZCode fallback
+  assert.equal(createConfiguredFastScreen({ review: { enabled: true, jev: { proxy: 'http://127.0.0.1:1' } } }), undefined);
+
+  // key + 代理（指向必死的端口）+ 显式 fetchImpl：fetchImpl 胜出，代理传输不构造；
+  // 若走错代理这条 fetch 必失败，pass 即证明走的是显式 fetchImpl
+  const ids = [
+    'scope_conflict', 'outside_worktree_write', 'credential_or_exfiltration',
+    'destructive_or_external', 'unrelated_or_gratuitous',
+  ];
+  const calls = [];
+  const fetchImpl = async () => {
+    calls.push(1);
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({
+        model: 'jev-1.13.0',
+        answers: Object.fromEntries(ids.map((id) => [id, { type: 'noul', noul: 0.01 }])),
+      }),
+    };
+  };
+  const screen = createConfiguredFastScreen(
+    { review: { enabled: true, jev: { apiKey: 'k', proxy: 'http://127.0.0.1:1' } } },
+    { fetchImpl },
+  );
+  assert.equal(typeof screen, 'function');
+  const result = await screen(
+    { toolName: 'Bash', args: { command: 'true' }, workspaceRoot: '/w' },
+    { intent: [{ source: 'task', text: 'noop' }] },
+  );
+  assert.equal(result.decision, 'pass');
+  assert.equal(calls.length, 1);
+});
+
 const ZCODE_CONFIG = {
   provider: {
     'builtin:bigmodel': {
