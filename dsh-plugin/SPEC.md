@@ -66,7 +66,7 @@ Claude Code 那边已经有同款观察面板（zcode-executor 的 Claude Code m
 **打包与形态**
 
 - dsh-plugins monorepo 新包 `plugins/dsh-zcode-executor`，bundle 型插件：TypeScript + 仓库既有构建管线（tsc + `build-client.mjs` 内联打包），`lib/` 产物入库；`cordis.patch.yml` 一行 insert，行 id `zcode-executor`。
-- `package.json` 的 `dsh` 字段：`bundle.patch` + `client.platform: "web"` + `exports["./client"]`；peer 范围照仓库约定 `>=0.1.7-rc.2 <0.3.0`（0.3 出来重核）。
+- `package.json` 的 `dsh` 字段：`bundle.patch` + `client.platform: "web"` + `exports["./client"]`；peer 范围照仓库约定 `^0.1.7-rc.2 || ^0.2.0-rc.1 || ^0.2.1-alpha.1 || ^0.2.2-alpha.0`（0.3 出来重核）。
 - v1 只 `link:` 装进 desktop profile 本地使用，不发 npm。
 
 **服务端（Node 半场）**
