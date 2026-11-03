@@ -111,7 +111,9 @@ export function startReloadWatcher(options: ReloadWatcherOptions): ReloadWatcher
  */
 export interface ReloadCtxFace {
   effect(execute: () => unknown, name?: string): unknown
-  on(event: string, listener: (payload?: unknown) => void): unknown
+  // string | symbol: cordis 4.0.6-alpha.2（DSH 0.2.2-alpha.2 起）给 Events 加了 symbol 索引签名，
+  // keyof Events 含 symbol 后，写成 string 的事件参数在方法双变比较下两个方向都不可赋值（TS2345）。
+  on(event: string | symbol, listener: (payload?: unknown) => void): unknown
   fiber?: { restart?: () => Promise<unknown> }
   logger?: { warn?(format: unknown, ...args: unknown[]): void }
 }
