@@ -56,7 +56,7 @@ export declare function startReloadWatcher(options: ReloadWatcherOptions): Reloa
  */
 export interface ReloadCtxFace {
     effect(execute: () => unknown, name?: string): unknown;
-    on(event: string, listener: (payload?: unknown) => void): unknown;
+    on(event: string | symbol, listener: (payload?: unknown) => void): unknown;
     fiber?: {
         restart?: () => Promise<unknown>;
     };

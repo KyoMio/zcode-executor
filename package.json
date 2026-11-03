@@ -33,7 +33,8 @@
     "dsh-plugin/lib"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "dsh": ">=0.2.1-alpha.2 <0.3.0-0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs && node scripts/sync-doc-version.mjs --check",
@@ -78,6 +79,7 @@
     "./package.json": "./package.json"
   },
   "dsh": {
+    "manifestVersion": 1,
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
