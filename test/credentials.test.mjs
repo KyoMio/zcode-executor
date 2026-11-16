@@ -187,6 +187,35 @@ test('credentials：user_info 缺 id 返回 {error}', async () => {
   assert.match(out.error, /id/);
 });
 
+test('credentials：zai user_info 是 rawProfile（id 在 user_id）→ 兜底取 user_id 拼 key（issue #6，App 3.17.2）', async () => {
+  const accountId = 'zai-user-77';
+  const entries = fullEntries({ family: 'zai', accountId });
+  entries['oauth:zai:user_info'] = JSON.stringify({ user_id: accountId, name: 'someone', email: 'a@b.c', avatar: 'https://x/y.png' });
+  const file = await writeCredentials(entries);
+  const out = readCodingPlanKeys({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  assert.equal(out.family, 'zai');
+  assert.equal(out.accountId, accountId);
+  assert.ok(out.plans.individual);
+});
+
+test('credentials：zai user_info 里 id 与 user_id 都缺 → 仍报没有账号 id', async () => {
+  const entries = fullEntries({ family: 'zai' });
+  entries['oauth:zai:user_info'] = JSON.stringify({ name: 'no-id-at-all' });
+  const file = await writeCredentials(entries);
+  const out = readCodingPlanKeys({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  assert.ok(out?.error);
+  assert.match(out.error, /账号 id/);
+});
+
+test('credentials：bigmodel user_info 缺 id 时不看 user_id（兜底只给 zai）', async () => {
+  const entries = fullEntries();
+  entries['oauth:bigmodel:user_info'] = JSON.stringify({ user_id: 'should-not-count' });
+  const file = await writeCredentials(entries);
+  const out = readCodingPlanKeys({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  assert.ok(out?.error);
+  assert.match(out.error, /账号 id/);
+});
+
 test('credentials：四个键齐全 → family/accountId/plans 两把 key 都在，别的键不碰', async () => {
   const entries = fullEntries();
   const file = await writeCredentials(entries);
