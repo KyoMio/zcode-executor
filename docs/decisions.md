@@ -260,8 +260,10 @@ config.json 的 apiKey 同一待遇（RULES §6、§8）。
 sha256(凭据文件 resolve 后路径) hex），macOS 上本插件用系统 `security` 命令读；Windows/Linux 上 App 走
 @napi-rs/keyring（DPAPI/Secret Service），暂无等价实现，报「不支持」。`env` 源 = sha256(managed secret)，
 managed secret 取 `ZCODE_CREDENTIAL_SECRET` / `ZCODE_CREDENTIAL_SECRET_FILE` / 凭据旁的 `credential-secret`
-（32–4096 字节）。`credential-source` 钉源文件只有 `os\n` 合法，钉了别的值照 App 口径整份拒解。
-v1 兜底候选表改为 [env 原样、env trim、平台派生] 依序试。旧实现把认不得的 `enc:` 值当明文用，
+（32–4096 字节；显式 `ZCODE_CREDENTIAL_SECRET_FILE` 指的文件照 App 不查权限位）。`credential-source` 钉源文件
+只有 `os\n` 合法，钉了别的值照 App 口径整份拒解。v1 候选表照 App：第一把是解析出的 managed secret
+（env 原样 > SECRET_FILE 文件 > 凭据旁 credential-secret），其后是平台派生；密钥指纹对不上照 App 归
+unavailable（指引重登 App，不是升级插件）。旧实现把认不得的 `enc:` 值当明文用，
 会把 v2 密文误报成「oauth:active_provider 不是 zai 或 bigmodel」——现在认不得的 enc: 前缀直接报错。
 
 重开条件：zcode 提供不落盘的账号型 provider 推送方法；或 key 不再放 credentials.json / 不再这么加密。

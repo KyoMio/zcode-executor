@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCipheriv, createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { chmodSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -149,10 +150,13 @@ test('credentials：enc:v2:env roundtrip —— env 源密钥 = sha256(managed s
   assert.equal(decryptCredentialValue(sealed, ctx), plain);
 });
 
-test('credentials：enc:v2 密钥指纹对不上 → 报解不开，不换源', () => {
+test('credentials：enc:v2 密钥指纹对不上 → 存储不可用（照 App 归 unavailable，不换源）', () => {
   const sealed = encryptV2('x', { source: 'os', key: randomBytes(32) });
   const ctx = { credentialsFile: '/nonexistent/credentials.json', osSecret: randomBytes(32).toString('base64url'), env: {} };
-  assert.throws(() => decryptCredentialValue(sealed, ctx), /指纹/);
+  assert.throws(
+    () => decryptCredentialValue(sealed, ctx),
+    (e) => /指纹/.test(e.message) && e.code === 'CREDENTIAL_SECURE_STORAGE_UNAVAILABLE',
+  );
 });
 
 test('credentials：enc:v2 结构不对 / 源不认得 → 格式错误', () => {
@@ -208,6 +212,54 @@ test('credentials：enc:v2:os 整链路 —— credentials.json + 注入钥匙�
   assert.equal(res.family, 'zai');
   assert.equal(res.accountId, ACCOUNT_ID);
   assert.ok(res.plans.individual);
+});
+
+test('credentials：enc:v1 候选表第一把是凭据旁的 credential-secret（App legacySecret）', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-cred-test-'));
+  dirs.push(dir);
+  // App 在钥匙串不可用时会把受管密钥落到凭据旁的 credential-secret（600、32–4096 字节），
+  // 此时它也是 enc:v1 的第一把候选密钥
+  const secret = 'sidecar-managed-secret-0123456789';
+  await writeFile(path.join(dir, 'credential-secret'), secret, { mode: 0o600 });
+  const key = createHash('sha256').update(secret, 'utf8').digest();
+  const file = path.join(dir, 'credentials.json');
+  const out = {};
+  for (const [k, v] of Object.entries(fullEntries({ family: 'zai' }))) out[k] = encrypt(v, key);
+  await writeFile(file, JSON.stringify(out));
+  const res = readCodingPlanKeys({ credentialsPath: file, env: {} });
+  assert.equal(res.family, 'zai');
+  assert.ok(res.plans.individual);
+});
+
+test('credentials：ZCODE_CREDENTIAL_SECRET_FILE 指的文件不查权限位（照 App），mode 640 也能当 v1 候选', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-cred-test-'));
+  dirs.push(dir);
+  const secret = 'file-env-managed-secret-0123456789';
+  const secretFile = path.join(dir, 'my-secret');
+  await writeFile(secretFile, secret, { mode: 0o640 });
+  chmodSync(secretFile, 0o640); // 防 umask，确保真的是 640
+  const key = createHash('sha256').update(secret, 'utf8').digest();
+  const file = path.join(dir, 'credentials.json');
+  const out = {};
+  for (const [k, v] of Object.entries(fullEntries())) out[k] = encrypt(v, key);
+  await writeFile(file, JSON.stringify(out));
+  const res = readCodingPlanKeys({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET_FILE: secretFile } });
+  assert.equal(res.family, 'bigmodel');
+  assert.ok(res.plans.team);
+});
+
+test('credentials：纯 v2:os 凭据不受旁边不合规 credential-secret 影响（v1 候选懒算）', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-cred-test-'));
+  dirs.push(dir);
+  // 长度不够且权限位不对的旁路文件：只有真解到 enc:v1 才会去解析它，纯 v2:os 不该被拖垮
+  await writeFile(path.join(dir, 'credential-secret'), 'short', { mode: 0o644 });
+  const osKey = randomBytes(32);
+  const file = path.join(dir, 'credentials.json');
+  const out = {};
+  for (const [k, v] of Object.entries(fullEntries({ family: 'zai' }))) out[k] = encryptV2(v, { source: 'os', key: osKey });
+  await writeFile(file, JSON.stringify(out));
+  const res = readCodingPlanKeys({ credentialsPath: file, env: {}, osSecret: osKey.toString('base64url') });
+  assert.equal(res.family, 'zai');
 });
 
 // ---------- deriveCredentialKey / defaultCredentialsPath ----------
