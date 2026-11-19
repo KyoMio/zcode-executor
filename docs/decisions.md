@@ -255,6 +255,17 @@ App 自己也这么用。pickProvider 优先级插入账号型两档（`preferre
 同样读不到。credentials.json 只读、只解四个键，其余键（OAuth 令牌一类）一律不读不解；解出的 key 与
 config.json 的 apiKey 同一待遇（RULES §6、§8）。
 
+2026-11-19 补充（App 3.18 enc:v2，issue #6）：3.18 起凭据改存 `enc:v2:<源>:<sha256(密钥)前24位hex>:<iv>.<tag>.<密文>`。
+`os` 源的密钥是 32 字节随机数存系统钥匙串（service `ZCode Credential Encryption`，account =
+sha256(凭据文件 resolve 后路径) hex），macOS 上本插件用系统 `security` 命令读；Windows/Linux 上 App 走
+@napi-rs/keyring（DPAPI/Secret Service），暂无等价实现，报「不支持」。`env` 源 = sha256(managed secret)，
+managed secret 取 `ZCODE_CREDENTIAL_SECRET` / `ZCODE_CREDENTIAL_SECRET_FILE` / 凭据旁的 `credential-secret`
+（32–4096 字节；显式 `ZCODE_CREDENTIAL_SECRET_FILE` 指的文件照 App 不查权限位）。`credential-source` 钉源文件
+只有 `os\n` 合法，钉了别的值照 App 口径整份拒解。v1 候选表照 App：第一把是解析出的 managed secret
+（env 原样 > SECRET_FILE 文件 > 凭据旁 credential-secret），其后是平台派生；密钥指纹对不上照 App 归
+unavailable（指引重登 App，不是升级插件）。旧实现把认不得的 `enc:` 值当明文用，
+会把 v2 密文误报成「oauth:active_provider 不是 zai 或 bigmodel」——现在认不得的 enc: 前缀直接报错。
+
 重开条件：zcode 提供不落盘的账号型 provider 推送方法；或 key 不再放 credentials.json / 不再这么加密。
 
 ## D20 闲时任务：自己取号排队，回合走官方闲时 provider；credentials.json 多读 `zcodejwttoken`
