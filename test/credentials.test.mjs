@@ -37,6 +37,16 @@ const ACCOUNT_ID = '10086';
 const individualKey = () => `account-key-individual-${randomBytes(4).toString('hex')}`;
 const teamKey = () => `account-key-team-${randomBytes(4).toString('hex')}`;
 
+/** enc:v2 夹具的加密端：照 App 3.18 的形状 enc:v2:<源>:<sha256(key)前24位hex>:<iv>.<tag>.<密文>。 */
+function encryptV2(plain, { source, key }) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const data = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+  const b64u = (buf) => buf.toString('base64url');
+  const fp = createHash('sha256').update(key).digest('hex').slice(0, 24);
+  return `enc:v2:${source}:${fp}:${b64u(iv)}.${b64u(cipher.getAuthTag())}.${b64u(data)}`;
+}
+
 /** 写一份 credentials.json 夹具；entries 的值是明文，needEnc 的键会被加密。 */
 async function writeCredentials(entries, { encryptKeys = Object.keys(entries) } = {}) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-cred-test-'));
@@ -106,21 +116,116 @@ test('credentials：格式不对（段数、iv/tag 长度）→ 抛 Error，mess
   }
 });
 
+test('credentials：env 未 trim 的密钥也能解 enc:v1（App 3.18 的候选表第一把是 env 原样）', () => {
+  // App 3.18 起对 enc:v1 按 [env 原样、env trim、平台派生] 依序试；之前只认 trim 后一把
+  const untrimmedKey = createHash('sha256').update('  secret-with-spaces  ', 'utf8').digest();
+  const sealed = encrypt('plain-for-untrimmed', untrimmedKey);
+  assert.equal(decryptCredentialValue(sealed, deriveCredentialKey({ env: { ZCODE_CREDENTIAL_SECRET: '  secret-with-spaces  ' } })), 'plain-for-untrimmed');
+});
+
+test('credentials：其它 enc:<版本> 前缀不当明文 → 抛「不认得」（issue #6 误报的根因）', () => {
+  for (const v of ['enc:v3:whatever', 'enc:garbage', 'enc:v2malformed']) {
+    assert.throws(() => decryptCredentialValue(v, KEY), /不认得/);
+  }
+  // v2 结构对但调用方没给凭据上下文：也明确报错，不再静默当明文
+  assert.throws(() => decryptCredentialValue('enc:v2:os:0123456789abcdef01234567:AAAA.BBBB.CCCC', KEY), /凭据文件上下文/);
+});
+
+// ---------- enc:v2（App 3.18 起；issue #6） ----------
+
+test('credentials：enc:v2:os roundtrip —— os 源密钥是指纹匹配的 32 字节随机数', () => {
+  const osKey = randomBytes(32);
+  const plain = 'sk-os-source-value-12345';
+  const sealed = encryptV2(plain, { source: 'os', key: osKey });
+  const ctx = { credentialsFile: '/nonexistent/credentials.json', osSecret: osKey.toString('base64url'), env: {} };
+  assert.equal(decryptCredentialValue(sealed, ctx), plain);
+});
+
+test('credentials：enc:v2:env roundtrip —— env 源密钥 = sha256(managed secret)', () => {
+  const secret = 'managed-secret-for-env-source-12345678';
+  const plain = 'sk-env-source-value';
+  const sealed = encryptV2(plain, { source: 'env', key: createHash('sha256').update(secret, 'utf8').digest() });
+  const ctx = { credentialsFile: '/nonexistent/credentials.json', env: { ZCODE_CREDENTIAL_SECRET: secret } };
+  assert.equal(decryptCredentialValue(sealed, ctx), plain);
+});
+
+test('credentials：enc:v2 密钥指纹对不上 → 报解不开，不换源', () => {
+  const sealed = encryptV2('x', { source: 'os', key: randomBytes(32) });
+  const ctx = { credentialsFile: '/nonexistent/credentials.json', osSecret: randomBytes(32).toString('base64url'), env: {} };
+  assert.throws(() => decryptCredentialValue(sealed, ctx), /指纹/);
+});
+
+test('credentials：enc:v2 结构不对 / 源不认得 → 格式错误', () => {
+  const ctx = { credentialsFile: '/nonexistent/credentials.json', osSecret: randomBytes(32).toString('base64url'), env: {} };
+  for (const v of [
+    'enc:v2:os:nothex0123456789abcdef:AAAA.BBBB.CCCC', // 指纹非 hex
+    'enc:v2:bogus:0123456789abcdef01234567:AAAA.BBBB.CCCC', // 源不认得
+    'enc:v2:os:0123456789abcdef01234567', // 缺段
+    'enc:v2::0123456789abcdef01234567:AAAA.BBBB.CCCC', // 空源
+  ]) {
+    assert.throws(() => decryptCredentialValue(v, ctx), /格式不对/);
+  }
+});
+
+test('credentials：enc:v2:os 的密钥形状不对 → 存储不可用（unavailable）', () => {
+  const sealed = encryptV2('x', { source: 'os', key: randomBytes(32) });
+  const ctx = { credentialsFile: '/nonexistent/credentials.json', osSecret: 'too-short', env: {} };
+  assert.throws(() => decryptCredentialValue(sealed, ctx), /形状不对/);
+});
+
+test('credentials：enc:v2:env 的 managed secret 找不到 → 存储不可用（unavailable）', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-cred-test-'));
+  dirs.push(dir);
+  const file = path.join(dir, 'credentials.json');
+  const sealed = encryptV2('zai', { source: 'env', key: randomBytes(32) });
+  await writeFile(file, JSON.stringify({ 'oauth:active_provider': sealed }));
+  const out = readCodingPlanKeys({ credentialsPath: file, env: {} });
+  assert.equal(out?.kind, 'unavailable');
+  assert.match(out.error, /受管密钥/);
+});
+
+test('credentials：credential-source 钉了非 os 的值 → 整份凭据按不可用处理（照 App 口径）', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-cred-test-'));
+  dirs.push(dir);
+  const file = path.join(dir, 'credentials.json');
+  await writeFile(file, JSON.stringify({ 'oauth:active_provider': 'zai' }));
+  await writeFile(path.join(dir, 'credential-source'), 'env\n');
+  const out = readCodingPlanKeys({ credentialsPath: file, env: { ZCODE_CREDENTIAL_SECRET: SECRET } });
+  assert.equal(out?.kind, 'unavailable');
+  assert.match(out.error, /credential-source/);
+});
+
+test('credentials：enc:v2:os 整链路 —— credentials.json + 注入钥匙串密钥能读出 family', async () => {
+  const osKey = randomBytes(32);
+  const entries = fullEntries({ family: 'zai' });
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-cred-test-'));
+  dirs.push(dir);
+  const file = path.join(dir, 'credentials.json');
+  const out = {};
+  for (const [k, v] of Object.entries(entries)) out[k] = encryptV2(v, { source: 'os', key: osKey });
+  await writeFile(file, JSON.stringify(out));
+  const res = readCodingPlanKeys({ credentialsPath: file, env: {}, osSecret: osKey.toString('base64url') });
+  assert.equal(res.family, 'zai');
+  assert.equal(res.accountId, ACCOUNT_ID);
+  assert.ok(res.plans.individual);
+});
+
 // ---------- deriveCredentialKey / defaultCredentialsPath ----------
 
-test('credentials：ZCODE_CREDENTIAL_SECRET 优先于平台派生（trim 后取 sha256，32 字节）', () => {
+test('credentials：ZCODE_CREDENTIAL_SECRET 优先于平台派生（env 原样取 sha256，32 字节）', () => {
+  // App 3.18 起候选表第一把是 env 原样（不 trim）：deriveCredentialKey 返回的就是它
   const key = deriveCredentialKey({ env: { ZCODE_CREDENTIAL_SECRET: `  ${SECRET}  ` } });
   assert.ok(Buffer.isBuffer(key));
   assert.equal(key.length, 32);
-  assert.deepEqual(key, createHash('sha256').update(SECRET, 'utf8').digest());
-  // 空白串视为没设，回落到平台派生
-  const fallback = deriveCredentialKey({
+  assert.deepEqual(key, createHash('sha256').update(`  ${SECRET}  `, 'utf8').digest());
+  // 空白串在 App 口径里也是真值：第一把候选是 sha256('   ')，平台派生仍进候选表兜底
+  const blank = deriveCredentialKey({
     env: { ZCODE_CREDENTIAL_SECRET: '   ' },
     platform: 'darwin',
     homedir: '/Users/t',
     username: 't',
   });
-  assert.deepEqual(fallback, createHash('sha256').update('zcode-credential-fallback:darwin:/Users/t:t', 'utf8').digest());
+  assert.deepEqual(blank, createHash('sha256').update('   ', 'utf8').digest());
 });
 
 test('credentials：无环境变量时按 zcode-credential-fallback:<platform>:<homedir>:<username> 派生', () => {
