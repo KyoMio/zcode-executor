@@ -262,6 +262,23 @@ issue #6 的根因事实，host 进程 `out/host/index.js` 对照：
   插件 `planKeysFrom` 据此加了同样的兜底（lib/credentials.mjs）。
 - coding plan api-key 键名模板 3.17.2 未变：`account-provider:coding-plan:account:<family>-individual-coding-plan:account:<encodeURIComponent(id)>:api-key`。
 
+## enc:v2 凭据加密真机（2026-11-19，App 3.18.2，解包 app.asar + 本机钥匙串端到端，零 token）
+
+PR #7（issue #6）的核对与实测，host 进程 `out/host/index.js` 反编译对照 + 本机 3.18.2 全链路：
+
+- 本机凭据全部是 `enc:v2:os:<24 位 hex 指纹>:<iv>.<tag>.<密文>`，同一指纹；`credential-source`
+  文件内容实测 `os\n`（两字节 0x6f 0x73 0x0a）。
+- 反编译对照：`createSystemCredentialCipher`（钥匙串 service `ZCode Credential Encryption`，
+  account = sha256(resolve 后凭据路径) hex，指纹 = sha256(密钥) hex 前 24 位）、`resolveManagedSecret`
+  （env 原始值判存在 > SECRET_FILE 文件【不查权限位】> 凭据旁 credential-secret【须 600、32–4096 字节】）、
+  `legacyKeyCandidates`（[managed secret, 其 trim, 平台派生]）、未知 `enc:` 前缀报错不按明文。
+  指纹/源对不上 App 抛 `CREDENTIAL_SECURE_STORAGE_UNAVAILABLE`（unavailable 档）——PR 审查时照此对齐了分档。
+- 端到端：插件代码（f04ef0e+1597e95）`security find-generic-password -s … -a <sha256(路径)> -w`
+  读出 App 写的钥匙串条目（account 与本地计算值一致），成功解出 coding plan 四键与 `zcodejwttoken`
+  （start plan 路径 family=bigmodel、team key 在）。本机首次读未弹授权框——别的机器不保证，
+  弹了选「始终允许」即可；被拒过到钥匙串访问里改回允许。
+- Windows/Linux 的 os 源走 @napi-rs/keyring（DPAPI / Secret Service），插件暂无等价实现，报「不支持」（见 D19 补充）。
+
 ## 凭据文件探针（2026-09-21，App 3.12.2，scripts/probe-credentials.mjs，零 token）
 
 T6-C 的背景事实，用户本机跑探针核实；加密与键名细节从 ZCode 开源源码 3.14.0 读出、本机文件格式核对：
