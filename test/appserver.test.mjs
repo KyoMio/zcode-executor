@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import process from 'node:process';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { ExecutorError } from '../lib/errors.mjs';
 import { findZcode, classify, builtinProviderConfigPath, probeHandshake, AppServerClient } from '../lib/appserver.mjs';
 import { buildPersonalProviderConfig } from '../lib/providers.mjs';
@@ -135,8 +136,8 @@ test('builtinProviderConfigPath：按 App 目录布局从 zcode.cjs 推出 ../co
   await writeFile(zcode, '// fake\n');
   const builtin = path.join(dir, 'config', 'provider', 'zcode-builtin.json');
   // 文件还没有：3.12 之前的 App 就是这样，抛错且信息说明版本门槛与环境变量出路。
-  // dataBaseDir 指临时目录：真机 ~/.zcode 里可能有 4.0.0 的 runtime provider 副本，会抢先命中
-  const opts = { builtinFile: '', dataBaseDir: dir };
+  // env 指临时目录：真机 ~/.zcode 里可能有 4.0.0 的 runtime provider 副本，会抢先命中
+  const opts = { builtinFile: '', env: { ZCODE_DATA_BASE_DIR: dir } };
   assert.throws(() => builtinProviderConfigPath(zcode, opts), (err) => {
     assert.ok(err instanceof ExecutorError);
     assert.match(err.message, /3\.12/);
@@ -148,21 +149,25 @@ test('builtinProviderConfigPath：按 App 目录布局从 zcode.cjs 推出 ../co
   assert.equal(builtinProviderConfigPath(zcode, opts), builtin);
 });
 
-test('builtinProviderConfigPath：4.0.0 起优先用 ~/.zcode/v2/runtime/provider 下最新版本的运行时文件', async () => {
-  // 复刻 <home>/.zcode/v2/runtime/provider/<platform>/<version>/endpoint-<hash>/zcode-builtin.json：
-  // 旧版本 3.18.2 与新版本 4.0.0 各一份，期望按版本号（不是 mtime）取 4.0.0
+// runtime 副本的端点目录名 = 'endpoint-' + sha256(端点 origin) 前 32 位（上游 zcode-builtin-cache-paths.ts）
+const endpointKeyFor = (origin) => `endpoint-${createHash('sha256').update(origin).digest('hex').slice(0, 32)}`;
+
+// 复刻 <dataBaseDir>/.zcode/v2/runtime/provider/<platform>/<version>/<endpointKey>/zcode-builtin.json 的夹具
+const mkRuntimeFile = async (home, { version, origin = 'https://zcode.z.ai', platform = 'darwin-aarch64' }) => {
+  const dir = path.join(home, '.zcode', 'v2', 'runtime', 'provider', platform, version, endpointKeyFor(origin));
+  await mkdir(dir, { recursive: true });
+  const file = path.join(dir, 'zcode-builtin.json');
+  await writeFile(file, '{}');
+  return file;
+};
+
+test('builtinProviderConfigPath：4.0.0 起优先用 runtime/provider 下「当前端点」的最新版本文件', async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'zcode-executor-test-'));
   mockDirs.push(home);
-  const mk = async (version) => {
-    const dir = path.join(home, '.zcode', 'v2', 'runtime', 'provider', 'darwin-aarch64', version, 'endpoint-abc123');
-    await mkdir(dir, { recursive: true });
-    const file = path.join(dir, 'zcode-builtin.json');
-    await writeFile(file, '{}');
-    return file;
-  };
-  const old = await mk('3.18.2');
-  const dev = await mk('0.0.0-dev');
-  const latest = await mk('4.0.0');
+  const env = { ZCODE_DATA_BASE_DIR: home, ZCODE_ENV: 'production' };
+  const old = await mkRuntimeFile(home, { version: '3.18.2' });
+  const dev = await mkRuntimeFile(home, { version: '0.0.0-dev' });
+  const latest = await mkRuntimeFile(home, { version: '4.0.0' });
   // 把旧版 mtime 拨到最新也不能赢——排序先版本后时间
   const now = new Date();
   await import('node:fs/promises').then((fs) => fs.utimes(old, now, now));
@@ -170,16 +175,20 @@ test('builtinProviderConfigPath：4.0.0 起优先用 ~/.zcode/v2/runtime/provide
   await mkdir(path.dirname(zcode), { recursive: true });
   await writeFile(zcode, '// fake\n');
   // zcode.cjs 旁边没有 App 静态文件也走得通：runtime 文件先命中
-  assert.equal(builtinProviderConfigPath(zcode, { builtinFile: '', dataBaseDir: home }), latest);
+  assert.equal(builtinProviderConfigPath(zcode, { builtinFile: '', env }), latest);
   assert.ok(dev !== latest); // 0.0.0-dev 这类开发构建永远输给真发布
 });
 
-test('builtinProviderConfigPath：runtime/provider 目录没有 builtin 文件时退回 App 静态文件', async () => {
+test('builtinProviderConfigPath：另一平台或另一端点的缓存不参与选择（review 复现：同版本异端点不串）', async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'zcode-executor-test-'));
   mockDirs.push(home);
-  // runtime 目录在但里面不是有效候选（目录名不带 endpoint- 前缀、文件名不对）
-  await mkdir(path.join(home, '.zcode', 'v2', 'runtime', 'provider', 'darwin-aarch64', '4.0.0', 'junk'), { recursive: true });
-  await writeFile(path.join(home, '.zcode', 'v2', 'runtime', 'provider', 'darwin-aarch64', '4.0.0', 'junk', 'zcode-builtin.json'), '{}');
+  const env = { ZCODE_DATA_BASE_DIR: home, ZCODE_ENV: 'production' };
+  // 同平台同版本但端点不同的缓存：mtime 更新也不能赢（review High 复现场景）
+  const otherEndpoint = await mkRuntimeFile(home, { version: '4.0.0', origin: 'https://qa.example.invalid' });
+  const now = new Date();
+  await import('node:fs/promises').then((fs) => fs.utimes(otherEndpoint, now, now));
+  // 另一平台的缓存同样不算
+  await mkRuntimeFile(home, { version: '4.0.0', platform: 'linux-x86_64' });
   const dir = path.join(home, 'app');
   await mkdir(path.join(dir, 'glm'), { recursive: true });
   await mkdir(path.join(dir, 'config', 'provider'), { recursive: true });
@@ -187,7 +196,28 @@ test('builtinProviderConfigPath：runtime/provider 目录没有 builtin 文件�
   await writeFile(zcode, '// fake\n');
   const builtin = path.join(dir, 'config', 'provider', 'zcode-builtin.json');
   await writeFile(builtin, '{}');
-  assert.equal(builtinProviderConfigPath(zcode, { builtinFile: '', dataBaseDir: home }), builtin);
+  // 当前端点（默认 https://zcode.z.ai）没有缓存 → 落到 App 静态文件，绝不拿另一端点的
+  assert.equal(builtinProviderConfigPath(zcode, { builtinFile: '', env }), builtin);
+  // env 指到另一端点时才命中它（端点跟随 env 而不是缓存新不新）
+  const envQa = { ...env, ZCODE_ENDPOINT_ORIGIN: 'https://qa.example.invalid' };
+  assert.equal(builtinProviderConfigPath(zcode, { builtinFile: '', env: envQa }), otherEndpoint);
+});
+
+test('builtinProviderConfigPath：runtime/provider 目录没有 builtin 文件时退回 App 静态文件', async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'zcode-executor-test-'));
+  mockDirs.push(home);
+  const env = { ZCODE_DATA_BASE_DIR: home, ZCODE_ENV: 'production' };
+  // runtime 目录在但端点目录名不是当前端点哈希 → 不算候选
+  await mkdir(path.join(home, '.zcode', 'v2', 'runtime', 'provider', 'darwin-aarch64', '4.0.0', 'endpoint-notourshash'), { recursive: true });
+  await writeFile(path.join(home, '.zcode', 'v2', 'runtime', 'provider', 'darwin-aarch64', '4.0.0', 'endpoint-notourshash', 'zcode-builtin.json'), '{}');
+  const dir = path.join(home, 'app');
+  await mkdir(path.join(dir, 'glm'), { recursive: true });
+  await mkdir(path.join(dir, 'config', 'provider'), { recursive: true });
+  const zcode = path.join(dir, 'glm', 'zcode.cjs');
+  await writeFile(zcode, '// fake\n');
+  const builtin = path.join(dir, 'config', 'provider', 'zcode-builtin.json');
+  await writeFile(builtin, '{}');
+  assert.equal(builtinProviderConfigPath(zcode, { builtinFile: '', env }), builtin);
 });
 
 test('builtinProviderConfigPath：环境变量给相对路径时返回绝对路径（闲时版本号哈希的是子进程看到的绝对路径）', async () => {
