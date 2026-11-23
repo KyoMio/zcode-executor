@@ -13,7 +13,7 @@ import process from 'node:process';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { ExecutorError } from '../lib/errors.mjs';
-import { findZcode, classify, builtinProviderConfigPath, probeHandshake, AppServerClient } from '../lib/appserver.mjs';
+import { findZcode, classify, builtinProviderConfigPath, probeHandshake, AppServerClient, runtimeProviderPlatform } from '../lib/appserver.mjs';
 import { buildPersonalProviderConfig } from '../lib/providers.mjs';
 import { startMock, waitFor, readRecord, killAll } from './helpers.mjs';
 
@@ -152,9 +152,13 @@ test('builtinProviderConfigPath：按 App 目录布局从 zcode.cjs 推出 ../co
 // runtime 副本的端点目录名 = 'endpoint-' + sha256(端点 origin) 前 32 位（上游 zcode-builtin-cache-paths.ts）
 const endpointKeyFor = (origin) => `endpoint-${createHash('sha256').update(origin).digest('hex').slice(0, 32)}`;
 
-// 复刻 <dataBaseDir>/.zcode/v2/runtime/provider/<platform>/<version>/<endpointKey>/zcode-builtin.json 的夹具
-const mkRuntimeFile = async (home, { version, origin = 'https://zcode.z.ai', platform = 'darwin-aarch64' }) => {
-  const dir = path.join(home, '.zcode', 'v2', 'runtime', 'provider', platform, version, endpointKeyFor(origin));
+// 复刻 <dataBaseDir>/.zcode/v2/runtime/provider/<platform>/<version>/<endpointKey>/zcode-builtin.json 的夹具。
+// 平台默认取 runtimeProviderPlatform()（与生产同一算法）：写死 darwin-aarch64 时 Linux CI 找不到夹具、
+// 「异平台」夹具反而变成命中项（v0.6.5 publish CI 挂的 3 条就是这么来的）。
+// OTHER_PLATFORM 保证与当前平台不同：darwin 上用 linux-x86_64，其余平台用 darwin-aarch64。
+const OTHER_PLATFORM = runtimeProviderPlatform() === 'darwin-aarch64' ? 'linux-x86_64' : 'darwin-aarch64';
+const mkRuntimeFile = async (home, { version, origin = 'https://zcode.z.ai', platform = runtimeProviderPlatform(), endpointKey } = {}) => {
+  const dir = path.join(home, '.zcode', 'v2', 'runtime', 'provider', platform, version, endpointKey ?? endpointKeyFor(origin));
   await mkdir(dir, { recursive: true });
   const file = path.join(dir, 'zcode-builtin.json');
   await writeFile(file, '{}');
@@ -188,7 +192,7 @@ test('builtinProviderConfigPath：另一平台或另一端点的缓存不参与�
   const now = new Date();
   await import('node:fs/promises').then((fs) => fs.utimes(otherEndpoint, now, now));
   // 另一平台的缓存同样不算
-  await mkRuntimeFile(home, { version: '4.0.0', platform: 'linux-x86_64' });
+  await mkRuntimeFile(home, { version: '4.0.0', platform: OTHER_PLATFORM });
   const dir = path.join(home, 'app');
   await mkdir(path.join(dir, 'glm'), { recursive: true });
   await mkdir(path.join(dir, 'config', 'provider'), { recursive: true });
@@ -240,8 +244,7 @@ test('builtinProviderConfigPath：runtime/provider 目录没有 builtin 文件�
   mockDirs.push(home);
   const env = { ZCODE_DATA_BASE_DIR: home, ZCODE_ENV: 'production' };
   // runtime 目录在但端点目录名不是当前端点哈希 → 不算候选
-  await mkdir(path.join(home, '.zcode', 'v2', 'runtime', 'provider', 'darwin-aarch64', '4.0.0', 'endpoint-notourshash'), { recursive: true });
-  await writeFile(path.join(home, '.zcode', 'v2', 'runtime', 'provider', 'darwin-aarch64', '4.0.0', 'endpoint-notourshash', 'zcode-builtin.json'), '{}');
+  await mkRuntimeFile(home, { version: '4.0.0', endpointKey: 'endpoint-notourshash' });
   const dir = path.join(home, 'app');
   await mkdir(path.join(dir, 'glm'), { recursive: true });
   await mkdir(path.join(dir, 'config', 'provider'), { recursive: true });
