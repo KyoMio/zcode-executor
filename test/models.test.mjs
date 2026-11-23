@@ -184,7 +184,7 @@ test('zcodeInfo：返回路径、版本与内置 provider 文件；环境变量�
   // mock 旁边没有 ../config/provider/zcode-builtin.json：这就是「App 低于 3.12」的样子。
   // builtinFile 传 null 而不是 undefined：undefined 会落到读 process.env 的默认值，而在 ZCode App
   // 运行时派生的 shell 里（本插件自己的开发场景）环境变量带着真实内置文件路径，用例就不封闭了
-  const missing = zcodeInfo({ zcodePath: mock.zcodePath, builtinFile: null });
+  const missing = zcodeInfo({ zcodePath: mock.zcodePath, builtinFile: null, dataBaseDir: mock.dir });
   assert.equal(missing.version, '0.16.5'); // 版本照样能拿到，版本号区分不了新旧
   assert.equal(missing.builtinConfigPath, null);
   assert.match(missing.builtinConfigError, /ZCODE_BUILTIN_PROVIDER_CONFIG_FILE/);
