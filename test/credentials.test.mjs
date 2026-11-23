@@ -294,6 +294,16 @@ test('credentials：defaultCredentialsPath 落在 ZCODE_DATA_BASE_DIR 或 home �
   const noBase = defaultCredentialsPath({ ZCODE_DATA_BASE_DIR: '' });
   assert.ok(noBase.startsWith(os.homedir()));
   assert.equal(path.relative(os.homedir(), noBase), path.join('.zcode', 'v2', 'credentials.json'));
+  // 注入 env 只给 HOME=B（不设 ZCODE_DATA_BASE_DIR）：凭据路径按 B 解，与 runtime 模型缓存同一数据根（review r3）
+  assert.equal(
+    defaultCredentialsPath({ HOME: '/tmp/fixture-homeB' }),
+    path.join('/tmp/fixture-homeB', '.zcode', 'v2', 'credentials.json'),
+  );
+  // ZCODE_DATA_BASE_DIR 仍赢过 HOME
+  assert.equal(
+    defaultCredentialsPath({ ZCODE_DATA_BASE_DIR: '/tmp/fixture-data', HOME: '/tmp/fixture-homeB' }),
+    path.join('/tmp/fixture-data', '.zcode', 'v2', 'credentials.json'),
+  );
 });
 
 // ---------- readCodingPlanKeys ----------
