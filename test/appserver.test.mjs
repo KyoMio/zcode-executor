@@ -203,6 +203,38 @@ test('builtinProviderConfigPath：另一平台或另一端点的缓存不参与�
   assert.equal(builtinProviderConfigPath(zcode, { builtinFile: '', env: envQa }), otherEndpoint);
 });
 
+test('builtinProviderConfigPath：只换 HOME 的 env 按新 HOME 找缓存（POSIX 隔离，review r2 复现）', async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'zcode-executor-test-'));
+  mockDirs.push(home);
+  const homeB = path.join(home, 'B');
+  const fileB = await mkRuntimeFile(homeB, { version: '4.0.0' });
+  // env 只给 HOME=B、不给 ZCODE_DATA_BASE_DIR：数据根应解为 B，拿不到任何宿主缓存
+  const env = { HOME: homeB, ZCODE_ENV: 'production' };
+  const zcode = path.join(home, 'glm', 'zcode.cjs');
+  await mkdir(path.dirname(zcode), { recursive: true });
+  await writeFile(zcode, '// fake\n');
+  assert.equal(builtinProviderConfigPath(zcode, { builtinFile: '', env }), fileB);
+});
+
+test('builtinProviderConfigPath：注入 env 里的显式 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE 优先生效（review r2 复现）', async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'zcode-executor-test-'));
+  mockDirs.push(home);
+  // env 里同时有数据目录缓存和显式文件：显式文件赢（与 CLI 语义一致）
+  await mkRuntimeFile(home, { version: '4.0.0' });
+  const explicit = path.join(home, 'custom-builtin.json');
+  await writeFile(explicit, '{}');
+  const env = { ZCODE_DATA_BASE_DIR: home, ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: explicit };
+  const zcode = path.join(home, 'glm', 'zcode.cjs');
+  await mkdir(path.dirname(zcode), { recursive: true });
+  await writeFile(zcode, '// fake\n');
+  assert.equal(builtinProviderConfigPath(zcode, { builtinFile: '', env }), explicit);
+  // 指错了照样抛（注入 env 的路径与 process.env 同等校验）
+  assert.throws(
+    () => builtinProviderConfigPath(zcode, { builtinFile: '', env: { ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: path.join(home, 'nope.json') } }),
+    (err) => err instanceof ExecutorError && /ZCODE_BUILTIN_PROVIDER_CONFIG_FILE/.test(err.message),
+  );
+});
+
 test('builtinProviderConfigPath：runtime/provider 目录没有 builtin 文件时退回 App 静态文件', async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'zcode-executor-test-'));
   mockDirs.push(home);
