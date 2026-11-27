@@ -389,7 +389,15 @@ node --check lib/**/*.mjs
 
 Releases are tag-driven: `npm version patch` bumps `package.json`, syncs the version into both READMEs and every host's plugin manifest, and commits and tags; `git push --follow-tags` triggers the workflow that runs the tests, publishes to npm (Trusted Publishing, no token) and creates the GitHub Release. Commit messages are the changelog.
 
-Pure `.mjs`, zero runtime dependencies, no build step. Design documents live in `docs/`: [PRD](docs/PRD.md), [SPEC](docs/SPEC.md), [CONTEXT](docs/CONTEXT.md) (glossary), [RULES](docs/RULES.md) (coding rules), [decisions](docs/decisions.md), [verified](docs/verified.md) (facts measured against the real app-server). Agent-facing entry point: [AGENTS.md](AGENTS.md).
+Pure `.mjs`, zero runtime dependencies, no build step. Design documents live in `docs/`: [PRD](docs/PRD.md), [SPEC](docs/SPEC.md), [CONTEXT](docs/CONTEXT.md) (glossary), [RULES](docs/RULES.md) (the coding rules — the contributor entry point, human or agent), [decisions](docs/decisions.md), [verified](docs/verified.md) (facts measured against the real app-server).
+
+> **Upgrading note:** `AGENTS.md` and `CLAUDE.md` are no longer tracked (since #14). On a fast-forward pull, git removes both files even if `.git/info/exclude` lists them — exclusions never protect tracked paths. If you keep local copies (personal agent rules, machine-specific notes), back them up before pulling and restore afterwards:
+>
+> ```bash
+> cp AGENTS.md CLAUDE.md /tmp/ 2>/dev/null   # before pulling
+> git pull --ff-only
+> cp /tmp/AGENTS.md /tmp/CLAUDE.md . 2>/dev/null   # restore — they stay untracked now
+> ```
 
 ## FAQ
 

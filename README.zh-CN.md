@@ -377,7 +377,15 @@ node --check lib/**/*.mjs
 
 发版由 tag 驱动：`npm version patch` 改 `package.json`、把版本号同步进两份 README 和各宿主的插件清单、建提交和 tag；`git push --follow-tags` 触发 workflow 跑测试、发 npm（Trusted Publishing，无令牌）、建 GitHub Release。提交信息就是 changelog。
 
-纯 `.mjs`，零运行时依赖，无构建。设计文档在 `docs/`：[PRD](docs/PRD.md)、[SPEC](docs/SPEC.md)、[CONTEXT](docs/CONTEXT.md)（术语）、[RULES](docs/RULES.md)（开发规范）、[decisions](docs/decisions.md)、[verified](docs/verified.md)（对真 app-server 实测的事实）。给 agent 看的入口是 [AGENTS.md](AGENTS.md)。
+纯 `.mjs`，零运行时依赖，无构建。设计文档在 `docs/`：[PRD](docs/PRD.md)、[SPEC](docs/SPEC.md)、[CONTEXT](docs/CONTEXT.md)（术语）、[RULES](docs/RULES.md)（开发规范——人或 agent 贡献者的入口）、[decisions](docs/decisions.md)、[verified](docs/verified.md)（对真 app-server 实测的事实）。
+
+> **升级说明：** 自 #14 起 `AGENTS.md` 与 `CLAUDE.md` 不再受 git 跟踪。旧克隆快进更新时，git 会移除这两个文件——即使事先写进 `.git/info/exclude` 也拦不住，排除规则从不保护已跟踪文件。如果你在本地保留了自己的 agent 指南（个人规则、本机备注），拉取前先备份、更新后恢复：
+>
+> ```bash
+> cp AGENTS.md CLAUDE.md /tmp/ 2>/dev/null   # 拉取前备份
+> git pull --ff-only
+> cp /tmp/AGENTS.md /tmp/CLAUDE.md . 2>/dev/null   # 恢复——此后它们以未跟踪文件存在
+> ```
 
 ## 常见问题
 
