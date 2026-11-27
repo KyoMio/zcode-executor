@@ -394,19 +394,23 @@ Pure `.mjs`, zero runtime dependencies, no build step. Design documents live in 
 > **Upgrading note:** `AGENTS.md` and `CLAUDE.md` are no longer tracked (since #14). On a fast-forward pull, git removes both files even if `.git/info/exclude` lists them — exclusions never protect tracked paths. If you keep local copies (personal agent rules, machine-specific notes), back them up before pulling and restore afterwards. Three traps to avoid: use a FRESH backup directory each time (a fixed path can resurrect the other file from an older run); uncommitted edits to the tracked guides make git refuse the pull — commit or stash them first; and restore ONLY what this run backed up, and only after the pull actually succeeded.
 >
 > ```bash
-> # 0. local edits to the tracked guides block the pull — put them away first:
-> #    either commit them on a branch, or `git stash push -- AGENTS.md CLAUDE.md`
-> #    (restore afterwards with `git stash pop`).
 > backup="$(mktemp -d)"               # a fresh dir every time — nothing stale inside
 > for f in AGENTS.md CLAUDE.md; do
->   [ -f "$f" ] && cp "$f" "$backup/"   # copy only what exists; no error swallowing
-> done
+>   [ -f "$f" ] && cp "$f" "$backup/"   # copy only what exists, WITH your local edits
+> done                                  # — backup FIRST: stashing would revert the
+>                                       #   worktree to the old committed content
+> # Uncommitted edits to the tracked guides block the pull — put them away.
+> # They are already safe in the backup, so the stash is just upstream sync
+> # and there is nothing to pop afterwards (drop it once the upgrade checks out).
+> git stash push -q -- AGENTS.md CLAUDE.md 2>/dev/null
 > if git pull --ff-only; then
 >   for f in AGENTS.md CLAUDE.md; do
->     [ -f "$backup/$f" ] && cp "$backup/$f" .   # restore only what this run backed up
->   done                                        # the files stay untracked from now on
+>     if [ -f "$backup/$f" ]; then cp "$backup/$f" .; fi   # restore only what this
+>   done                                                  #   run backed up, edits included
+>   echo "upgraded — the guides are back as untracked files; drop the stash when happy"
 > else
->   echo "pull failed — restoring nothing; fix the local edits (stash/commit) and retry" >&2
+>   echo "pull failed — restoring nothing; fix the local edits and retry" >&2
+>   false   # non-zero exit without killing an interactive shell
 > fi
 > ```
 
