@@ -191,10 +191,10 @@ zcode-executor answer <id> <值…>                 # 应答挂起的提问：�
 ```
 
 - 观察面板实时显示各会话进展（回复、工具、挂起与排队）：Claude Code 里用户输入 `/zcode` 打开（投递时自动打开，状态栏汇总、关键变化弹提示），DSH 右侧栏有「zcode 任务」tab。面板只看不应答，挂起照样按上面的规矩在对话里处理；背后是不需要自己跑的只读 `zcode-executor watch --json`。
-- 正文写 `-` 从 stdin 读，长文本避免命令行引号转义：
+- 正文写 `-` 从 stdin 读，长文本避免命令行引号转义（`SESSION_ID` 换成实际会话 ID——`list` 输出里的本地 id，可先 `SESSION_ID=abc123` 设好）：
 
   ```bash
-  zcode-executor send <id> - --task "$WT/tasks/T-xxx.md" <<'EOF'
+  zcode-executor send "$SESSION_ID" - --task "$WT/tasks/T-xxx.md" <<'EOF'
   执行 tasks/T-xxx.md，按验收标准逐条自检后再停
   EOF
   ```
