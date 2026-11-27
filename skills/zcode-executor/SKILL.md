@@ -98,25 +98,7 @@ git -C "$WT" checkout -b task/T-yyy main              # 切新分支：在执行
 - **原 zcode 会话上下文超过 1M token 就换新会话派单。** 会话越长每次投递的固定开销越大、执行效率越低；
   旧会话攒的上下文对新任务多半是噪声。新任务一律新会话（必要时配新副本），把任务单和必要 diff 移交过去。
 
-可选启用 Jev 前筛时，编辑 `~/.zcode-executor/config.json`；**不要**把真实 key 放进命令参数、环境变量、任务单、聊天消息或仓库文件：
-
-```json
-{
-  "review": {
-    "jev": {
-      "apiKey": "jev_请替换为用户自己的密钥"
-    }
-  }
-}
-```
-
-保存后必须执行：
-
-```bash
-chmod 600 ~/.zcode-executor/config.json
-```
-
-含 key 的配置文件必须由当前 UID 拥有、是普通非符号链接文件且权限不宽于 `0600`，否则命令会报配置错误。删除 `apiKey` 或留成全空白可只走原 ZCode 链；不要找 Jev 环境变量或 mode/shadow 开关。`doctor` 显示新 runner 的审批链，不联网调用 Jev、不显示 key：`review.pipeline` 有 key 为 `['jev','zcode-fast','zcode-slow']`，无 key 为后两项，禁用为 `[]`，配置错误为 `null`。兼容 `fastScreen` 不表示替代原快筛。
+可选启用 Jev 前筛时，编辑 `~/.zcode-executor/config.json` 并设 `chmod 600`（配置 JSON、权限校验规则与 `doctor` 链输出格式见 `references/cli-and-jev.md`）；**不要**把真实 key 放进命令参数、环境变量、任务单、聊天消息或仓库文件。
 
 ## 退出码与应对
 
@@ -208,22 +190,9 @@ zcode-executor deny <id>                         # 应答挂起的审批请求�
 zcode-executor answer <id> <值…>                 # 应答挂起的提问：按序号/value/label，多选逗号分隔
 ```
 
-- 观察面板实时显示各会话进展（回复、工具、挂起与排队）：Claude Code 里用户输入 `/zcode` 打开（你投递时自动打开，
-  状态栏汇总、关键变化弹提示），DSH 右侧栏有「zcode 任务」tab。面板只看不应答，挂起照样按上面的规矩在对话里处理。
-  背后是你不需要自己跑的只读 `zcode-executor watch --json`。
-
-- 正文写 `-` 从 stdin 读，长文本别跟命令行引号较劲：
-
-  ```bash
-  zcode-executor send <id> - --task "$WT/tasks/T-xxx.md" <<'EOF'
-  执行 tasks/T-xxx.md，按验收标准逐条自检后再停
-  EOF
-  ```
-
-- `--deny` 建会话时从工具注册中移除指定工具。**任务不需要执行端上网就带上 `--deny "WebFetch WebSearch"`**，减少联网工具的可用面。
-  这只移除这两个工具，Bash、js 和 MCP 工具仍可能联网；需要断网时要由系统或容器限制网络。
-- 你自己环境里的凭据变量（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`GITHUB_TOKEN`、`GH_TOKEN` 等）不会带给执行端。
-  任务要用 GitHub 凭据时靠本机已登录的 `gh` / git 凭据助手，别指望环境变量。
-- `--json` 给机器可读结构，脚本化处理时用；输出里的 `id` 都是本地 id。
-- cwd 会解析成真实路径存进登记簿（macOS 的 `/tmp/x` 会变成 `/private/tmp/x`），`list --project` 按解析后的路径匹配。
-- 数据目录 `~/.zcode-executor/`（`ZCODE_EXECUTOR_HOME` 可改）：`sessions.json` 登记簿，`runs/<id>/` 里有 `events.jsonl`（zcode 事件与闸门决定）、`last.json`、`pending.json`、`offpeak.json`（闲时投递时）、`runner.log`。
+- 观察面板实时显示各会话进展（回复、工具、挂起与排队）：Claude Code 里用户输入 `/zcode` 打开（投递时自动打开，状态栏汇总、关键变化弹提示），DSH 右侧栏有「zcode 任务」tab。面板只看不应答，挂起照样按上面的规矩在对话里处理；背后是不需要自己跑的只读 `zcode-executor watch --json`。
+- 正文写 `-` 从 stdin 读，长文本避免命令行引号转义（`zcode-executor send <id> - --task "$WT/tasks/T-xxx.md" <<'EOF'`）。
+- `--deny` 建会话时从工具注册中移除指定工具。**任务不需要执行端上网就带上 `--deny "WebFetch WebSearch"`**，减少联网工具的可用面（Bash、js 和 MCP 工具仍可能联网；彻底断网需由系统或容器限制）。
+- 主环境里的凭据变量（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`GITHUB_TOKEN`、`GH_TOKEN` 等）不会带给执行端；任务要用 GitHub 凭据时靠本机已登录的 `gh` / git 凭据助手。
+- `--json` 输出机器可读结构，输出里的 `id` 都是本地 id；`cwd` 会解析成真实路径存进登记簿（macOS 的 `/tmp/x` 变成 `/private/tmp/x`），`list --project` 按解析后路径匹配。
+- 数据目录 `~/.zcode-executor/`（`ZCODE_EXECUTOR_HOME` 可改）：`sessions.json` 登记簿，`runs/<id>/` 里有 `events.jsonl`（zcode 事件与闸门决定）、`last.json`、`pending.json`、`offpeak.json`、`runner.log`。
