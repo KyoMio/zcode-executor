@@ -391,12 +391,23 @@ Releases are tag-driven: `npm version patch` bumps `package.json`, syncs the ver
 
 Pure `.mjs`, zero runtime dependencies, no build step. Design documents live in `docs/`: [PRD](docs/PRD.md), [SPEC](docs/SPEC.md), [CONTEXT](docs/CONTEXT.md) (glossary), [RULES](docs/RULES.md) (the coding rules — the contributor entry point, human or agent), [decisions](docs/decisions.md), [verified](docs/verified.md) (facts measured against the real app-server).
 
-> **Upgrading note:** `AGENTS.md` and `CLAUDE.md` are no longer tracked (since #14). On a fast-forward pull, git removes both files even if `.git/info/exclude` lists them — exclusions never protect tracked paths. If you keep local copies (personal agent rules, machine-specific notes), back them up before pulling and restore afterwards:
+> **Upgrading note:** `AGENTS.md` and `CLAUDE.md` are no longer tracked (since #14). On a fast-forward pull, git removes both files even if `.git/info/exclude` lists them — exclusions never protect tracked paths. If you keep local copies (personal agent rules, machine-specific notes), back them up before pulling and restore afterwards. Three traps to avoid: use a FRESH backup directory each time (a fixed path can resurrect the other file from an older run); uncommitted edits to the tracked guides make git refuse the pull — commit or stash them first; and restore ONLY what this run backed up, and only after the pull actually succeeded.
 >
 > ```bash
-> cp AGENTS.md CLAUDE.md /tmp/ 2>/dev/null   # before pulling
-> git pull --ff-only
-> cp /tmp/AGENTS.md /tmp/CLAUDE.md . 2>/dev/null   # restore — they stay untracked now
+> # 0. local edits to the tracked guides block the pull — put them away first:
+> #    either commit them on a branch, or `git stash push -- AGENTS.md CLAUDE.md`
+> #    (restore afterwards with `git stash pop`).
+> backup="$(mktemp -d)"               # a fresh dir every time — nothing stale inside
+> for f in AGENTS.md CLAUDE.md; do
+>   [ -f "$f" ] && cp "$f" "$backup/"   # copy only what exists; no error swallowing
+> done
+> if git pull --ff-only; then
+>   for f in AGENTS.md CLAUDE.md; do
+>     [ -f "$backup/$f" ] && cp "$backup/$f" .   # restore only what this run backed up
+>   done                                        # the files stay untracked from now on
+> else
+>   echo "pull failed — restoring nothing; fix the local edits (stash/commit) and retry" >&2
+> fi
 > ```
 
 ## FAQ

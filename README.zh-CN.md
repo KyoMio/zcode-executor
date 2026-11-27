@@ -379,12 +379,22 @@ node --check lib/**/*.mjs
 
 纯 `.mjs`，零运行时依赖，无构建。设计文档在 `docs/`：[PRD](docs/PRD.md)、[SPEC](docs/SPEC.md)、[CONTEXT](docs/CONTEXT.md)（术语）、[RULES](docs/RULES.md)（开发规范——人或 agent 贡献者的入口）、[decisions](docs/decisions.md)、[verified](docs/verified.md)（对真 app-server 实测的事实）。
 
-> **升级说明：** 自 #14 起 `AGENTS.md` 与 `CLAUDE.md` 不再受 git 跟踪。旧克隆快进更新时，git 会移除这两个文件——即使事先写进 `.git/info/exclude` 也拦不住，排除规则从不保护已跟踪文件。如果你在本地保留了自己的 agent 指南（个人规则、本机备注），拉取前先备份、更新后恢复：
+> **升级说明：** 自 #14 起 `AGENTS.md` 与 `CLAUDE.md` 不再受 git 跟踪。旧克隆快进更新时，git 会移除这两个文件——即使事先写进 `.git/info/exclude` 也拦不住，排除规则从不保护已跟踪文件。如果你在本地保留了自己的 agent 指南（个人规则、本机备注），拉取前先备份、更新后恢复。注意三个坑：备份目录每次新建（固定路径可能把上次留下的另一份指南误恢复进来）；受跟踪文件上的未提交改动会让 git 拒绝拉取——先提交或暂存；恢复时只恢复本次实际备份到的文件，且确认拉取成功后再恢复。
 >
 > ```bash
-> cp AGENTS.md CLAUDE.md /tmp/ 2>/dev/null   # 拉取前备份
-> git pull --ff-only
-> cp /tmp/AGENTS.md /tmp/CLAUDE.md . 2>/dev/null   # 恢复——此后它们以未跟踪文件存在
+> # 0. 指南上的未提交改动会挡住拉取——先处理：在分支上提交，
+> #    或 `git stash push -- AGENTS.md CLAUDE.md`（事后 `git stash pop` 找回）。
+> backup="$(mktemp -d)"               # 每次独立目录——里面不会有上次留下的旧文件
+> for f in AGENTS.md CLAUDE.md; do
+>   [ -f "$f" ] && cp "$f" "$backup/"   # 只备份实际存在的文件，不吞错误
+> done
+> if git pull --ff-only; then
+>   for f in AGENTS.md CLAUDE.md; do
+>     [ -f "$backup/$f" ] && cp "$backup/$f" .   # 只恢复本次备份到的文件
+>   done                                        # 此后它们以未跟踪文件存在
+> else
+>   echo "拉取失败——什么都不恢复；先处理本地改动（暂存/提交）再重试" >&2
+> fi
 > ```
 
 ## 常见问题
