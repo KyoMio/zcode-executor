@@ -382,18 +382,21 @@ node --check lib/**/*.mjs
 > **升级说明：** 自 #14 起 `AGENTS.md` 与 `CLAUDE.md` 不再受 git 跟踪。旧克隆快进更新时，git 会移除这两个文件——即使事先写进 `.git/info/exclude` 也拦不住，排除规则从不保护已跟踪文件。如果你在本地保留了自己的 agent 指南（个人规则、本机备注），拉取前先备份、更新后恢复。注意三个坑：备份目录每次新建（固定路径可能把上次留下的另一份指南误恢复进来）；受跟踪文件上的未提交改动会让 git 拒绝拉取——先提交或暂存；恢复时只恢复本次实际备份到的文件，且确认拉取成功后再恢复。
 >
 > ```bash
-> # 0. 指南上的未提交改动会挡住拉取——先处理：在分支上提交，
-> #    或 `git stash push -- AGENTS.md CLAUDE.md`（事后 `git stash pop` 找回）。
 > backup="$(mktemp -d)"               # 每次独立目录——里面不会有上次留下的旧文件
 > for f in AGENTS.md CLAUDE.md; do
->   [ -f "$f" ] && cp "$f" "$backup/"   # 只备份实际存在的文件，不吞错误
-> done
+>   [ -f "$f" ] && cp "$f" "$backup/"   # 只备份实际存在的文件，连本地编辑一起
+> done                                  # ——先备份：stash 会把工作区退回旧提交内容
+> # 指南上的未提交改动会挡住拉取，先暂存。编辑已经进了备份，
+> # stash 只是给上游同步让路，事后没有要 pop 的内容（确认升级无误后 drop 掉即可）。
+> git stash push -q -- AGENTS.md CLAUDE.md 2>/dev/null
 > if git pull --ff-only; then
 >   for f in AGENTS.md CLAUDE.md; do
->     [ -f "$backup/$f" ] && cp "$backup/$f" .   # 只恢复本次备份到的文件
->   done                                        # 此后它们以未跟踪文件存在
+>     if [ -f "$backup/$f" ]; then cp "$backup/$f" .; fi   # 只恢复本次备份到的文件，
+>   done                                                  #   本地编辑原样带回
+>   echo "升级完成——两份指南已按未跟踪文件恢复；确认无误后 drop 掉 stash"
 > else
->   echo "拉取失败——什么都不恢复；先处理本地改动（暂存/提交）再重试" >&2
+>   echo "拉取失败——什么都不恢复；先处理本地改动再重试" >&2
+>   false   # 退出码非零，又不会像 exit 那样把交互 shell 关掉
 > fi
 > ```
 
