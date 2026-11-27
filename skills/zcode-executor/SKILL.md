@@ -191,7 +191,13 @@ zcode-executor answer <id> <值…>                 # 应答挂起的提问：�
 ```
 
 - 观察面板实时显示各会话进展（回复、工具、挂起与排队）：Claude Code 里用户输入 `/zcode` 打开（投递时自动打开，状态栏汇总、关键变化弹提示），DSH 右侧栏有「zcode 任务」tab。面板只看不应答，挂起照样按上面的规矩在对话里处理；背后是不需要自己跑的只读 `zcode-executor watch --json`。
-- 正文写 `-` 从 stdin 读，长文本避免命令行引号转义（`zcode-executor send <id> - --task "$WT/tasks/T-xxx.md" <<'EOF'`）。
+- 正文写 `-` 从 stdin 读，长文本避免命令行引号转义：
+
+  ```bash
+  zcode-executor send <id> - --task "$WT/tasks/T-xxx.md" <<'EOF'
+  执行 tasks/T-xxx.md，按验收标准逐条自检后再停
+  EOF
+  ```
 - `--deny` 建会话时从工具注册中移除指定工具。**任务不需要执行端上网就带上 `--deny "WebFetch WebSearch"`**，减少联网工具的可用面（Bash、js 和 MCP 工具仍可能联网；彻底断网需由系统或容器限制）。
 - 主环境里的凭据变量（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`GITHUB_TOKEN`、`GH_TOKEN` 等）不会带给执行端；任务要用 GitHub 凭据时靠本机已登录的 `gh` / git 凭据助手。
 - `--json` 输出机器可读结构，输出里的 `id` 都是本地 id；`cwd` 会解析成真实路径存进登记簿（macOS 的 `/tmp/x` 变成 `/private/tmp/x`），`list --project` 按解析后路径匹配。
