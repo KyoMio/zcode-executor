@@ -18,5 +18,7 @@ test('dsh-plugin 的 SKILL.md 是软链，且指向根 skills/ 的实体文件',
 test('软链目标可读且是 zcode-executor 的 skill', () => {
   const content = readFileSync(link, 'utf8');
   assert.ok(content.includes('name: zcode-executor'), 'front matter 里应有 name: zcode-executor');
-  assert.ok(content.length > 10000, 'skill 内容不应是残缺的');
+  // ZCE-11 精炼后 SKILL.md 约 9.1k 字符（227→194 行），阈值从 10000 下调到 8000——
+  // 这条红线防的是「软链目标被截空」，不是字数考核；内容完整性靠 review 把关
+  assert.ok(content.length > 8000, 'skill 内容不应是残缺的');
 });

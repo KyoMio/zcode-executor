@@ -252,7 +252,7 @@ Other agents have no pane and keep using the skill and the CLI.
 
 | Command | What it does |
 | --- | --- |
-| `doctor [--offpeak] [--json]` | Self-check that spends no quota: finds `zcode.cjs` and the bundled `zcode-builtin.json` (ZCode App ≥ 3.12.2), reports both provider sources, does one real handshake, reports model tiers and the review pipeline for a newly started runner (it does not call Jev), and checks the off-peak interface — that step goes online and leaves one self-check session in zcode's own session store. `--offpeak` runs only that step |
+| `doctor [--offpeak] [--json]` | Zero-quota self-check: locates the app and providers, does one real handshake, reports model tiers and the review pipeline a new runner would use, then checks the off-peak interface — that step goes online and leaves one self-check session in zcode's own session store; `--offpeak` runs only that step. Details in [references/cli-and-jev.md](skills/zcode-executor/references/cli-and-jev.md) and [references/offpeak-and-start-plan.md](skills/zcode-executor/references/offpeak-and-start-plan.md) |
 | `quota [--json]` | How many off-peak tickets this tool took today and whether the server would hand one out now; no quota spent, no app-server |
 | `models [--json]` | Lists available models with thought levels and tier assignment |
 | `new --cwd <abs> [--title T] [--tier fast\|strong] [--thought L] [--deny "Tool…"] [--provider id] [--json]` | Registers a session (returns a local id `x_…`); the ZCode session is created on first `send` |
@@ -271,7 +271,7 @@ Exit codes: `0` done · `1` usage / cannot start · `2` refused (whitelist, unkn
 
 ### Off-peak sends
 
-An off-peak send runs the turn on the Coding Plan subscription's free off-peak capacity instead of your plan quota. The server decides when it starts: `send --offpeak` takes a ticket and queues, and the turn runs once the ticket is ready. Acceptance is the same as a normal send. Requirements: an individual Coding Plan account login in the ZCode app, and a session model on the off-peak model list. The session must be idle; while an off-peak send is queued or running, normal sends to that session are refused, so use a separate session for off-peak work. Expired tickets are retaken automatically (up to three tickets per send), `cancel` settles the ticket at any stage, and `quota` shows today's usage (roughly three tickets a day observed). Normal sends stay the default; the skill tells you when off-peak is available and only switches when you ask.
+An off-peak send runs the turn on the Coding Plan subscription's free off-peak capacity instead of your plan quota. `send --offpeak` takes a ticket and queues; the server decides when it starts, and acceptance is the same as a normal send. Requires an individual Coding Plan login in the ZCode app and a session model on the off-peak model list. The session must be idle — while an off-peak send is queued or running, normal sends to it are refused, so use a separate session for off-peak work. Normal sends stay the default; off-peak is opt-in. Ticket expiry and retake, `--resume`, `cancel` settlement, error handling and daily quota are covered in [`skills/zcode-executor/references/offpeak-and-start-plan.md`](skills/zcode-executor/references/offpeak-and-start-plan.md).
 
 ## Configuration
 
@@ -291,83 +291,17 @@ An off-peak send runs the turn on the Coding Plan subscription's free off-peak c
 
 ### Optional: enable Jev pre-screening
 
-[Jev](https://docs.typesafe.ai/introduction) is TypeSafe's structured decision model: it returns probabilities rather than explanations. It **does not execute tasks or replace the original ZCode fast screen**. It only tries to pass actions early when the evidence is sufficient:
+[Jev](https://docs.typesafe.ai/introduction) is TypeSafe's structured decision model: it returns probabilities rather than explanations. It does not execute tasks and does not replace the original ZCode fast screen — it only passes actions early when the evidence is sufficient. Inserted between the hard rules and the ZCode `fast` + `low` screen, it makes the pipeline `jev → zcode-fast → zcode-slow` (see [Two layers](#two-layers)).
 
-```text
-After hard-rule and allow_once checks
-  → Jev pre-screen: pass early, otherwise continue
-  → ZCode fast screen (default fast + low): pass, otherwise continue
-  → ZCode slow review: allow or ask a human
-```
-
-- Five risk checks cover task-boundary conflicts, writes outside the workspace, credential exposure or sensitive-data exfiltration, destructive/external side effects, and unrelated actions. The model defaults to the `jev-latest` alias (configurable via `review.jev.model`); all five probabilities must be at most `0.20` for early approval. This is a screening threshold, not a safety guarantee.
-- Write/Edit/MultiEdit bodies are not sent to Jev; these actions currently skip pre-screening locally. Missing intent, truncated required input, or credentials that cannot be reliably redacted also cause a local skip, with **no Jev HTTP request**. Command complexity alone is not a reason to skip.
-- Jev flags, timeouts, network errors, and invalid responses go to the original ZCode fast screen—not directly to denial or mandatory slow review. A failed ZCode fast-screen call still asks a human.
-- Early passes can save subsequent review calls; other requests add serial latency. Jev currently has a 10-second total budget, separate from ZCode's `review.timeoutMs`. Actual speed and cost benefits depend on the pass rate.
-
-#### 1. Configure the API key
-
-Obtain your own API key from [TypeSafe](https://typesafe.ai/) (see the [official quick start](https://docs.typesafe.ai/introduction/quickstart)). It is separate from your ZCode provider key; do not edit ZCode App's configuration for this.
-
-Edit `~/.zcode-executor/config.json`. **Merge the `review.jev` field into your existing configuration; keep allowedRoots, provider settings, and other fields rather than replacing the whole file.** If you set `ZCODE_EXECUTOR_HOME`, edit `config.json` in that directory instead.
-
-Never put a real key in a command argument, shell environment, checked-in example, issue, or log. The value below is only a placeholder; real keys need not use that prefix:
-
-```json
-{
-  "review": {
-    "jev": {
-      "apiKey": "jev_REPLACE_WITH_YOUR_KEY"
-    }
-  }
-}
-```
-
-Optional: if Jev requests must go through a proxy (e.g. the endpoint is unreachable directly), add `proxy` under the same `review.jev` object. It accepts an `http://` or `https://` proxy URL and supports `user:pass@` credentials. Only Jev's HTTPS calls use it—the ZCode dispatch chain and app-server traffic are unaffected. `socks5://` is not supported:
-
-```json
-{
-  "review": {
-    "jev": {
-      "apiKey": "jev_REPLACE_WITH_YOUR_KEY",
-      "proxy": "http://127.0.0.1:7890"
-    }
-  }
-}
-```
-
-#### 2. Protect the configuration file
-
-The file must already exist. Restrict its permissions (adjust the path if you use a custom configuration directory):
+To enable it, get your own key from [TypeSafe](https://typesafe.ai/) (see the [official quick start](https://docs.typesafe.ai/introduction/quickstart)) and merge `review.jev.apiKey` into `~/.zcode-executor/config.json` — keep the file's other fields rather than replacing them. Never put a real key in a command argument, shell environment, checked-in example, issue, or log; there is no environment-variable fallback. Then tighten the file's permissions:
 
 ```bash
 chmod 600 ~/.zcode-executor/config.json
 ```
 
-When `review.jev.apiKey` is set, `config.json` must be a regular, non-symlink file owned by the current UID and accessible only by that owner (`0600` or stricter). Otherwise zcode-executor refuses to load it. There is no environment-variable fallback and no Jev mode or shadow setting. Remove `apiKey` (or leave it all-whitespace) to use only the original ZCode review chain. Setting `review.enabled` to `false` disables **all** model review, including Jev; hard rules still apply and other permission requests wait for a human.
+Run `zcode-executor doctor --json` — with a key configured, `review.pipeline` reads `["jev", "zcode-fast", "zcode-slow"]`. New runners pick up the change; running ones do not hot-reload. To turn only Jev off again, remove the key — `review.enabled:false` would disable all model review.
 
-#### 3. Verify configuration and activation
-
-```bash
-zcode-executor doctor --json
-```
-
-With review enabled and a key configured, the output should include:
-
-```json
-"review": {
-  "enabled": true,
-  "fastScreen": "jev",
-  "jevConfigured": true,
-  "pipeline": ["jev", "zcode-fast", "zcode-slow"]
-}
-```
-
-`doctor` does not call Jev. It confirms configuration and the selected chain, **not TypeSafe key validity, account credit, or network connectivity**. This excerpt is part of the full JSON response; `fastScreen` is a compatibility field, not an indication that ZCode's fast screen was replaced.
-
-Newly started runners read the configuration; existing runners do not hot-reload it. Let the current runner exit before sending another turn to pick up changes. Actual approvals record `pass / flag / error / skip` and filtered diagnostics in `executor.gate.preScreen`, never the key or full Jev state.
-
-**To disable only Jev:** remove `review.jev.apiKey`, keeping the original ZCode fast and slow review chain. Do not use `review.enabled:false` for this—it disables all model review.
+Everything else — the five risk checks and the `0.20` threshold, proxy and `review.jev.model` settings, file-ownership requirements, local skip rules, flag/error fallback, and how activation is verified — is in [`skills/zcode-executor/references/cli-and-jev.md`](skills/zcode-executor/references/cli-and-jev.md).
 
 ## Safety model
 

@@ -7,42 +7,28 @@ description: 把一件已经想清楚的开发任务交给本机 ZCode（GLM）�
 
 你是规划中枢，zcode 是执行端。你把要做什么写成任务单，zcode 在隔离的执行副本（git worktree）里改，
 你用客观证据验收。命令是 `zcode-executor`，下面的命令块替换占位符后可直接复制运行。
-终端里先 `command -v zcode-executor` 确认：在 PATH 里就照抄命令块。找不到时按宿主取值：
-- Claude Code 插件装好时已进 PATH；散装用法里它是本 skill 目录上两级的 `bin/zcode-executor`（`<插件根>/bin/zcode-executor`），用绝对路径调；
-- 本机源码用法：仓库 `bin/` 的绝对路径（示例：`/Volumes/MacData/projects/zcode-executor/bin/zcode-executor doctor`）；
-- 也可以 `npm install -g zcode-executor` 或直接 `npx zcode-executor …`。
+终端里先 `command -v zcode-executor` 确认；找不到时按宿主取值：Claude Code 插件装好时已进 PATH；散装用法用 `<插件根>/bin/zcode-executor` 绝对路径；或 `npx zcode-executor …`。
 
 ## 工作模式：主 agent 编排，原会话闭环
 
-- 主 agent 负责任务单、调度和最终证据验收；实现与返工交给执行会话，代码评审与复审交给独立 review 会话。记录任务对应的执行 id、review id 和执行副本路径；review 会话只读。
-- **返工 → 原执行会话；返工后复审 → 原 review 会话。** 将评审问题、复现证据和通过标准写入返工单，等原执行回合结束后带 `--task` 重投；将最新 diff、测试结果和返工单交回原 review 会话，逐项确认问题关闭。主 agent 的证据验收不代替 review，也不亲自接管修补。原会话确实不可恢复时才新建，并移交上述上下文。
-- **投递后先推进独立工作，确实无事可做再等待。** 默认 `send` 不带 `--wait`，后台起 `follow` 并记录 job id；期间规划下一步、准备验收清单或梳理后续任务，不碰执行端正在改的文件，不提前使用尚未完成的产物。收到完成或挂起通知再处理，交付前收齐结果；不要用反复 `status` 或 sleep 循环代替后台等待。
+- 主 agent 管任务单、调度和证据验收；实现与返工归执行会话，评审与复审归独立 review 会话（只读）。记录执行 id、review id、执行副本路径。
+- **返工 → 原执行会话；复审 → 原 review 会话。** 评审问题与通过标准写进返工单，回合结束后带 `--task` 重投；最新 diff 与返工单交回原 review 会话逐项关闭。主 agent 不亲自接管修补；原会话确实不可恢复才新建并移交上下文。
+- **投递后先推进独立工作，无事可做再等待。** 默认不带 `--wait`，后台 `follow` 记 job id；期间规划下一步或准备验收清单，不碰执行端在改的文件。不要用反复 `status` 或 sleep 循环代替后台等待。
 
 ## 铁律
 
-1. **任务单是契约，消息只是门铃。** 任务内容全部写进任务单文件，投递正文一句「执行 tasks/T-xxx.md」就够——
-   zcode 是有自己判断的完整 agent，一段话过去它会自己重新理解，任务单才是事后对账的依据。
-   所以 `send` 必带 `--task`：不给任务单，模型审批看不到你授权了什么，越界判断没有依据，几乎全部转人工。
-   审批认的是**投递那一刻**的任务单内容（入队时留了快照）：之后再改文件，审批看不到，带着 `--task` 再投一次才算数。
-2. **验收看 `git diff` 和测试，不看它怎么说。** 回合结束带回来的回答只是执行端自述。判断做没做对，
-   一律回主仓看 diff、在执行副本里跑测试、读产物文件。
-3. **反复投同一条会话三四轮还没过，回去改任务单。** 通常问题出在任务描述不清，不是多投几次能解决的。
-   改法：写 `tasks/T-xxx-fix.md` 说明差在哪，再投同一条会话（它有上下文，带着上下文返工）。
-4. **挂起先分流，不替用户批越界。** 先核对任务单、用户已有授权和具体操作：能确认且规则允许主 agent 处理的，按「退出码 5」应答；越界、无法确认或上层指令要求人工确认的，带判断依据转用户。挂起本身不是危险判据，也不是放行依据；本 skill 不覆盖宿主的审批限制。
-5. **Jev 只由配置启用前筛。** 非空白 `review.jev.apiKey` 启用提前通过层；pass 结束审批，flag/error/skip 回到
-   原 ZCode `fast` + `review.thought`（默认 `low`）快筛，未通过或无法解析才慢判；原快筛调用失败仍转人工。
-   正文省略、缺有效意图或必要输入截断时本地 skip，不发 HTTP；复杂命令本身不是跳过理由。无 key 保留原链，
-   无环境变量 fallback 或 mode/shadow；`review.enabled:false` 关闭全部模型审批。
+1. **任务单是契约，消息只是门铃。** 任务内容全部写进任务单文件，投递正文一句「执行 tasks/T-xxx.md」就够。
+   `send` 必带 `--task`：不给任务单，审批看不到授权依据，几乎全部转人工。审批认的是**入队那一刻**的快照——之后再改文件不算数，带 `--task` 重投才算。
+2. **验收看 `git diff` 和测试，不看它怎么说。** 回合回答只是执行端自述；一律回主仓看 diff、跑测试、读产物。
+3. **三四轮返工没过，回去改任务单**——写 `tasks/T-xxx-fix.md` 说明差在哪，投原会话（它有上下文）。
+4. **挂起先分流，不替用户批越界。** 能确认且在授权内的按「退出码 5」应答；越界或无法确认的带依据转用户。挂起本身不是危险判据，也不是放行依据。
+5. **Jev 只由配置启用前筛**，不改变执行端审批链语义；细节与配置见「模型等级」一节末尾。
 
 ## 一个任务的完整走法
 
 ```bash
-# 1. 先写任务单（模板 templates/task.md）
-#    验收标准要能被机器检查：跑什么命令、看什么文件、期望什么输出
-#    合理拆分任务：一单只做一件能独立验收的事；估计要改很多文件或跑很久测试的活儿，
-#    拆成多单串行投（前一单过了再投下一单），别塞成一单
-#    回合默认超时 1 小时（--timeout 3600）：任务还要更久的，派单手动给更长的 --timeout，
-#    超时会把当前回合取消、重投浪费额度
+# 1. 先写任务单（模板 templates/task.md）：验收标准要能被机器检查；一单只做一件能独立验收的事，
+#    大活拆多单串行投。回合默认超时 1 小时，更久的派单给更长 --timeout（超时取消回合、重投浪费额度）
 
 # 2. 给仓库建执行副本（每个仓库一个，按任务切分支）
 WT=~/.zcode-executor/worktrees/<仓库名>
@@ -75,9 +61,7 @@ git -C "$WT" <跑测试的命令>
 
 ## git 一律 `-C <绝对路径>`，别靠 cd
 
-主仓和执行副本是两个目录，一条 Bash 里 `cd` 过一次之后，后面的 `git merge`、`git checkout -b`
-就可能跑在你以为之外的那个仓库里。真踩过的坑：在执行副本里跑完测试接着 merge，merge 落在执行副本
-（HEAD 就是那个分支，自合并什么都没变），主仓 main 没动，下一单从 main 切的分支缺上一单的代码。
+主仓和执行副本是两个目录，`cd` 之后后续 git 命令可能落在错的仓库（真踩过：merge 落在执行副本自合并，主仓没动，下一单缺上一单代码）。
 
 ```bash
 git -C <主仓绝对路径> merge --ff-only task/T-xxx      # 合并进 main：在主仓
@@ -87,7 +71,7 @@ git -C "$WT" checkout -b task/T-yyy main              # 切新分支：在执行
 
 ## 模型等级、思考等级与 Jev 前筛
 
-按等级选 ZCode 模型，不写模型名——模型换代不用改习惯。`models` 能看每个等级当前分到了谁。Jev 只增加可选前筛，不改变执行会话的 `--tier`，原 ZCode 快筛与慢判仍保留。
+按等级选模型不写模型名（换代不用改习惯），`models` 看当前分配。
 
 | 活儿 | 建议 |
 | --- | --- |
@@ -95,22 +79,21 @@ git -C "$WT" checkout -b task/T-yyy main              # 切新分支：在执行
 | 常规实现（有明确验收标准的功能） | `--tier fast` |
 | 难活（要设计取舍、调试难复现、改陌生代码） | `--tier strong` |
 
-- **思考等级默认 `high`，都不用调。** Flash 类模型不要往低调，实测效果差。
-- provider 优先账号型个人版 coding plan（App 账号登录后的 key），其次账号型团队版，再次 `config.json` 里的 coding plan；同名模型在多个 provider 下并存时不用管，插件自己选对，要换就在插件配置里写 `preferredProvider`（如 `account:bigmodel-team-coding-plan`）。
-- 模型和思考等级建会话时定，同一条会话后续投递沿用。难活别复用之前建的 fast 会话，新开一条。
-- **原 zcode 会话上下文超过 1M token 就换新会话派单。** 会话越长每次投递的固定开销越大、执行效率越低；
-  旧会话攒的上下文对新任务多半是噪声。新任务一律新会话（必要时配新副本），把任务单和必要 diff 移交过去。
+- **思考等级默认 `high` 不用调**；Flash 类模型不要往低调，实测效果差。
+- provider 自动选优（账号型个人版 > 团队版 > config.json coding plan），要换写 `preferredProvider`。
+- 等级建会话时定、后续沿用；难活别复用 fast 会话。
+- **会话上下文超 1M token 就换新会话**——越长固定开销越大，旧上下文对新任务多半是噪声。
 
-可选启用 Jev 前筛时，编辑 `~/.zcode-executor/config.json` 并设 `chmod 600`（配置 JSON、权限校验规则与 `doctor` 链输出格式见 `references/cli-and-jev.md`）；**不要**把真实 key 放进命令参数、环境变量、任务单、聊天消息或仓库文件。
+可选 Jev 前筛：非空白 `review.jev.apiKey` 启用提前通过层——pass 结束审批，flag/error/skip 回原 ZCode `fast`+`low` 快筛链；正文省略或输入截断时本地 skip 不发 HTTP。配置 JSON 与权限校验见 `references/cli-and-jev.md`；key 绝不进命令参数、环境变量、任务单或仓库文件。无 fallback，`review.enabled:false` 关闭全部模型审批。
 
 ## 退出码与应对
 
 | 码 | 含义 | 你该做什么 |
 | --- | --- | --- |
 | 0 | 回合干完了 | 去验收，别直接信它说完成了 |
-| 1 | 用法错、zcode 起不来（含 ZCode App 早于 3.12） | 看报错；环境问题跑 `zcode-executor doctor`（不花额度的自检）。它退出码 1 时先看是哪一步不过：只有 ⑤ 闲时接口变了的话，普通派单照常能用 |
-| 2 | 被拒：白名单外、会话不在登记簿、等级或思考等级不合法；闲时投递被拒 | 报错里写了原因，按原因处理，别原样重试；闲时的见「闲时投递」一节 |
-| 3 | `send --wait` 超时（默认 3600 秒，`--timeout` 可改），**当前回合已取消**，会话还在 | 直接再投一次接着做；`follow` 的超时不取消任何东西，只是旁观者到点走了 |
+| 1 | 用法错、zcode 起不来 | 看报错；环境问题跑 `doctor`（零额度自检）。仅 ⑤ 闲时接口变了不影响普通派单 |
+| 2 | 被拒：白名单外、未知会话、等级不合法、闲时取号被拒 | 报错自带原因，按原因处理别原样重试 |
+| 3 | `--wait` 超时，**回合已取消** | 直接再投接着做（`follow` 超时只是旁观者离开，不取消回合） |
 | 4 | 回合异常：报错、被中止、撞输出上限 | 读 reason；撞上限就把任务拆小再投 |
 | 5 | 挂起等人：审批请求或提问 | 见下一节，别想办法绕过去 |
 
@@ -120,9 +103,9 @@ git -C "$WT" checkout -b task/T-yyy main              # 切新分支：在执行
 
 **审批请求**（执行端要做某个操作，等你允许）：
 
-1. 读取完整工具名、参数、目标路径和挂起理由，对照任务单与用户授权判断实际影响；证据不足先做只读核查。
-2. **可自行确认**：操作明确在授权范围内、未命中红线，且上层指令允许自主应答 → 说明依据后 `zcode-executor approve <id>`（仅本次）；明确违反任务约束且允许自主拒绝 → `zcode-executor deny <id>`，将原因交回原执行会话调整方案。
-3. **需人工决定**：越界（例如执行副本外写入）、新增权限或不可逆影响未获授权、证据不足，或上层指令明确要求转交 → 原样转述工具名、参数、理由，附建议与未确认点（Claude Code 用 AskUserQuestion，DSH 走宿主的上抛）；得到决定再 `approve` / `deny`。不得通过改任务单、关闭审批或换命令绕过限制。
+1. 读全工具名、参数、目标路径和挂起理由，对照任务单与授权判断；证据不足先做只读核查。
+2. **可自行确认**：明确在授权范围内、未命中红线、上层允许自主应答 → 说明依据后 `approve <id>`（仅本次）；明确违反约束且允许自主拒绝 → `deny <id>` 并把原因交回原执行会话。
+3. **需人工决定**：越界、新增权限、不可逆影响未获授权、证据不足或上层要求转交 → 原样转述并附建议（Claude Code 用 AskUserQuestion，DSH 走宿主上抛），得到决定再 `approve`/`deny`。不得靠改任务单、关审批或换命令绕过限制。
 
    规则是 `self-modify-approval` 的要格外当心：那是执行端在碰 zcode-executor 自己的数据目录（审批的挂起与应答都在里面）或者在调 `zcode-executor` 命令。正常干活用不着这两样，原样告诉用户它想做什么，别替它解释成无害。
 
@@ -130,29 +113,16 @@ git -C "$WT" checkout -b task/T-yyy main              # 切新分支：在执行
 
 **提问**（执行端反过来问你问题，要答案不是要允许）：
 
-1. 先自己判断任务单里有没有答案，能答就不必惊动用户：`zcode-executor answer <id> <值…>`。
-   有选项按序号、value 或 label 给值，多选逗号分隔；无选项就是自由文本。
-2. 答不了再问人，拿到答案后同样 `answer` 回过去。
+1. 任务单里有答案就自己答（不惊动用户）：`answer <id> <值…>`——选项按序号/value/label，多选逗号分隔，无选项自由文本。
+2. 答不了再问人，拿到答案同样 `answer` 回过去。
 
 ## 证据、断点与排查止损
 
-**Proof Manifest（ZCE-8）。** 派单模板已带「收尾写 `.executor-proof.json`」的约定：执行端必须给
-真实跑出来的退出码、产物路径、诚实列出的未验证项。回合结算时证据自动落盘到
-`runs/<id>/proof.json`（不污染业务仓库），`status --json` 的 `proofSummary` 是它的折算——
-**没证据的回合直接打回，别进评审**。执行端忘了写文件时，最终回复里的 ```` ```executor-proof ````
-围栏块也算数。
+**Proof Manifest。** 派单模板约定执行端收尾写 `.executor-proof.json`（真实退出码、产物路径、未验证项）；结算自动落盘 `runs/<id>/proof.json`，`status --json` 的 `proofSummary` 是其折算——**没证据的回合直接打回，别进评审**。忘写文件时，最终回复里的 ```` ```executor-proof ```` 围栏块也算数。
 
-**断点续跑（ZCE-9）。** 估计要跑很久、或分多个阶段的任务，投递时带 `--checkpoint`：
-正文尾部会自动追加断点维护指令，执行端每完成一个子阶段更新 `.executor-checkpoint.md`。
-回合撞超时或被取消时，结算自动归档断点并在 `last.json` / `status` / 收尾摘要里给出一条
-**可直接复制的续跑命令**（带原任务单路径）。看到 `续跑:` 行，复制执行即可，不要人工翻工作区猜进度。
+**断点续跑。** 长任务/多阶段任务投递带 `--checkpoint`：执行端每完成一阶段更新 `.executor-checkpoint.md`；超时或被取消时断点自动归档，`status` 给出**可直接复制的续跑命令**——看到 `续跑:` 行复制执行即可，别人工翻工作区猜进度。
 
-**排查止损（ZCE-10）。** 「排查/定位/复现」类派单带 `--task-type investigate`：
-
-- 模板约定「同一假设连续 2 次证伪即停手改写最小复现脚本并汇报」，写进任务单而不是靠自觉；
-- 运行超过 900 秒还没结算时，`status` 会给出 `steerHint`——一条可直接复制的 `--steer` 命令，
-  注入「停止打补丁，改写最小复现脚本并汇报现状」。看到它就发，别让排查单方向死磕到超时；
-- `feature` / `bugfix` 类型也可以标，目前只有 `investigate` 有止损阈值。
+**排查止损。** 排查/定位/复现类派单带 `--task-type investigate`：任务单写死「同一假设连续 2 次证伪即停手改写最小复现并汇报」；超 900 秒未结算时 `status` 给出 `steerHint`（可复制的 `--steer` 止损命令），看到就发，别让排查死磕到超时。
 
 ## 插话、跟看、叫停
 
@@ -163,34 +133,31 @@ zcode-executor status <id>                                # 只读快照：状�
 zcode-executor cancel <id>                                # 叫停：挂起的先答拒绝，再停回合，不再取队列
 ```
 
-- **`--steer` 是插话不是打断。** 消息递给正在跑的回合，不打断它；要打断先 `cancel` 再重投。
-  插话在下一个工具边界生效；没有边界时排到回合结束后执行。
-- **`follow` 用后台任务起**（`run_in_background`），它退出时你会被自动叫回来。别在前台用 timeout
-  包着等——超时切断的只是你这个旁观者，回合还在跑，你却容易当成它挂了。
-- 想随时问「到哪了」用 `status`：只读、不花额度、不阻塞。phase 的取值：`running` 在跑、`pending` 挂起等人、
-  `idle` runner 活着但队列空、`exited` runner 跑完正常退出（配合「上次: done」看，不是出事）、`stale` runner 跑到一半没了，最需要人工看。
-  `list` 每行的 `[phase]` 同一套词，没有 running / pending 就是没有在跑的会话。
-- 要边跑边看，`send` / `follow` 加 `--stream`：工具调用摘要和成型回答打到 stderr。
+- **`--steer` 是插话不是打断**：下一个工具边界生效，无边界则排到回合结束后；要打断先 `cancel` 再重投。
+- **`follow` 用后台任务起**（`run_in_background`），退出时自动叫你回来。别前台 timeout 包着等——切断的只是旁观者，回合还在跑。
+- `status` 只读零额度。phase：`running` 在跑、`pending` 挂起、`idle` 队列空、`exited` 正常退出（配合上次结果看）、`stale` runner 半途没了（最需要人工看）。
+- 边跑边看加 `--stream`：工具摘要与成型回答打到 stderr。
 
 ## 闲时投递与 start plan 投递
 
 走闲时（`--offpeak`）或 Start Plan（`--start-plan`）额度前，先读 `references/offpeak-and-start-plan.md`：
 什么时候提闲时、`quota` 话术、取号/排号/恢复的完整命令、退出码 2 的取号被拒对照表、cron 健康检查都在那里。
 
+## 深入参考：Feature Map
+
+按功能域分五份，**按需选读不要全读**：`references/features/README.md` 是导读——01 基础派单、02 审批闸门与 Jev、03 闲时与 StartPlan、04 watch 面板与插件、05 凭据与 provider 选路。每份含行为契约与 Gotchas（真机核实的踩坑记录）。仓库级验证入口统一为 `scripts/control-executor.mjs`（doctor / zero-token / mock-matrix / orphan-check / live-smoke / flake-swarm）。
+
 ## 两种会话 id
 
-- 命令一律用**本地 id**（`x_` 开头，`new` 返回的那个）。
-- zcode 自己的 `sess_…` id 首回合之后才存在，只在 `list` 和各命令的 `--json` 里和本地 id 并排显示，对账用，不敲命令。
+- 命令一律用**本地 id**（`x_` 开头）；`sess_…` 只在 `--json` 里并排显示，对账用，不敲命令。
 
 ## 别做的事
 
-- **不要在 ZCode App 里打开正在跑的会话。** 两边写同一个 sqlite，没有跨进程锁，会互相踩。
-- **不在执行副本之外派活。** `new` 的 cwd 白名单默认只有 `~/.zcode-executor/worktrees/`，
-  那是保护不是障碍；两个 agent 同时改同一批文件会互相覆盖。
-- **不要把「zcode 说改好了」当验收写进汇报。** 验收只认 `git diff` 和测试结果（铁律 2）。
-- 不要投第四轮。三四轮没过，改任务单（铁律 3）。
-- **任务单里别写凭据。** 任务单会作为授权依据进入模型审批；启用 Jev 且通过本地证据检查时，脱敏后的任务契约与操作摘要会送往 TypeSafe；必要内容被截断则本地跳过。
-- **不要用 shell 参数或环境变量配置 Jev key。** 唯一入口是受 `0600` 保护的 `review.jev.apiKey`；示例永远用占位值。
+- **不在 ZCode App 里打开正在跑的会话**——两边写同一 sqlite 无锁互踩。
+- **不在执行副本之外派活**——cwd 白名单是保护不是障碍，两个 agent 改同一批文件会互相覆盖。
+- **不把「zcode 说改好了」当验收**（铁律 2）；不投第四轮（铁律 3）。
+- **任务单里别写凭据**——它会作为授权依据进模型审批，启用 Jev 时脱敏摘要会送 TypeSafe。
+- **不用 shell 参数或环境变量配 Jev key**——唯一入口是 `0600` 保护的 `review.jev.apiKey`。
 
 ## 命令速查
 
@@ -213,7 +180,7 @@ zcode-executor deny <id>                         # 应答挂起的审批请求�
 zcode-executor answer <id> <值…>                 # 应答挂起的提问：按序号/value/label，多选逗号分隔
 ```
 
-- 观察面板实时显示各会话进展（回复、工具、挂起与排队）：Claude Code 里用户输入 `/zcode` 打开（投递时自动打开，状态栏汇总、关键变化弹提示），DSH 右侧栏有「zcode 任务」tab。面板只看不应答，挂起照样按上面的规矩在对话里处理；背后是不需要自己跑的只读 `zcode-executor watch --json`。
+- 观察面板实时显示进展：Claude Code 输 `/zcode` 打开（投递时自动），DSH 右侧栏「zcode 任务」tab。面板只看不应答，背后是只读的 `watch --json`。
 - 正文写 `-` 从 stdin 读，长文本避免命令行引号转义（`SESSION_ID` 换成实际会话 ID——`list` 输出里的本地 id，可先 `SESSION_ID=abc123` 设好）：
 
   ```bash
@@ -221,7 +188,7 @@ zcode-executor answer <id> <值…>                 # 应答挂起的提问：�
   执行 tasks/T-xxx.md，按验收标准逐条自检后再停
   EOF
   ```
-- `--deny` 建会话时从工具注册中移除指定工具。**任务不需要执行端上网就带上 `--deny "WebFetch WebSearch"`**，减少联网工具的可用面（Bash、js 和 MCP 工具仍可能联网；彻底断网需由系统或容器限制）。
-- 主环境里的凭据变量（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`GITHUB_TOKEN`、`GH_TOKEN` 等）不会带给执行端；任务要用 GitHub 凭据时靠本机已登录的 `gh` / git 凭据助手。
-- `--json` 输出机器可读结构，输出里的 `id` 都是本地 id；`cwd` 会解析成真实路径存进登记簿（macOS 的 `/tmp/x` 变成 `/private/tmp/x`），`list --project` 按解析后路径匹配。
-- 数据目录 `~/.zcode-executor/`（`ZCODE_EXECUTOR_HOME` 可改）：`sessions.json` 登记簿，`runs/<id>/` 里有 `events.jsonl`（zcode 事件与闸门决定）、`last.json`、`proof.json`（本回合证据，ZCE-8）、`checkpoint.md`（断点归档，ZCE-9）、`pending.json`、`offpeak.json`、`runner.log`。
+- `--deny` 建会话时移除工具。**任务不需要上网就带 `--deny "WebFetch WebSearch"`**（Bash/js/MCP 仍可能联网，彻底断网靠系统限制）。
+- 主环境凭据变量（`ANTHROPIC_API_KEY` 等）不带进执行端；GitHub 凭据靠本机 `gh`/git 凭据助手。
+- `--json` 里的 `id` 都是本地 id；`cwd` 解析成真实路径登记（macOS `/tmp` → `/private/tmp`）。
+- 数据目录 `~/.zcode-executor/`（`ZCODE_EXECUTOR_HOME` 可改）：`sessions.json` 登记簿，`runs/<id>/` 下有 `events.jsonl`、`last.json`、`proof.json`、`checkpoint.md`、`pending.json`、`offpeak.json`、`runner.log`。

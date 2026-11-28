@@ -91,6 +91,16 @@ claude plugin install zcode-executor@zcode-executor --scope user
 
 npm 包本身就是 DSH 插件：根 `package.json` 带着 `dsh` 定义（`cordis.patch.yml` bundle + 右侧栏客户端），插件代码是 `dsh-plugin/lib/` 的构建产物（源码见 [dsh-plugin/](dsh-plugin/README.md)）。在 DSH 桌面端的插件页直接按 npm 包名 `zcode-executor` 安装即可——App 会自动登记 bundle，不需要手动 `link:` 或改配置文件。插件会教 DSH 智能体走完整派单流程（skill 幂等软链进 `~/.dsh/skills/`），并把同一个实时观察面板放进官方右侧栏「zcode 任务」标签页，约 1 秒自刷、零额度。本地开发：在 `dsh-plugin/` 里 `pnpm install && npm run build`，再重启桌面端。
 
+### Kimi Work
+
+仓库根带了原生 `kimi.plugin.json`（只含 skills；上面的 Claude Code mod 是 Claude 专用，不包括在内）。先登记进个人市场一次，再从「个人」标签页安装：
+
+```bash
+kimi-daimon kimi-plugin register-personal /path/to/zcode-executor
+```
+
+和下面几家代理一样，Kimi Work 不会把插件的 `bin/` 放进 `PATH`——skill 会回退到插件根目录下的 `bin/zcode-executor`，或 `npx zcode-executor`。说「让 zcode 去做」「派给 zcode」会触发 skill。
+
 ### Codex
 
 ```bash
@@ -240,7 +250,7 @@ Claude 投递时面板会自动打开；状态栏汇总「N 个回合执行中�
 
 | 命令 | 作用 |
 | --- | --- |
-| `doctor [--offpeak] [--json]` | 不花额度的自检：找到 `zcode.cjs` 与内置 provider 文件（ZCode App ≥ 3.12.2）、报两个 provider 来源、真握手一次、报模型等级及新启动 runner 将使用的审批链（不调用 Jev），再自检闲时接口——这一步会联网，并在 zcode 自己的会话库里留一条自检会话。`--offpeak` 只跑这一步 |
+| `doctor [--offpeak] [--json]` | 不花额度的自检：定位 App 与 provider、真握手一次、报模型等级与新 runner 的审批链，再自检闲时接口——这步联网，并在 zcode 会话库里留一条自检会话；`--offpeak` 只跑这步。细节见 [references/cli-and-jev.md](skills/zcode-executor/references/cli-and-jev.md) 与 [references/offpeak-and-start-plan.md](skills/zcode-executor/references/offpeak-and-start-plan.md) |
 | `quota [--json]` | 今天本工具取过几次闲时号、服务器现在能不能取；不花额度、不起 app-server |
 | `models [--json]` | 列可用模型：思考等级、分到哪个等级 |
 | `new --cwd <绝对路径> [--title T] [--tier fast\|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]` | 登记会话（返回本地 id `x_…`）；ZCode 会话在第一次 `send` 时才建 |
@@ -259,7 +269,7 @@ Claude 投递时面板会自动打开；状态栏汇总「N 个回合执行中�
 
 ### 闲时投递
 
-闲时投递让这一回合用 Coding Plan 订阅的免费闲时算力跑，不占套餐额度；开跑时间由服务器决定：`send --offpeak` 先取号排队，号就绪才开跑，验收与普通投递相同。要求在 ZCode App 里用个人版 Coding Plan 账号登录，会话的模型在闲时模型表里。会话要空闲；闲时投递排号或运行期间，同一会话的普通投递会被拒，所以闲时活另开一条会话。号过期自动重取（一次投递最多 3 个号），`cancel` 在任何阶段都会结算号，`quota` 查今天用了几次（观察到每天约 3 次）。默认仍是普通投递，skill 会告诉你能不能改走闲时，你选了才切。
+闲时投递让这一回合用 Coding Plan 订阅的免费闲时算力跑，不占套餐额度。`send --offpeak` 当场取号排队，开跑时间由服务器决定；验收与普通投递相同。要求在 ZCode App 里用个人版 Coding Plan 账号登录，会话的模型在闲时模型表里。会话要空闲——闲时投递排号或运行期间，同一会话的普通投递会被拒，所以闲时活另开一条会话。默认仍是普通投递，闲时是你选了才切。号过期重取、`--resume`、`cancel` 结算、报错处理和每日次数细节，见 [`skills/zcode-executor/references/offpeak-and-start-plan.md`](skills/zcode-executor/references/offpeak-and-start-plan.md)。
 
 ## 配置
 
@@ -279,83 +289,17 @@ Claude 投递时面板会自动打开；状态栏汇总「N 个回合执行中�
 
 ### 可选：启用 Jev 前筛
 
-[Jev](https://docs.typesafe.ai/introduction) 是 TypeSafe 的结构化判断模型，返回概率而不是生成解释。它**不负责执行任务，也不替代原 ZCode 快筛**，只尝试提前通过证据充分的动作：
+[Jev](https://docs.typesafe.ai/introduction) 是 TypeSafe 的结构化判断模型：返回概率而不是生成解释。它不执行任务、也不替代原 ZCode 快筛，只在证据充分时让动作提前通过。它插在红线与原 ZCode `fast` + `low` 快筛之间，审批链变成 `jev → zcode-fast → zcode-slow`（见[两层结构](#两层结构)）。
 
-```text
-红线与 allow_once 检查通过后
-  → Jev 前筛：明确通过就放行；其余进入下一层
-  → ZCode 快筛（默认 fast + low）：通过就放行；未通过进入下一层
-  → ZCode 慢判：放行或转人工
-```
-
-- 前筛检查五类风险：任务边界冲突、工作目录外写入、凭据暴露或敏感数据外发、破坏性或外部副作用、与任务无关的操作。模型缺省 `jev-latest` 别名（可经 `review.jev.model` 指定），五项概率均不高于 `0.20` 才可能提前通过；这是筛选阈值，不是安全保证。
-- Write/Edit/MultiEdit 的正文不发给 Jev，当前这类动作直接本地跳过前筛。缺少有效意图、必要输入被截断或无法可靠脱敏时也跳过，**不产生 Jev HTTP 请求**。命令复杂本身不是跳过理由。
-- Jev 标记风险、超时、网络错误或响应非法，都交给原 ZCode 快筛，而不是直接拒绝或强制慢判。原快筛调用失败仍转人工。
-- Jev 通过可省掉后续审批；未通过则多一段串行等待。Jev 当前总预算为 10 秒，独立于配置中的 ZCode `review.timeoutMs`；速度和费用收益取决于实际通过率。
-
-#### 1. 配置 API key
-
-从 [TypeSafe 官方站点](https://typesafe.ai/) 获取自己的 API key（参考[官方快速开始](https://docs.typesafe.ai/introduction/quickstart)）。它与 ZCode 的 provider key 是两套独立凭据，不需要修改 ZCode App 的配置。
-
-编辑 `~/.zcode-executor/config.json`。**已有配置请合并下面的 `review.jev` 字段，保留 allowedRoots、provider 等其他设置，不要整份覆盖。** 若配置了 `ZCODE_EXECUTOR_HOME`，应编辑该目录下的 `config.json`。
-
-不要把真实 key 放进命令参数、环境变量、提交到仓库的示例、issue 或日志；下面的值仅为占位符，不要求真实 key 使用该前缀：
-
-```json
-{
-  "review": {
-    "jev": {
-      "apiKey": "jev_请替换为你自己的密钥"
-    }
-  }
-}
-```
-
-可选：如果 Jev 端点直连不通、需要走代理，在同一个 `review.jev` 里加 `proxy`。支持 `http://` 或 `https://` 地址与 `user:pass@` 凭据；只有 Jev 的 HTTPS 请求走它，ZCode 派单链路与 app-server 的流量不受影响。不支持 `socks5://`：
-
-```json
-{
-  "review": {
-    "jev": {
-      "apiKey": "jev_请替换为你自己的密钥",
-      "proxy": "http://127.0.0.1:7890"
-    }
-  }
-}
-```
-
-#### 2. 保护配置文件
-
-文件必须已存在；随后收紧权限（自定义配置目录请替换路径）：
+启用方法：从 [TypeSafe 官方站点](https://typesafe.ai/) 获取自己的 key（参考[官方快速开始](https://docs.typesafe.ai/introduction/quickstart)），把 `review.jev.apiKey` 合并进 `~/.zcode-executor/config.json`——保留文件里已有的其他字段，不要整份覆盖。真实 key 绝不放进命令参数、环境变量、提交进仓库的示例、issue 或日志；也没有环境变量 fallback。然后收紧文件权限：
 
 ```bash
 chmod 600 ~/.zcode-executor/config.json
 ```
 
-配置 `review.jev.apiKey` 后，`config.json` 必须由当前 UID 拥有、是普通非符号链接文件，并且只有属主可访问（`0600` 或更严格），否则 zcode-executor 拒绝读取。没有环境变量 fallback，也没有 Jev mode 或 shadow 配置。删除 `apiKey`（或留成全空白）即可只走原 ZCode 审批链。`review.enabled:false` 会关闭包括 Jev 在内的**全部**模型审批；红线仍生效，其余审批请求转人工。
+跑 `zcode-executor doctor --json`——key 配置生效时，`review.pipeline` 应为 `["jev", "zcode-fast", "zcode-slow"]`。新启动的 runner 才读新配置，已跑的不热更新。只想停用 Jev 就把 key 删掉；`review.enabled:false` 会关掉全部模型审批，不是干这个的。
 
-#### 3. 验证与生效
-
-```bash
-zcode-executor doctor --json
-```
-
-审批开启且 key 已配置时，输出应包含：
-
-```json
-"review": {
-  "enabled": true,
-  "fastScreen": "jev",
-  "jevConfigured": true,
-  "pipeline": ["jev", "zcode-fast", "zcode-slow"]
-}
-```
-
-`doctor` 不调用 Jev，所以它只确认配置与所选链路，**不验证 TypeSafe key 是否有效、账户额度或网络连通性**。上述片段位于完整 JSON 输出中；`fastScreen` 是兼容字段，不表示替代原快筛。
-
-配置由新启动的 runner 读取；已有 runner 不热更新，需等它退出后再投递。实际审批的 `executor.gate.preScreen` 会记录 `pass / flag / error / skip` 及筛选后的诊断信息，不记录 key 或完整 Jev state。
-
-**只想停用 Jev：**删除 `review.jev.apiKey`，保留原 ZCode 快筛和慢判。不要用 `review.enabled:false` 代替，它会关闭整个模型审批链。
+其余细节——五类风险检查与 `0.20` 阈值、proxy 与 `review.jev.model` 配置、文件归属要求、本地 skip 规则、flag/error 回退、验证生效的完整说明——都在 [`skills/zcode-executor/references/cli-and-jev.md`](skills/zcode-executor/references/cli-and-jev.md)。
 
 ## 安全模型
 
