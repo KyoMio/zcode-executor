@@ -205,6 +205,9 @@ test('status：running / pending / idle 三态与 --json 字段恒定', async (t
   assert.equal(pendingStatus.phase, 'pending');
   assert.equal(pendingStatus.pending.kind, 'permission');
   assert.equal(pendingStatus.pending.toolName, 'Write');
+  // ZCE-3：pending 摘要直出 filePath 与 commandPreview，上游不必再翻 pending.json
+  assert.equal(pendingStatus.pending.filePath, 'x');
+  assert.equal(pendingStatus.pending.commandPreview, null); // Write 系没有 command，给 null 而不是编
   trackRunnerPids(pending.runsDir);
 
   // idle：从未跑过 runner 的新会话（无 state.json → idle）
@@ -223,6 +226,30 @@ test('status：running / pending / idle 三态与 --json 字段恒定', async (t
   assert.equal(exitedStatus.last.outcome, 'done');
   // --json 字段恒定
   assert.deepEqual(Object.keys(exitedStatus).sort(), Object.keys(runningStatus).sort());
+});
+
+test('status：pending commandPreview 脱敏密钥并截断到 240 字符（ZCE-3）', async (t) => {
+  // 命令里带 Bearer、JWT、键值密钥与超长尾巴：预览必须脱敏、截断、不泄漏原文
+  const jwt = `eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c`;
+  const longTail = 'x'.repeat(400);
+  const secretCommand = `curl -H "Authorization: Bearer sk-live-abcdef1234567890" `
+    + `https://api.example.com -d '{"api_key":"supersecretvalue123","jwt":"${jwt}"}' ${longTail}`;
+  const env = await setupOps(t, {
+    script: { turns: [{ permission: { toolName: 'Bash', input: { command: secretCommand }, reason: '要外发' } }] },
+  });
+  runBin(env.env, ['send', env.entry.id, '要批的活']);
+  await waitFor(async () => (existsSync(path.join(env.runsDir, 'pending.json')) ? true : undefined));
+  const out = JSON.parse(runBin(env.env, ['status', env.entry.id, '--json']).stdout);
+  const preview = out.pending.commandPreview;
+  assert.equal(typeof preview, 'string');
+  assert.ok(preview.length <= 241, `截断后长度 ${preview.length} 应 ≤ 240+省略号`);
+  assert.ok(!preview.includes('sk-live-abcdef1234567890'), 'Bearer 密钥必须脱敏');
+  assert.ok(!preview.includes('supersecretvalue123'), 'api_key 值必须脱敏');
+  assert.ok(!preview.includes(jwt), 'JWT 必须脱敏');
+  assert.match(preview, /<redacted/);
+  assert.equal(out.pending.toolName, 'Bash');
+  assert.equal(out.pending.filePath, null); // Bash 没有 file_path
+  trackRunnerPids(env.runsDir);
 });
 
 test('status：runner 死了 state 残留 running → stale', async (t) => {

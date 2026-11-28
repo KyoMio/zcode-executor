@@ -1,4 +1,5 @@
-# 推 main 或开 PR → 跑测试。零依赖，不用装包；Node 22 是 engines 的下限，24 是当前 LTS。
+# 推 main 或开 PR → 跑测试。运行时零依赖；typescript/@types/node 是 devDependencies（checkJs 护栏，
+# test:ci 末尾的 npm run verify 用），npm ci 装它们不碰运行时。Node 22 是 engines 的下限，24 是当前 LTS。
 # windows-latest 那一档探过路就关掉了：测试本身跑得通（297 过 6 跳过），但运行时还没适配
 # （SIGTERM 收不到、kill(-pid) 杀不了进程组、找不到 App 的位置），不支持的平台没必要天天跑。
 # 认领 Windows 时把下面那行注释打开，待办清单在 docs/verified.md 的「跨平台」一节。
@@ -34,4 +35,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+      - run: npm ci --ignore-scripts
       - run: npm run test:ci

@@ -58,6 +58,9 @@ zcode-executor new --cwd "$WT" --title T-xxx --tier fast --json
 zcode-executor send <id> "执行 tasks/T-xxx.md" --task "$WT/tasks/T-xxx.md"
 
 # 5. 收到完成通知后，交独立 review 会话评审；主 agent 核对客观证据。
+#    先看一眼证据摘要（ZCE-8）：status --json 的 proofSummary——没证据（null）直接打回，
+#    prematureStop=true 或 failed>0 的从严验收，别进评审队列浪费一轮
+zcode-executor status <id> --json
 #    zcode 不提交，改动停在执行副本工作区，先把未跟踪文件收进来再看 diff
 git -C "$WT" add -A && git -C "$WT" diff --cached --stat && git -C "$WT" diff --cached
 git -C "$WT" <跑测试的命令>
@@ -131,6 +134,26 @@ git -C "$WT" checkout -b task/T-yyy main              # 切新分支：在执行
    有选项按序号、value 或 label 给值，多选逗号分隔；无选项就是自由文本。
 2. 答不了再问人，拿到答案后同样 `answer` 回过去。
 
+## 证据、断点与排查止损
+
+**Proof Manifest（ZCE-8）。** 派单模板已带「收尾写 `.executor-proof.json`」的约定：执行端必须给
+真实跑出来的退出码、产物路径、诚实列出的未验证项。回合结算时证据自动落盘到
+`runs/<id>/proof.json`（不污染业务仓库），`status --json` 的 `proofSummary` 是它的折算——
+**没证据的回合直接打回，别进评审**。执行端忘了写文件时，最终回复里的 ```` ```executor-proof ````
+围栏块也算数。
+
+**断点续跑（ZCE-9）。** 估计要跑很久、或分多个阶段的任务，投递时带 `--checkpoint`：
+正文尾部会自动追加断点维护指令，执行端每完成一个子阶段更新 `.executor-checkpoint.md`。
+回合撞超时或被取消时，结算自动归档断点并在 `last.json` / `status` / 收尾摘要里给出一条
+**可直接复制的续跑命令**（带原任务单路径）。看到 `续跑:` 行，复制执行即可，不要人工翻工作区猜进度。
+
+**排查止损（ZCE-10）。** 「排查/定位/复现」类派单带 `--task-type investigate`：
+
+- 模板约定「同一假设连续 2 次证伪即停手改写最小复现脚本并汇报」，写进任务单而不是靠自觉；
+- 运行超过 900 秒还没结算时，`status` 会给出 `steerHint`——一条可直接复制的 `--steer` 命令，
+  注入「停止打补丁，改写最小复现脚本并汇报现状」。看到它就发，别让排查单方向死磕到超时；
+- `feature` / `bugfix` 类型也可以标，目前只有 `investigate` 有止损阈值。
+
 ## 插话、跟看、叫停
 
 ```bash
@@ -178,7 +201,7 @@ zcode-executor quota [--json]                   # 今天本工具取过几次闲
 zcode-executor models [--json]                  # 可用模型、思考等级、禁用原因、自动分到哪个等级
 zcode-executor list [--project 关键字] [--json]  # 登记簿里的会话：本地 id、sess_、上次结果、是否挂起
 zcode-executor new --cwd <绝对路径> [--title T] [--tier fast|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]
-zcode-executor send <id> <正文|-> [--task 文件] [--wait] [--steer] [--timeout 秒] [--stream] [--json]
+zcode-executor send <id> <正文|-> [--task 文件] [--wait] [--steer] [--timeout 秒] [--task-type feature|bugfix|investigate] [--checkpoint] [--stream] [--json]
 zcode-executor send <id> <正文|-> --offpeak [--task 文件] [--wait] [--timeout 秒] [--stream] [--json]  # 闲时投递：当场取号
 zcode-executor send <id> --offpeak --resume [--wait] [--stream] [--json]  # 接着跑没收尾的闲时投递
 zcode-executor send <id> <正文|-> --start-plan [--task 文件] [--wait] [--timeout 秒] [--stream] [--json]  # Start Plan 额度
@@ -201,4 +224,4 @@ zcode-executor answer <id> <值…>                 # 应答挂起的提问：�
 - `--deny` 建会话时从工具注册中移除指定工具。**任务不需要执行端上网就带上 `--deny "WebFetch WebSearch"`**，减少联网工具的可用面（Bash、js 和 MCP 工具仍可能联网；彻底断网需由系统或容器限制）。
 - 主环境里的凭据变量（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`GITHUB_TOKEN`、`GH_TOKEN` 等）不会带给执行端；任务要用 GitHub 凭据时靠本机已登录的 `gh` / git 凭据助手。
 - `--json` 输出机器可读结构，输出里的 `id` 都是本地 id；`cwd` 会解析成真实路径存进登记簿（macOS 的 `/tmp/x` 变成 `/private/tmp/x`），`list --project` 按解析后路径匹配。
-- 数据目录 `~/.zcode-executor/`（`ZCODE_EXECUTOR_HOME` 可改）：`sessions.json` 登记簿，`runs/<id>/` 里有 `events.jsonl`（zcode 事件与闸门决定）、`last.json`、`pending.json`、`offpeak.json`、`runner.log`。
+- 数据目录 `~/.zcode-executor/`（`ZCODE_EXECUTOR_HOME` 可改）：`sessions.json` 登记簿，`runs/<id>/` 里有 `events.jsonl`（zcode 事件与闸门决定）、`last.json`、`proof.json`（本回合证据，ZCE-8）、`checkpoint.md`（断点归档，ZCE-9）、`pending.json`、`offpeak.json`、`runner.log`。

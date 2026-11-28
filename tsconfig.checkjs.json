@@ -1,0 +1,28 @@
+{
+  "//": "ZCE-2：高风险状态文件的渐进式类型护栏。纯检查（noEmit），不进 files 发布白名单、不加构建步骤；tsc 是 devDependencies，运行时 dependencies 仍为空。放宽 strict 换「先跑起来」：真相是这些文件写于 checkJs 之前，逐文件收紧是后续工单。",
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "strictNullChecks": false,
+    "noImplicitAny": false,
+    "useUnknownInCatchVariables": false,
+    "types": ["node"]
+  },
+  "include": [
+    "lib/gate.mjs",
+    "lib/pending.mjs",
+    "lib/run.mjs",
+    "lib/snapshot.mjs",
+    "lib/tool-summary.mjs",
+    "lib/credentials.mjs",
+    "lib/proof.mjs"
+  ]
+}

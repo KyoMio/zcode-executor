@@ -841,3 +841,46 @@ test('status --json 带 steerUnavailable 字段（字符串或 null），文本�
   assert.equal(JSON.parse(cleanRun.stdout).steerUnavailable, null);
   assert.doesNotMatch(cleanRun.stdout, /插话/);
 });
+
+test('ZCE-10：investigate 超 900s 未结算 → status 给 steerHint 可复制命令；类型不符/没超时为 null', async (t) => {
+  // phase 判 running 需要 lock 里有个活 pid：spawn 一个 sleep 当替身，结束就杀
+  const env = await setupSessionWithState(t, null);
+  const sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
+  t.after(() => { try { sleeper.kill('SIGKILL'); } catch { /* 已退 */ } });
+  const runsDir = path.join(env.home, 'runs', env.entry.id);
+  const writeLock = () => writeFile(path.join(runsDir, 'lock'), JSON.stringify({ pid: sleeper.pid, startedAt: new Date().toISOString() }));
+  const writeState = (current) => writeFile(path.join(runsDir, 'state.json'), JSON.stringify({
+    sessionId: env.entry.id, pid: sleeper.pid, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), phase: 'running', current,
+  }));
+  const statusJson = async () => {
+    const run = spawnSync(process.execPath, [BIN, 'status', env.entry.id, '--json'], { encoding: 'utf8', env: env.spawnEnv, timeout: 60_000 });
+    assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+    return JSON.parse(run.stdout);
+  };
+
+  // investigate 跑了 1000 秒还在 running：超阈值，给止损提示
+  await writeLock();
+  await writeState({ text: '排查注入失效', startedAt: new Date(Date.now() - 1000 * 1000).toISOString(), taskType: 'investigate' });
+  const over = await statusJson();
+  assert.equal(over.phase, 'running');
+  assert.equal(over.steerHint.taskType, 'investigate');
+  assert.ok(over.steerHint.elapsedSec >= 1000);
+  assert.equal(over.steerHint.thresholdSec, 900);
+  assert.match(over.steerHint.command, /^zcode-executor send \S+ '排查已超时未结算/);
+  assert.match(over.steerHint.command, /--steer$/);
+  assert.equal(over.steerHint.command.includes('\n'), false); // 可复制进 shell：无换行
+  const human = spawnSync(process.execPath, [BIN, 'status', env.entry.id], { encoding: 'utf8', env: env.spawnEnv, timeout: 60_000 });
+  assert.match(human.stdout, /止损: investigate/);
+
+  // 同一个任务只跑了 100 秒：没到点，null
+  await writeState({ text: '排查注入失效', startedAt: new Date(Date.now() - 100 * 1000).toISOString(), taskType: 'investigate' });
+  assert.equal((await statusJson()).steerHint, null);
+
+  // feature 跑再久也没有止损提示
+  await writeState({ text: '做功能', startedAt: new Date(Date.now() - 2000 * 1000).toISOString(), taskType: 'feature' });
+  assert.equal((await statusJson()).steerHint, null);
+
+  // 没标类型（老投递）同样没有
+  await writeState({ text: '做功能', startedAt: new Date(Date.now() - 2000 * 1000).toISOString(), taskType: null });
+  assert.equal((await statusJson()).steerHint, null);
+});

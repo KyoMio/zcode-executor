@@ -36,9 +36,10 @@
     "dsh": ">=0.2.1-alpha.2 <0.3.0-0"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs && node scripts/sync-doc-version.mjs --check",
-    "test:ci": "node --test --test-concurrency=1 test/*.test.mjs && node scripts/sync-doc-version.mjs --check",
-    "version": "node scripts/sync-doc-version.mjs && git add README.md README.zh-CN.md .claude-plugin/plugin.json .codex-plugin/plugin.json .github/plugin/plugin.json .grok-plugin/plugin.json .antigravity-plugin/plugin.json gemini-extension.json plugin.yaml"
+    "test": "node --test test/*.test.mjs && node scripts/sync-doc-version.mjs --check && node scripts/check-boundaries.mjs",
+    "test:ci": "node --test --test-concurrency=1 test/*.test.mjs && node scripts/sync-doc-version.mjs --check && node scripts/check-boundaries.mjs && npm run verify",
+    "version": "node scripts/sync-doc-version.mjs && git add README.md README.zh-CN.md .claude-plugin/plugin.json .codex-plugin/plugin.json .github/plugin/plugin.json .grok-plugin/plugin.json .antigravity-plugin/plugin.json gemini-extension.json plugin.yaml",
+    "verify": "node scripts/check-types.mjs"
   },
   "keywords": [
     "zcode",
@@ -123,5 +124,9 @@
     "react": {
       "optional": true
     }
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.7",
+    "typescript": "^7.0.2"
   }
 }

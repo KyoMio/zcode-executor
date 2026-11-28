@@ -575,6 +575,124 @@ test('parseSlow：结论行在第一行 + 理由在后面（T3.3 新格式）解
   );
 });
 
+// ── ZCE-3 畸形格式回归：真实模型输出的 15+ 种变体，安全不变量 = 解析不出一律 undefined（落 ask）──
+
+test('parseSlow：Markdown 加粗结论词与标签（**结论: allow** / **结论**：**allow**）', () => {
+  assert.deepEqual(parseSlow('**结论: allow**'), { decision: 'allow' });
+  assert.deepEqual(parseSlow('**结论**：**allow**'), { decision: 'allow' });
+  assert.deepEqual(parseSlow('**结论: deny cred-exfil**'), { decision: 'deny', ruleId: 'cred-exfil' });
+});
+
+test('parseSlow：行内代码与引用符（`结论: allow` / > 结论: allow）', () => {
+  assert.deepEqual(parseSlow('`结论: allow`'), { decision: 'allow' });
+  assert.deepEqual(parseSlow('> 结论: allow'), { decision: 'allow' });
+});
+
+test('parseSlow：列表符号前缀（- 结论: allow / 1. 结论: deny x）', () => {
+  assert.deepEqual(parseSlow('- 结论: allow'), { decision: 'allow' });
+  assert.deepEqual(parseSlow('1. 结论: deny net-exfil'), { decision: 'deny', ruleId: 'net-exfil' });
+});
+
+test('parseSlow：全角/半角冒号、多余空格、CRLF 行尾', () => {
+  assert.deepEqual(parseSlow('结论：allow'), { decision: 'allow' });
+  assert.deepEqual(parseSlow('结论:  allow'), { decision: 'allow' });
+  assert.deepEqual(parseSlow('结论: allow\r'), { decision: 'allow' });
+  assert.deepEqual(parseSlow('  结论: ask  '), { decision: 'ask' });
+});
+
+test('parseSlow：英文标签 verdict / decision / conclusion', () => {
+  assert.deepEqual(parseSlow('verdict: allow'), { decision: 'allow' });
+  assert.deepEqual(parseSlow('Decision: ask'), { decision: 'ask' });
+  assert.deepEqual(parseSlow('Conclusion: deny cred-exfil'), { decision: 'deny', ruleId: 'cred-exfil' });
+  assert.deepEqual(parseSlow('VERDICT: ALLOW'), { decision: 'allow' });
+});
+
+test('parseSlow：中文同义标签 判定 / 裁决 / 决定', () => {
+  assert.deepEqual(parseSlow('判定: allow'), { decision: 'allow' });
+  assert.deepEqual(parseSlow('裁决: ask'), { decision: 'ask' });
+  assert.deepEqual(parseSlow('决定: deny cred-exfil'), { decision: 'deny', ruleId: 'cred-exfil' });
+});
+
+test('parseSlow：竖线分隔键值（结论: allow | 理由: 日常工作）', () => {
+  assert.deepEqual(
+    parseSlow('结论: allow | 理由: 日常工作'),
+    { decision: 'allow', reason: '日常工作' },
+  );
+});
+
+test('parseSlow：理由带英文 reason 标签', () => {
+  assert.deepEqual(
+    parseSlow('结论: allow | reason: routine work'),
+    { decision: 'allow', reason: 'routine work' },
+  );
+});
+
+test('parseSlow：末行裸结论词兜底——整行只有 allow/ask/deny（剥 Markdown）', () => {
+  assert.deepEqual(parseSlow('逐条核对完毕，没有问题。\nallow'), { decision: 'allow' });
+  assert.deepEqual(parseSlow('逐条核对完毕，拿不准。\n**ask**'), { decision: 'ask' });
+  assert.deepEqual(parseSlow('allow。'), { decision: 'allow' });
+});
+
+test('parseSlow：裸结论词必须是整行——推理句尾的 allow 不算结论（安全侧）', () => {
+  assert.equal(parseSlow('综合来看应该 allow'), undefined);
+  assert.equal(parseSlow('my verdict is allow'), undefined);
+  assert.equal(parseSlow('allow 这个词在推理里出现'), undefined);
+});
+
+test('parseSlow：deny 无规则 id 仍降级 ask（畸形格式不破坏安全不变量）', () => {
+  assert.deepEqual(
+    parseSlow('**结论: deny**'),
+    { decision: 'ask', reason: '拒绝未附规则 id，转人工：' },
+  );
+  assert.deepEqual(
+    parseSlow('verdict: deny'),
+    { decision: 'ask', reason: '拒绝未附规则 id，转人工：' },
+  );
+});
+
+test('parseSlow：结论行混在 Markdown 代码块围栏外的正文里，全文扫描兜底', () => {
+  assert.deepEqual(
+    parseSlow('推理……\n结论: ask | 理由: 影响面拿不准\n补充说明文字'),
+    { decision: 'ask', reason: '影响面拿不准' },
+  );
+});
+
+test('parseSlow：多个加粗结论行取最后一个（兼容旧输出的兜底语义不变）', () => {
+  assert.deepEqual(
+    parseSlow('**结论: deny cred-exfil**\n**结论: allow**'),
+    // 首行就是结论行 → 新格式优先取首行（T3.3 语义保持）
+    { decision: 'deny', ruleId: 'cred-exfil' },
+  );
+  assert.deepEqual(
+    parseSlow('先说几句推理。\n**结论: deny cred-exfil**\n**结论: allow**'),
+    { decision: 'allow' },
+  );
+});
+
+test('parseSlow：完全无法解析的垃圾输出仍 undefined（review-failed → ask 的安全不变量）', () => {
+  for (const garbage of [
+    '',
+    '模型自由发挥',
+    '我认为没问题可以放行', // 中文口语无标签
+    'allow me to explain', // 词首相似但非结论行
+    '结论：也许吧', // 标签在但结论词非法
+    '结论: ALLOWED', // 近似词不匹配
+    '结论: alloww',
+  ]) {
+    assert.equal(parseSlow(garbage), undefined, JSON.stringify(garbage));
+  }
+});
+
+test('parseSlow：结论词大小写与全角句号混排', () => {
+  assert.deepEqual(parseSlow('结论: ALLOW'), { decision: 'allow' });
+  assert.deepEqual(parseSlow('结论：Deny cred-exfil'), { decision: 'deny', ruleId: 'cred-exfil' });
+});
+
+test('parseSlow：规则 id 写成 none/none 大小写变体归一为无 id', () => {
+  assert.deepEqual(parseSlow('结论: allow NONE'), { decision: 'allow' });
+  assert.deepEqual(parseSlow('结论: deny None'), { decision: 'ask', reason: '拒绝未附规则 id，转人工：' });
+});
+
 test('parseSlow：被截断没有结论行 → undefined（createReview 据此落 ask review-failed）', () => {
   const truncated = '这条操作我逐条核对了一遍：先看意图，任务单要求新建文件；再看工作区，'
     + '路径在执行副本之内；再看凭据，没有触碰任何密钥文件；接着看网络外发，没有上传行为；'

@@ -890,3 +890,126 @@ test('T2.4b：resume 其它错误 → runner 退出、state exited、send --wait
     }
   });
 });
+
+// ---------- ZCE-8/9/10：Proof Manifest、断点续跑、investigate 止损（mock 全链路） ----------
+
+test('ZCE-8：done 回合采集工作区 .executor-proof.json 落盘 proof.json，status --json 暴露 proofSummary', async (t) => {
+  const env = await setupSend(t);
+  const repo = JSON.parse(await readFile(path.join(env.home, 'sessions.json'), 'utf8')).sessions[env.entry.id].cwd;
+  // 执行端收尾时写的证据（这里由测试代替执行端提前放好——mock 不会写文件）
+  await writeFile(path.join(repo, '.executor-proof.json'), JSON.stringify({
+    commands: [
+      { cmd: 'npm test', exitCode: 0, summary: '847 passed, 0 failed' },
+      { cmd: 'npm run lint', exitCode: 1, summary: '2 errors' },
+    ],
+    artifacts: ['shots/home.png'],
+    unverified: ['未在真机验证'],
+    prematureStop: false,
+  }));
+  const run = runBin(env.env, ['send', env.entry.id, '干活', '--wait', '--json']);
+  assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+  const last = JSON.parse(run.stdout);
+  assert.deepEqual(last.proofSummary, { commands: 2, failed: 1, artifacts: 1, unverified: 1, prematureStop: false });
+  assert.equal(last.resumeHint, null); // done 回合不给续跑命令
+  // 落盘：runs/<id>/proof.json，证据不留在业务仓库的 git 里（文件是工作区未跟踪文件，由模板约定清理）
+  const disk = JSON.parse(await readFile(path.join(env.runsDir, 'proof.json'), 'utf8'));
+  assert.equal(disk.source, 'workspace-file');
+  assert.equal(disk.commands.length, 2);
+  // status --json 同源输出
+  const status = JSON.parse(runBin(env.env, ['status', env.entry.id, '--json']).stdout);
+  assert.deepEqual(status.proofSummary, last.proofSummary);
+  assert.equal(status.steerHint, null); // 不是 investigate
+  trackRunnerPids(env.runsDir);
+});
+
+test('ZCE-8：没写证据的回合 proof.json 不残留（上一回合的证据不冒充）', async (t) => {
+  const env = await setupSend(t);
+  const repo = JSON.parse(await readFile(path.join(env.home, 'sessions.json'), 'utf8')).sessions[env.entry.id].cwd;
+  await writeFile(path.join(repo, '.executor-proof.json'), JSON.stringify({ commands: [{ cmd: 'npm test', exitCode: 0 }] }));
+  const first = runBin(env.env, ['send', env.entry.id, '第一投', '--wait', '--json']);
+  assert.equal(first.status, 0, first.stderr);
+  assert.ok(existsSync(path.join(env.runsDir, 'proof.json'))); // 第一投有证据
+  await rm(path.join(repo, '.executor-proof.json'), { force: true }); // 执行端按模板清理后，第二投没写新的
+  const second = runBin(env.env, ['send', env.entry.id, '第二投', '--wait', '--json']);
+  assert.equal(second.status, 0, second.stderr);
+  const last = JSON.parse(second.stdout);
+  assert.equal(last.proofSummary, null); // 没证据如实报 null——上游据此打回
+  assert.equal(existsSync(path.join(env.runsDir, 'proof.json')), false); // 第一投的残留被清掉
+  trackRunnerPids(env.runsDir);
+});
+
+test('ZCE-8：工作区没文件时最终回复的 executor-proof 围栏块兜底（message-fence）', async (t) => {
+  const proofBlock = ['```executor-proof', JSON.stringify({ commands: [{ cmd: 'npm test', exitCode: 0, summary: 'green' }], prematureStop: false }), '```'].join('\n');
+  const env = await setupSend(t, {
+    script: {
+      turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: `做完了\n${proofBlock}` } }] }],
+    },
+  });
+  const run = runBin(env.env, ['send', env.entry.id, '干活', '--wait', '--json']);
+  assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+  assert.equal(JSON.parse(run.stdout).proofSummary.commands, 1);
+  const disk = JSON.parse(await readFile(path.join(env.runsDir, 'proof.json'), 'utf8'));
+  assert.equal(disk.source, 'message-fence');
+  trackRunnerPids(env.runsDir);
+});
+
+test('ZCE-9：超时回合 + 工作区断点 → last.json/status 给可复制续跑命令，断点归档进 runs', async (t) => {
+  const env = await setupSend(t, { script: { turns: [{ hang: true }] } });
+  const repo = JSON.parse(await readFile(path.join(env.home, 'sessions.json'), 'utf8')).sessions[env.entry.id].cwd;
+  await writeFile(path.join(repo, '.executor-checkpoint.md'), '已完成：A、B\n未完成：C\n阻塞：D 报错');
+  const run = runBin(env.env, ['send', env.entry.id, '慢活', '--wait', '--timeout', '1']);
+  assert.equal(run.status, 3, `stdout: ${run.stdout} stderr: ${run.stderr}`);
+  const last = JSON.parse(await readFile(path.join(env.runsDir, 'last.json'), 'utf8'));
+  assert.equal(last.outcome, 'timeout');
+  const checkpointPath = path.join(env.runsDir, 'checkpoint.md');
+  assert.equal(readFileSync(checkpointPath, 'utf8'), '已完成：A、B\n未完成：C\n阻塞：D 报错'); // 归档
+  assert.match(last.resumeHint, /^zcode-executor send \S+ '先读 /);
+  assert.ok(last.resumeHint.includes(checkpointPath)); // 引用的是 runs 里的归档，不是工作区那份
+  assert.match(last.resumeHint, /从断点继续完成剩余工作/);
+  // 命令必须可原样复制进 shell 执行：单引号包裹、无换行
+  assert.equal(last.resumeHint.includes('\n'), false);
+  // status --json 同源给出（验收点：status 直接可读）
+  const status = JSON.parse(runBin(env.env, ['status', env.entry.id, '--json']).stdout);
+  assert.equal(status.resumeHint, last.resumeHint);
+  // 人读输出也有续跑行
+  const human = runBin(env.env, ['status', env.entry.id]);
+  assert.match(human.stdout, /续跑:/);
+  trackRunnerPids(env.runsDir);
+});
+
+test('ZCE-9：超时回合工作区零改动且无断点 → 不给续跑命令（从头再来更干净）', async (t) => {
+  const env = await setupSend(t, { script: { turns: [{ hang: true }] } });
+  const run = runBin(env.env, ['send', env.entry.id, '慢活', '--wait', '--timeout', '1']);
+  assert.equal(run.status, 3, `stdout: ${run.stdout} stderr: ${run.stderr}`);
+  const last = JSON.parse(await readFile(path.join(env.runsDir, 'last.json'), 'utf8'));
+  assert.equal(last.outcome, 'timeout');
+  assert.equal(last.resumeHint, null);
+  trackRunnerPids(env.runsDir);
+});
+
+test('ZCE-9：--checkpoint 在正文尾部注入断点指令，executor.send 事件可见', async (t) => {
+  const env = await setupSend(t);
+  const run = runBin(env.env, ['send', env.entry.id, '长任务', '--checkpoint', '--wait', '--json']);
+  assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+  const sendEvent = readEvents(env.runsDir).find((e) => e.type === 'executor.send');
+  assert.match(sendEvent.text, /\[断点要求\]/);
+  assert.match(sendEvent.text, /\.executor-checkpoint\.md/);
+  trackRunnerPids(env.runsDir);
+});
+
+test('ZCE-10：--task-type investigate 记进队列项与 state.current；非法值与 --steer 同用退 1', async (t) => {
+  const env = await setupSend(t, { script: { turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: '查着' }, delayMs: 1500 }] }] } });
+  const bad = runBin(env.env, ['send', env.entry.id, '查', '--task-type', 'explore']);
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /--task-type 只能是/);
+  const conflict = runBin(env.env, ['send', env.entry.id, '插话', '--steer', '--task-type', 'investigate']);
+  assert.equal(conflict.status, 1);
+  assert.match(conflict.stderr, /--task-type 与 --steer 不能同用/);
+
+  const sent = runBin(env.env, ['send', env.entry.id, '排查注入失效', '--task-type', 'investigate']);
+  assert.equal(sent.status, 0, sent.stderr);
+  await waitFor(async () => (readEvents(env.runsDir).some((e) => e.type === 'turn.started') ? true : undefined));
+  const state = JSON.parse(await readFile(path.join(env.runsDir, 'state.json'), 'utf8'));
+  assert.equal(state.current.taskType, 'investigate'); // 回合进行中 state 带类型（止损提示的依据）
+  trackRunnerPids(env.runsDir);
+});
