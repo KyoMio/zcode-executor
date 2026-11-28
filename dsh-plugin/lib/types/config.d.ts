@@ -1,6 +1,5 @@
 /**
- * 插件行收到的配置：schema（设置页字段表）与读取时的解析。
- * 从 src/index.ts 抽出（Task 3 起 index.ts 的 apply 要读它），公共导出面仍在 index.ts 转发。
+ * 插件行收到的配置：schema（设置页字段表）与读取时的解析；公共导出面在 src/index.ts 转发。
  */
 import z from '@deepseek-ai/schemastery';
 /** 插件行收到的配置（loader 转交后的形状）。 */
@@ -9,7 +8,7 @@ export interface RowConfig {
     execPath?: unknown;
     /** watch 拉起模式：always（常驻，默认）/ on-demand（按流订阅计数起停）。 */
     watchMode?: unknown;
-    /** 是否往 system prompt 挂派单公告（Task 7）。 */
+    /** 是否往 system prompt 挂派单公告。 */
     announceToAgent?: unknown;
 }
 /**
@@ -39,12 +38,12 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
  * dsh-zen-remote src/config.ts 的 unwrapVolatile）；不是包装就原样通过。
  */
 export declare function unwrapVolatile(value: unknown): unknown;
-/** apply 时从行配置解出的三项设置。任一项变更都经 src/reload.ts 的指纹守卫重载插件行（Task 8 ①）。 */
+/** apply 时从行配置解出的三项设置。任一项变更都经 src/reload.ts 的指纹守卫重载插件行。 */
 export interface WatchSettings {
     /** watch CLI 路径：配置给了非空字符串就用它，否则落回 PATH 里的 `zcode-executor`。 */
     execPath: string;
     watchMode: 'always' | 'on-demand';
-    /** 派单公告开关：默认开，显式 false 才关（Task 7 的 systemPrompt.section 消费）。 */
+    /** 派单公告开关：默认开，显式 false 才关（由 systemPrompt.section 消费）。 */
     announceToAgent: boolean;
 }
 /** 行配置 → 设置。垃圾进/缺省出：execPath 非字符串或空串落回默认，watchMode 只认字面 'on-demand'。 */

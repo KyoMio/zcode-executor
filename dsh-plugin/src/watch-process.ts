@@ -259,7 +259,7 @@ export class WatchProcess {
     if (this.disposed || this.settled) return
     this.settled = true
     if (this.intentionalStop) {
-      // 纵深防御（Task 8 ④ 复查结论）：现行两条主动停机路径（stopForIdle / dispose）都先
+      // 纵深防御：现行两条主动停机路径（stopForIdle / dispose）都先
       // 置空 this.child 再 kill，此类 exit 在上面的身份校验就被拦下，本分支实际到不了；
       // 留着防将来出现「不先置空就 kill」的新停机路径把主动停机误报成断连。
       this.intentionalStop = false

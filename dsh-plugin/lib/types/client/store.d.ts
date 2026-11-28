@@ -25,8 +25,8 @@ export interface SnapshotStoreOptions {
     /** 流断开后重试流式连接的间隔，默认 3000。 */
     retryMs?: number;
     /**
-     * 首响应超时：fetch 发出后多久还没等到响应头就按连接失败走退化，默认 15000（Task 8 ⑤；
-     * 15 秒的量级照 zen-remote relay-client.ts:70 的DEFAULT_REQUEST_TIMEOUT_MS 同款先例）。
+     * 首响应超时：fetch 发出后多久还没等到响应头就按连接失败走退化，默认 15000（
+     * 量级照 zen-remote relay-client.ts:70 的 DEFAULT_REQUEST_TIMEOUT_MS 同款先例）。
      * 服务器收下 TCP 却不回时 fetch 会永久挂起——流挂着轮询永不启动、轮询挂着合成不了 down。
      * 只限时到响应头为止：流连上后本来就可能长时间无行（watch 空闲），限时正文会掐死健康的流。
      */
@@ -57,7 +57,7 @@ export interface SnapshotStore {
     /** 停取数：断在途请求（AbortController）、清轮询与重试定时器。状态保留不清屏。 */
     stop(): void;
     /**
-     * 换当前主会话（PB-6）：id 存起来给 stream/snapshot 请求当 `?sessionId=` 参数；它的
+     * 换当前主会话：id 存起来给 stream/snapshot 请求当 `?sessionId=` 参数；它的
      * 「侧」（session-cwd.ts 的 sideOfSessionId）与正在跑的连接不同侧时——本机 ↔ 远程、
      * 或两台远程主服务端之间——关掉当前流、清空面板数据、按新侧重开；同侧内换会话不重开
      * 流（数据是整机的，只有后续请求改用新参数）。没在取数时只记参数，下次 start 生效。
@@ -66,11 +66,10 @@ export interface SnapshotStore {
     /** 换过滤仓库：只改状态，不动取数。 */
     setScopeRepo(repo: string | null): void;
 }
-/** 响应是不是子客户端拦截层回的「未桥接」（PB-6 协议）。store 的取数路径与
- *  index.tsx 的 repo 路径共用这一个判定。 */
+/** 响应是不是子客户端拦截层回的「未桥接」。store 的取数路径与 index.tsx 的 repo 路径共用这一个判定。 */
 export declare function isUnbridgedResponse(res: Response): boolean;
 /**
- * 未桥接 reason → 面板横幅的中文原因（PB-6 口径四类 + 其他附原文）。导出供测试对表。
+ * 未桥接 reason → 面板横幅的中文原因（四类专名 + 其他附原文）。导出供测试对表。
  * not-on-server 与 version-mismatch 都归「服务端未安装同版本插件」——前者没装、后者装
  * 的不是同一版，对用户是同一件事：两端装同版本。
  */

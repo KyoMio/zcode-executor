@@ -4,7 +4,7 @@
  * apply 里四件事（生命周期全部挂本 fiber，插件卸载级联清掉）：
  * 1. 样式：模板字符串 CSS 一次注入 <style data-plugin="dsh-zcode-executor">（zen-remote 同款）；
  * 2. 数据：createSnapshotStore（baseUrl 同源根，路由常量与 store.ts 对齐）并 start；
- * 3. 范围与侧（PB-6）：订阅 ctx.sessions.list / ctx.workspaces.list，派生当前主会话 id 与
+ * 3. 范围与侧：订阅 ctx.sessions.list / ctx.workspaces.list，派生当前主会话 id 与
  *    cwd——id 交给 store.setSession（侧变化在 store 内部重开流：远程会话的取数带
  *    `?sessionId=` 由 zen-remote 插件桥改道到主服务端，本机/无会话不带）；repo 路由主会话
  *    存在时按 sessionId 解析（服务端用会话 cwd 判仓库），无主会话退工作区路径 `?cwd=`——
@@ -29,7 +29,7 @@ export const inject = ['slots', 'sessions', 'workspaces']
 const BASE_URL = ''
 
 /**
- * 「当前项目」变化时的换仓动作（PB-6）：调 repo 路由解析所属仓库进 store。主会话存在时
+ * 「当前项目」变化时的换仓动作：调 repo 路由解析所属仓库进 store。主会话存在时
  * 按 `?sessionId=<主会话 id>` 解析（服务端用该会话的 cwd 判仓库；远程会话由插件桥转发到
  * 主服务端解析，本地会话 id 原样到本机路由），无主会话退回工作区路径 `?cwd=`。
  * 解析失败 / 不是 git 仓（repo null）/ 两者都没有 → scopeRepo 置 null，
@@ -53,7 +53,7 @@ async function routeScopeRepo(
     const res = await fetch(`${BASE_URL}${REPO_PATH}?${query}`);
     if (isUnbridgedResponse(res)) {
       // 未桥接：面板横幅已有原因文案（store 侧合成），repo 解析不到是同一件事的另一半，
-      // 不再打「解析失败」warn 重复报障（PB-7b）；scope 照失败路径落到「显示全部」。
+      // 不再打「解析失败」warn 重复报障；scope 照失败路径落到「显示全部」。
       if (isCurrent()) store.setScopeRepo(null);
       return;
     }

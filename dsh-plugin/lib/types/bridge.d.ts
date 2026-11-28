@@ -1,5 +1,5 @@
 /**
- * dsh-zen-remote 插件桥（2.1）的协作插件声明（PB-6）。
+ * dsh-zen-remote 插件桥（2.1）的协作插件声明。
  *
  * 远程会话里 zen-remote 的子客户端把声明过的插件路由改道到主服务端执行（主服务端以本机
  * 回环请求我们的路由，带合法 DSH cookie，connection.admit 照常放行）。本模块只管「声明」

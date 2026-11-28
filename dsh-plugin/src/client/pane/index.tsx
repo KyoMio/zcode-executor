@@ -2,8 +2,7 @@
 // sidebar.right.pane.tab 槽）。信息架构照 view.ts 的三段语义与 mockup/pane.html 的版式：
 // 摘要计数行（可点跳分段）+ 实时指示 + 时钟、范围切换（本项目/全部项目，chip 态组件内自持）、
 // 断连横幅、三段（吸顶标题、计数；挂起/中断/执行中/闲时排队/刚结束成卡片、其余一行一条且
-// 点行展开成卡片看回复、上限 20 条）、空态文案。数据来自 store（T4），过滤与文案全部走
-// view.ts 纯函数。
+// 点行展开成卡片看回复、上限 20 条）、空态文案。数据来自 store，过滤与文案全部走 view.ts 纯函数。
 // 面板只看不应答：全树没有任何 approve/deny/answer 控件（AGENTS.md 硬边界）。
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactElement } from 'react';

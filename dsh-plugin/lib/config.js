@@ -1,6 +1,5 @@
 /**
- * 插件行收到的配置：schema（设置页字段表）与读取时的解析。
- * 从 src/index.ts 抽出（Task 3 起 index.ts 的 apply 要读它），公共导出面仍在 index.ts 转发。
+ * 插件行收到的配置：schema（设置页字段表）与读取时的解析；公共导出面在 src/index.ts 转发。
  */
 import z from '@deepseek-ai/schemastery';
 /**

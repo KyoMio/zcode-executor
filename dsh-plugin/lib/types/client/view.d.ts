@@ -40,7 +40,7 @@ export interface SessionSnapshot {
     pendingDetail?: PendingDetail | null;
     offpeakQueue?: OffpeakQueue | null;
 }
-/** 已结束会话的结果与卡片标题的文案 + 配色名（配色映射归渲染层，Task 5）。 */
+/** 已结束会话的结果与卡片标题的文案 + 配色名（配色映射归渲染层）。 */
 export interface Outcome {
     glyph: string;
     label: string;
