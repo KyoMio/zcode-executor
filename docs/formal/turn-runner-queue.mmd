@@ -1,0 +1,81 @@
+---
+title: "Turn / Runner / Queue Lifecycle (ZCE-6)"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: setup
+    lg1: active
+    lg2: blocked
+    lg3: steer
+    lg4: closing
+    lg5: terminal
+    lg6: fault
+  }
+  class lg0 blue
+  class lg1 teal
+  class lg2 orange
+  class lg3 purple
+  class lg4 yellow
+  class lg5 tan
+  class lg6 pink
+  s0: Idle (待抢锁)
+  s1: Lock Held (已持 worktree 锁)
+  s2: Cleaning (finally 关连接/删密钥/解锁)
+  s3: Connected (队列待发)
+  s4: CheckingAttempts (bumpAttempts 后核限)
+  s5: Failed (失败收场#65292;零残留)
+  s6: Running (回合执行中)
+  s7: Connected (队列已空)
+  s8: Blocked (pending.json 挂起等人工)
+  s9: Steer Queued (guide 插话在飞)
+  s10: Timed Out (触发 stop + 5s 宽限)
+  s11: Cancelling (已发 session/stop)
+  s12: Exited (子进程异常退出#65292;保留队列重投)
+  s13: Cancelled (已取消结算#65292;零残留)
+  s14: Settled (正常完成#65292;零残留)
+  s15: Timeout Settled (超时结算#65292;零残留)
+  [*] --> s0
+  s0 --> s1: tryLinkLock 成功持锁
+  s1 --> s2: spawn/attach 失败进 finally
+  s1 --> s3: 写临时密钥并 spawn + attach
+  s2 --> s5: close + dispose + 解锁 -> Failed
+  s3 --> s4: nextQueueFile + bumpAttempts
+  s4 --> s6: attempts <= MAX_ATTEMPTS 发起 send
+  s6 --> s7: turn.completed(success) 出队
+  s6 --> s2: 子进程退出保留队列重投
+  s6 --> s8: 落盘 pending.json 挂起
+  s6 --> s9: inTurnWatcher 发送 guide 插话
+  s6 --> s10: 回合超时发 session/stop
+  s6 --> s11: 运行中 cancel 发 session/stop
+  s7 --> s2: 队列已空收场
+  s2 --> s12: close + dispose + 解锁 -> Exited
+  s8 --> s6: 消费 answer.json 恢复执行
+  s8 --> s2: 子进程退出保留队列重投
+  s8 --> s11: 挂起期间 cancel 替答 deny/decline
+  s8 --> s10: 回合超时发 session/stop
+  s9 --> s7: turn.completed(success) 出队
+  s9 --> s2: 子进程退出保留队列重投
+  s9 --> s6: turn.steerDrained 生效 or startNow 误起回合发 v4 stop
+  s9 --> s10: 回合超时发 session/stop
+  s9 --> s11: steerQueued 期间 cancel
+  s10 --> s2: gate.close() 结算 timeout
+  s11 --> s2: cancel 生效或宽限到期结算 cancelled or cancel 竞态撞上已完成保留 done
+  s2 --> s13: close + dispose + 解锁 -> Cancelled
+  s2 --> s14: close + dispose + 解锁 -> Settled
+  s2 --> s15: close + dispose + 解锁 -> TimeoutSettled
+  class s0 blue
+  class s1 blue
+  class s2 yellow
+  class s3 teal
+  class s4 teal
+  class s5 pink
+  class s6 teal
+  class s7 teal
+  class s8 orange
+  class s9 purple
+  class s10 yellow
+  class s11 yellow
+  class s12 pink
+  class s13 tan
+  class s14 tan
+  class s15 tan

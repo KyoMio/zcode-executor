@@ -1,13 +1,14 @@
 // lib/pending.mjs 的行为测试：闸门挂起、排队、应答转换。全部对 test/mock-appserver.mjs 跑，
 // 不发真机 session/send，不花额度。real-send 的行为在 test/real-send.test.mjs。
 import test from 'node:test';
-import { rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import { AppServerClient } from '../lib/appserver.mjs';
 import { attachSession } from '../lib/session.mjs';
-import { createPendingGate, readPending, permissionResponse, questionResponse, optionClass } from '../lib/pending.mjs';
+import { createPendingGate, readPending, permissionResponse, questionResponse, optionClass, PENDING_ABORTED } from '../lib/pending.mjs';
+import { createGate } from '../lib/gate.mjs';
 import { startMock, waitFor, readRecord, killAll } from './helpers.mjs';
 
 const pids = [];
@@ -251,4 +252,92 @@ test('两个反向请求接连来：先排队，第一个应答后第二个才�
     assert.deepEqual(answers[1].result, { action: 'accept', content: { answers: { '继续吗': '继续' } } });
     assert.equal(gate.current(), null);
   });
+});
+
+test('ZCE-6 F4：gate.abort() 中止当前挂起并删 pending.json，不阻塞后续排队请求', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-pending-abort-'));
+  mockDirs.push(dir);
+  const pendingPath = path.join(dir, 'pending.json');
+  const gate = createPendingGate({ pendingPath });
+
+  const p1 = gate.handlers.permission({
+    requestId: 'rq_abort_1',
+    toolName: 'Write',
+    input: { file_path: 'a.txt' },
+    options: [{ optionId: 'allow', kind: 'allow_once' }],
+  });
+  const p2 = gate.handlers.permission({
+    requestId: 'rq_abort_2',
+    toolName: 'Write',
+    input: { file_path: 'b.txt' },
+    options: [{ optionId: 'allow', kind: 'allow_once' }],
+  });
+  await waitFor(() => (gate.current()?.requestId === 'rq_abort_1' ? true : undefined));
+  const p1Rejected = assert.rejects(p1, (err) => err?.name === 'ExecutorError');
+  assert.equal(gate.abort('回合已超时，中止挂起'), true);
+  await p1Rejected;
+
+  const second = await waitFor(() => (gate.current()?.requestId === 'rq_abort_2' ? gate.current() : undefined));
+  assert.equal(second.requestId, 'rq_abort_2');
+  gate.answer({ decision: 'allow' });
+  assert.deepEqual(await p2, { decision: 'allow' });
+  assert.equal(gate.current(), null);
+});
+
+test('ZCE-6 F4：gate.close() 拒掉当前与排队的挂起请求，且在飞 review() 回落后不再落盘 pending.json', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'zcode-gate-close-'));
+  mockDirs.push(dir);
+  const pendingPath = path.join(dir, 'pending.json');
+  const seenOnPending = [];
+  const pendingGate = createPendingGate({
+    pendingPath,
+    onPending: (p) => seenOnPending.push(p.requestId),
+  });
+
+  const p1 = pendingGate.handlers.permission({
+    requestId: 'rq_close_1',
+    toolName: 'Write',
+    input: { file_path: 'a.txt' },
+    options: [{ optionId: 'allow', kind: 'allow_once' }],
+  });
+  const p2 = pendingGate.handlers.permission({
+    requestId: 'rq_close_2',
+    toolName: 'Write',
+    input: { file_path: 'b.txt' },
+    options: [{ optionId: 'allow', kind: 'allow_once' }],
+  });
+  await waitFor(() => (pendingGate.current()?.requestId === 'rq_close_1' ? true : undefined));
+  const r1 = assert.rejects(p1, (err) => err?.code === PENDING_ABORTED);
+  const r2 = assert.rejects(p2, (err) => err?.code === PENDING_ABORTED);
+  assert.equal(pendingGate.close('回合已结束'), true);
+  await Promise.all([r1, r2]);
+  assert.deepEqual(seenOnPending, ['rq_close_1'], 'close() 后排队的 rq_close_2 不得落盘或触发 onPending');
+  assert.equal(readPending(pendingPath), null);
+
+  // 模拟在飞 review() 慢于回合结束才抛错回落：close() 后不写 pending.json、不记 gate-error
+  const events = [];
+  let releaseReview;
+  const fullGate = createGate({
+    cwd: dir,
+    config: { home: dir },
+    pendingPath,
+    onPending: () => seenOnPending.push('unexpected'),
+    complete: () => new Promise((_, reject) => { releaseReview = () => reject(new Error('client closed')); }),
+    evidenceProbe: { fileExists: () => false, commandExists: () => false },
+    getIntent: () => [],
+    getPriorActions: () => [],
+    appendEvent: (e) => events.push(e),
+  });
+  const inflight = fullGate.handlers.permission({
+    requestId: 'rq_inflight_review',
+    toolName: 'Bash',
+    input: { command: 'echo hi' },
+    options: [{ optionId: 'allow', kind: 'allow_once' }],
+  });
+  await waitFor(() => (typeof releaseReview === 'function' ? true : undefined));
+  fullGate.close('回合已结束');
+  releaseReview();
+  await assert.rejects(inflight, (err) => err?.code === PENDING_ABORTED);
+  assert.equal(readPending(pendingPath), null);
+  assert.deepEqual(events, []);
 });

@@ -11,6 +11,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startMock, readRecord, killAll, waitFor } from './helpers.mjs';
 import { createConfiguredFastScreen } from '../lib/run.mjs';
+import { acquireSessionLock, releaseLockIfOwned } from '../lib/runs.mjs';
+import { enqueue } from '../lib/queue.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BIN = path.join(ROOT, 'bin', 'zcode-executor');
@@ -1071,4 +1073,143 @@ test('ZCE-9：归档 checkpoint.md 与 proof.json 抹除 Jev API key 且落盘 0
     assert.equal(statSync(checkpointPath).mode & 0o777, 0o600);
   }
   trackRunnerPids(env.runsDir);
+});
+
+test('ZCE-6 F1：并发 4 个 _runner 竞争死锁时恰好 1 个成功持锁，releaseLockIfOwned 不删他锁，新鲜 .reclaim 不被误删', async (t) => {
+  const tmpLockDir = await mkdtemp(path.join(os.tmpdir(), 'zcode-f1-unit-'));
+  dirs.push(tmpLockDir);
+  const foreignLock = path.join(tmpLockDir, 'lock');
+  await writeFile(foreignLock, JSON.stringify({ pid: process.pid + 12345, startedAt: new Date().toISOString() }));
+  releaseLockIfOwned(foreignLock);
+  assert.equal(existsSync(foreignLock), true, '非本进程持有的锁不得被 releaseLockIfOwned 删除');
+
+  // 新鲜死 .reclaim 处于交接窗口内，不得被后来者无条件删除；原 dead lock 保持原样
+  const deadLockPath = path.join(tmpLockDir, 'dead.lock');
+  await writeFile(deadLockPath, JSON.stringify({ pid: 999999999, startedAt: '2026-01-01T00:00:00Z' }));
+  await writeFile(`${deadLockPath}.reclaim`, JSON.stringify({ pid: 999999998, startedAt: new Date().toISOString() }));
+  assert.throws(() => acquireSessionLock(deadLockPath, 's_reclaim'), (err) => err?.exitCode === 2 && /交接窗口/.test(err.message));
+  assert.equal(existsSync(`${deadLockPath}.reclaim`), true);
+
+  const env = await setupSend(t, {
+    script: { turns: [{ events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: 'ok' }, delayMs: 400 }] }] },
+  });
+  enqueue(env.home, env.entry.id, { text: '死锁并发抢占测试' });
+  await writeFile(path.join(env.runsDir, 'lock'), JSON.stringify({ pid: 999999999, startedAt: '2026-01-01T00:00:00Z' }));
+
+  const runners = Array.from({ length: 4 }, () =>
+    spawn(process.execPath, [BIN, '_runner', env.entry.id], {
+      env: env.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }),
+  );
+  for (const r of runners) runnerPids.push(r.pid);
+  const results = await Promise.all(
+    runners.map((r) => new Promise((resolve) => {
+      let stderr = '';
+      r.stderr.on('data', (d) => { stderr += d; });
+      r.on('exit', (code) => resolve({ code, stderr }));
+    })),
+  );
+  const ok = results.filter((r) => r.code === 0);
+  const rejected = results.filter((r) => r.code === 2);
+  assert.equal(ok.length, 1, `应恰好 1 个 runner 成功退出 0，实际：${JSON.stringify(results)}`);
+  assert.equal(rejected.length, 3, `其余 3 个 runner 应退出 2，实际：${JSON.stringify(results)}`);
+  assert.equal(existsSync(path.join(env.runsDir, 'lock')), false);
+  assert.equal(existsSync(path.join(env.runsDir, 'lock.reclaim')), false);
+  const last = JSON.parse(await readFile(path.join(env.runsDir, 'last.json'), 'utf8'));
+  assert.equal(last.outcome, 'done');
+});
+
+test('ZCE-6 F2：ignoreEof 子进程在 runner 收 SIGTERM 后必被关闭，零孤儿与零临时密钥残留', { skip: process.platform === 'win32' && 'Windows 收不到 SIGTERM' }, async (t) => {
+  const env = await setupSend(t, { script: { ignoreEof: true, turns: [{ hang: true }] } });
+  const queued = runBin(env.env, ['send', env.entry.id, '验证信号关闭 detached 子进程']);
+  assert.equal(queued.status, 0, queued.stderr);
+
+  await waitFor(async () => (readEvents(env.runsDir).some((e) => e.type === 'executor.send') ? true : undefined));
+  const runnerLog = await readFile(path.join(env.runsDir, 'runner.log'), 'utf8');
+  const childMatch = runnerLog.match(/mock: started .* pid=(\d+)/);
+  assert.ok(childMatch, `runner.log 应记录 mock 子进程 pid：\n${runnerLog}`);
+  const childPid = Number(childMatch[1]);
+  mockPids.push(childPid);
+
+  const { pid: runnerPid } = JSON.parse(await readFile(path.join(env.runsDir, 'lock'), 'utf8'));
+  process.kill(runnerPid, 'SIGTERM');
+
+  await waitFor(async () => (existsSync(path.join(env.runsDir, 'lock')) ? undefined : true), { timeoutMs: 10_000 });
+  await waitFor(async () => {
+    try {
+      process.kill(runnerPid, 0);
+      return undefined;
+    } catch {
+      return true;
+    }
+  }, { timeoutMs: 5_000 });
+  await waitFor(async () => {
+    try {
+      process.kill(childPid, 0);
+      return undefined;
+    } catch {
+      return true;
+    }
+  }, { timeoutMs: 5_000 });
+
+  assert.deepEqual(await readdir(env.tmp), []);
+  const state = JSON.parse(await readFile(path.join(env.runsDir, 'state.json'), 'utf8'));
+  assert.equal(state.phase, 'exited');
+  assert.match(state.reason, /SIGTERM/);
+});
+
+test('ZCE-6 F2：队列有第二项时收 SIGTERM 立即停止续跑，绝不发出第二条 executor.send', { skip: process.platform === 'win32' && 'Windows 收不到 SIGTERM' }, async (t) => {
+  const env = await setupSend(t, { script: { turns: [{ hang: true }] } });
+  enqueue(env.home, env.entry.id, { text: '第一单进行中收信号' });
+  enqueue(env.home, env.entry.id, { text: '第二单绝不该开始' });
+  const runner = spawn(process.execPath, [BIN, '_runner', env.entry.id], {
+    env: env.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  runnerPids.push(runner.pid);
+  const exited = new Promise((resolve) => runner.on('exit', (code) => resolve(code)));
+  await waitFor(async () => (readEvents(env.runsDir).some((e) => e.type === 'executor.send') ? true : undefined));
+  runner.kill('SIGTERM');
+  assert.equal(await exited, 0);
+  assert.equal(existsSync(path.join(env.runsDir, 'lock')), false);
+  const sends = readEvents(env.runsDir).filter((e) => e.type === 'executor.send');
+  assert.equal(sends.length, 1, 'SIGTERM 后不得继续消费队列下一项');
+});
+
+test('ZCE-6 F4：挂起态超时后同队列下一项重连新闸门，不再卡死后续挂起审批', async (t) => {
+  const env = await setupSend(t, {
+    script: {
+      turns: [{ permission: { toolName: 'Write', input: { file_path: 'step.txt' }, reason: '需要人工确认' } }],
+    },
+  });
+  enqueue(env.home, env.entry.id, { text: '第一单超时挂起', timeoutSec: 1 });
+  enqueue(env.home, env.entry.id, { text: '第二单正常挂起审批' });
+
+  const runner = spawn(process.execPath, [BIN, '_runner', env.entry.id], {
+    env: env.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  runnerPids.push(runner.pid);
+  const runnerExit = new Promise((resolve) => runner.on('exit', (code) => resolve(code)));
+
+  // 等第一单触发 timeout 并产生第一条 executor.result(timeout)，且第二单已开始投递
+  await waitFor(async () => {
+    const evs = readEvents(env.runsDir);
+    const sends = evs.filter((e) => e.type === 'executor.send');
+    return evs.some((e) => e.type === 'executor.result' && e.outcome === 'timeout') && sends.length >= 2
+      ? true
+      : undefined;
+  }, { timeoutMs: 15_000 });
+
+  // 第二单重连后应重新写出 pending.json（而不是卡死在第一单未决 waitAnswer 后）
+  await waitFor(async () => (existsSync(path.join(env.runsDir, 'pending.json')) ? true : undefined), { timeoutMs: 10_000 });
+  const approved = runBin(env.env, ['approve', env.entry.id]);
+  assert.equal(approved.status, 0, approved.stderr);
+
+  const code = await runnerExit;
+  assert.equal(code, 0);
+  assert.equal(existsSync(path.join(env.runsDir, 'lock')), false);
+  const results = readEvents(env.runsDir).filter((e) => e.type === 'executor.result');
+  assert.deepEqual(results.map((r) => r.outcome), ['timeout', 'done']);
 });

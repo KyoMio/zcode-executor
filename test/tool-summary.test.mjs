@@ -73,6 +73,24 @@ test('parseTurn：参数只在 permission.requested 里时按同名工具兜底�
   });
 });
 
+test('parseTurn（ZCE-6 F3）：缺名 inputOmitted 占位调用不偷走后续具名工具的 permission.requested 输入', () => {
+  const events = [
+    { type: 'tool.updated', payload: { toolCallId: 'anon_1', kind: 'scheduled', inputOmitted: true } },
+    { type: 'tool.updated', payload: { toolCallId: 'w_1', toolName: 'Write', kind: 'scheduled', inputOmitted: true } },
+    { type: 'permission.requested', payload: { toolName: 'Write', input: { file_path: '/repo/secret.txt' } } },
+  ];
+  const { calls } = parseTurn(events, { cwd: CWD });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], {
+    toolCallId: 'w_1',
+    toolName: 'Write',
+    input: { file_path: '/repo/secret.txt' },
+    summary: 'secret.txt',
+    state: 'scheduled',
+    ok: null,
+  });
+});
+
 test('parseTurn：tool.updated 自带 input 与 tool_call 的 input 并存时，用 tool_call 那份（3.12+ 参数权威）', () => {
   const events = [
     { type: 'tool.updated', payload: { toolCallId: 't1', toolName: 'Write', kind: 'scheduled', input: { file_path: 'old.md' } } },
