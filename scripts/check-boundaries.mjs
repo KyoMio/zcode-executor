@@ -60,6 +60,16 @@ function canPrecedingStartRegex(src, slashIdx) {
 
 /**
  * 提取源码中的所有注释行，返回 [{ line, text }]（1-based 行号；块注释按行拆开以便精准报行）。
+ *
+ * JSX/TSX 感知（ZCE-7/PR#19 回修）：在 JSX 文本区里，撇号是文案不是字符串开头、
+ * // 与 /<star> 是文案不是注释——例如 <p>Don't https://example.test/TODO</p>。
+ * 只有花括号 { ... } 内部回到 JavaScript 代码区，其中的注释才参与提取。
+ * 判定规则（启发式，覆盖本仓排版风格）：
+ *  - 代码区里 `<` 后接字母/`>`、且前一个非空白字符属于 JSX 起始上下文
+ *    （空白本身、( , [ { = : ; , ! & | ? + - * % ~ < > 或行首）→ JSX 标签；
+ *    紧贴标识符的 `<`（泛型 useState<string>、比较 a<b）不当作 JSX。
+ *  - JSX 文本区里 `<` 接字母/`/`/`>` 开新标签；`</` 闭合当前层；`/>` 或 `</>` 不增层。
+ *  - 文本区里 `{` 进入代码（剥到配对的 `}` 回来）；字符串、模板、正则的既有规则不变。
  * @param {string} src
  * @returns {Array<{ line: number, text: string }>}
  */
@@ -68,12 +78,39 @@ export function extractComments(src) {
   const len = src.length;
   let line = 1;
   let i = 0;
-  // 栈元素：'code'（顶层或 ${...} 内部）或 'template'
+  // 词法模式栈：'code'（顶层或 JSX 花括号/模板 ${} 内部）、'template'、'jsxtext'、'jsxtag'
   const stack = ['code'];
   const braceDepths = [0];
+  // JSX 元素嵌套层数；为 0 时弹出最后一个 JSX 模式即回到纯代码
+  let jsxDepth = 0;
+
+  const topMode = () => stack[stack.length - 1];
+  const inCode = () => topMode() === 'code';
+  const inJsx = () => topMode() === 'jsxtext' || topMode() === 'jsxtag';
+
+  // 代码区里 `<` 是否开启 JSX：后随字母或 >，且前文处于表达式起始位置
+  const jsxOpenAhead = (idx) => {
+    const next = src[idx + 1];
+    if (next === undefined) return false;
+    if (!/[A-Za-z>]/.test(next)) return false;
+    let j = idx - 1;
+    while (j >= 0 && (src[j] === ' ' || src[j] === '\t' || src[j] === '\n' || src[j] === '\r')) j -= 1;
+    if (j < 0) return true;
+    const prev = src[j];
+    if (prev === '>' && src[j - 1] === '=') return true; // 箭头 =>
+    if ('([{=:;,!&|?+-*%~<>'.includes(prev)) return true;
+    if (/[A-Za-z0-9_$]/.test(prev)) {
+      // return/throw/case 等关键词之后是表达式起始位置：< 当作 JSX
+      let k = j;
+      while (k >= 0 && /[A-Za-z0-9_$]/.test(src[k])) k -= 1;
+      const word = src.slice(k + 1, j + 1);
+      return ['return', 'throw', 'case', 'yield', 'await', 'else', 'do', 'typeof', 'void', 'delete'].includes(word);
+    }
+    return false;
+  };
 
   while (i < len) {
-    const mode = stack[stack.length - 1];
+    const mode = topMode();
     const ch = src[i];
 
     if (mode === 'template') {
@@ -99,12 +136,120 @@ export function extractComments(src) {
       continue;
     }
 
+    if (mode === 'jsxtext') {
+      if (ch === '\n') {
+        line += 1;
+        i += 1;
+        continue;
+      }
+      if (ch === '{') {
+        // 花括号回到 JavaScript 代码区；其中的注释参与提取
+        stack.push('code');
+        braceDepths.push(0);
+        i += 1;
+        continue;
+      }
+      if (ch === '<') {
+        const next = src[i + 1];
+        if (next !== undefined && /[A-Za-z/>]/.test(next)) {
+          stack.push('jsxtag');
+          braceDepths.push(0);
+          if (next !== '/') jsxDepth += 1; // </x> 与 </> 是闭合，不新增层
+          i += 1;
+          continue;
+        }
+        i += 1;
+        continue;
+      }
+      // 其余一切（撇号、//、URL、TODO 字样……）都是文案，不是代码
+      i += 1;
+      continue;
+    }
+
+    if (mode === 'jsxtag') {
+      if (ch === '\n') {
+        line += 1;
+        i += 1;
+        continue;
+      }
+      if (ch === '{') {
+        // 属性里的表达式花括号回到代码区
+        stack.push('code');
+        braceDepths.push(0);
+        i += 1;
+        continue;
+      }
+      if (ch === "'" || ch === '"') {
+        const quote = ch;
+        i += 1;
+        while (i < len) {
+          if (src[i] === '\n') {
+            line += 1;
+            i += 1;
+            break;
+          }
+          if (src[i] === quote) {
+            i += 1;
+            break;
+          }
+          i += 1;
+        }
+        continue;
+      }
+      if (ch === '/') {
+        if (src[i + 1] === '>') {
+          // 自闭合 </x> 之前的 />：这一层不开口
+          jsxDepth = Math.max(0, jsxDepth - 1);
+          stack.pop();
+          braceDepths.pop();
+          if (jsxDepth === 0 && topMode() === 'jsxtext') {
+            stack.pop();
+            braceDepths.pop();
+          }
+          i += 2;
+          continue;
+        }
+        i += 1;
+        continue;
+      }
+      if (ch === '>') {
+        const wasClose = isCloseTag(src, i);
+        stack.pop();
+        braceDepths.pop();
+        if (wasClose) {
+          // 闭合标签：元素层数配平；归零时连文本区一起退出，回到上级代码模式
+          jsxDepth = Math.max(0, jsxDepth - 1);
+          if (jsxDepth === 0 && topMode() === 'jsxtext') {
+            stack.pop();
+            braceDepths.pop();
+          }
+        } else {
+          // 开口标签结束，进入该元素的文本区
+          stack.push('jsxtext');
+          braceDepths.push(0);
+        }
+        i += 1;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    // ── mode === 'code' ──
     if (ch === '\n') {
       line += 1;
       i += 1;
       continue;
     }
-    if (ch === '\'' || ch === '"') {
+    if (ch === '<' && jsxOpenAhead(i)) {
+      // 进入 JSX 元素（首个标签直接进文本区决策由 jsxtag 的 > 完成）
+      jsxDepth += 1;
+      stack.push('jsxtag');
+      braceDepths.push(0);
+      i += 1;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
       const quote = ch;
       i += 1;
       while (i < len) {
@@ -204,6 +349,13 @@ export function extractComments(src) {
     i += 1;
   }
   return out;
+}
+
+// 判断位置 gtIdx（某 `>` 处）所属标签是否闭合标签：回扫到配对的 `<`，看其后是否 /。
+function isCloseTag(src, gtIdx) {
+  let j = gtIdx - 1;
+  while (j >= 0 && src[j] !== '<' && src[j] !== '>' && src[j] !== '\n') j -= 1;
+  return j >= 0 && src[j] === '<' && src[j + 1] === '/';
 }
 
 const EXCUSE_PATTERNS = [
