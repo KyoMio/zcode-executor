@@ -4,3 +4,19 @@
 # 遮蔽宿主提供的 react（dsh-plugins 工作区 AGENTS.md 的「依赖遮蔽」坑）。
 # peer 全部声明在 package.json 里，由宿主运行时提供。
 autoInstallPeers: false
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/cordis@4.2.0-alpha.2'
+  - '@deepseek-ai/cosmokit@1.10.0-alpha.2'
+  - '@deepseek-ai/dsh-api-session-controller@0.2.3-alpha.3'
+  - '@deepseek-ai/dsh-api-workspace-controller@0.2.3-alpha.3'
+  - '@deepseek-ai/dsh-brand@0.2.3-alpha.3'
+  - '@deepseek-ai/dsh-client-connection@0.2.3-alpha.3'
+  - '@deepseek-ai/dsh-client-ui-primitives@0.2.3-alpha.3'
+  - '@deepseek-ai/dsh-client-ui-renderer@0.2.3-alpha.3'
+  - '@deepseek-ai/dsh-client-ui-sidebar-right@0.2.3-alpha.3'
+  - '@deepseek-ai/dsh-client-ui-slots@0.2.3-alpha.3'
+  - '@deepseek-ai/dsh-deque@0.2.3-alpha.3'
+  - '@deepseek-ai/dsh-host-webserver@0.2.3-alpha.3'
+  - '@deepseek-ai/dsh-native-command@0.2.3-alpha.3'
+  - '@deepseek-ai/dsh-timeout@0.2.3-alpha.3'
+  - '@deepseek-ai/schemastery@3.20.0-alpha.2'

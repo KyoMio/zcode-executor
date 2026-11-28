@@ -16,7 +16,7 @@ import { TAB_ID, missingServiceNote, tabDefinition } from './tab-def.ts';
 // 纯类型引入：把 sidebar-right 对 cordis Context 的服务声明（sidebarRight/sidebarRightTabs）
 // 与 SlotMap 的右栏槽位声明拉进本程序，不产生运行时代码。运行时不 require 那个包——
 // 老版本 DSH 没有它，静态 require 会在模块表上炸掉整个 bundle。
-import type {} from '@deepseek-ai/dsh-client-ui-slots';
+import type {} from '@deepseek-ai/dsh-client-ui-slots/client';
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client';
 
 /**

@@ -84,8 +84,13 @@ test('注册三条 exact 路由：stream / snapshot / repo', () => {
   for (const route of registered) assert.equal(typeof route.handler, 'function');
 });
 
-test('admit 拒绝：三条路由都原样回 401/403，stream 不计连接数', () => {
-  for (const rejection of [401, 403]) {
+test('admit 拒绝：三条路由都原样回 401/403/503，stream 不计连接数', () => {
+  const expectedCode = {
+    401: 'unauthorized',
+    403: 'forbidden',
+    503: 'authentication-unavailable',
+  };
+  for (const rejection of [401, 403, 503]) {
     const fake = fakeWatch();
     const { byPath } = mounted({ admit: () => ({ rejection }) , watch: fake.watch });
     for (const pathName of [STREAM, SNAPSHOT, REPO]) {
@@ -94,7 +99,7 @@ test('admit 拒绝：三条路由都原样回 401/403，stream 不计连接数',
       assert.equal(res.status, rejection, pathName);
       const body = JSON.parse(res.body());
       assert.equal(body.ok, false);
-      assert.equal(body.error.code, rejection === 401 ? 'unauthorized' : 'forbidden');
+      assert.equal(body.error.code, expectedCode[rejection]);
     }
     assert.deepEqual(fake.counts, { add: 0, remove: 0 }); // 被拒的请求不占连接计数
   }

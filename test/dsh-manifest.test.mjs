@@ -90,3 +90,17 @@ test('dsh-plugin/package.json 不再携带第二份插件定义', () => {
   assert.equal(sub.dsh, undefined, 'dsh 字段只应留在根 package.json');
   assert.equal(sub.exports?.['./cordis.patch.yml'], undefined);
 });
+
+test('React 19 与 DSH 0.2.3-alpha.3 兼容性声明齐备且双份一致', () => {
+  const sub = JSON.parse(readFileSync(path.join(root, 'dsh-plugin', 'package.json'), 'utf8'));
+  assert.equal(pkg.peerDependencies.react, sub.peerDependencies.react);
+  assert.match(pkg.peerDependencies.react, /\^18\.2\.0/);
+  assert.match(pkg.peerDependencies.react, /\^19\.3\.1/);
+  assert.match(pkg.engines?.dsh ?? '', />=0\.2\.1-alpha\.2 <0\.3\.0-0/);
+  for (const [name, range] of Object.entries(pkg.peerDependencies ?? {})) {
+    if (name.startsWith('@deepseek-ai/dsh-')) {
+      assert.match(range, /\^0\.2\.3-alpha\.1/, `${name} 的 peerDependencies 应覆盖 0.2.3-alpha.3`);
+      assert.equal(sub.peerDependencies?.[name], range, `dsh-plugin 与根 package.json 的 ${name} 范围应一致`);
+    }
+  }
+});

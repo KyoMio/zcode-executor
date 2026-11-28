@@ -1,8 +1,8 @@
 /**
  * dsh-zcode-executor 的三个 GET 路由，注册进宿主 webServer 前全部先过 connection.admit
- * （webServer 路由不走 DSH 的 /api 鉴权，写法照 dsh-zen-remote 的既有模式：admit 的拒绝
- * 原样回给浏览器，服务缺席时整块不挂载——挂载与否由 index.ts 的 ctx.inject 决定）；admit
- * 之后还有一道 method 墙：非 GET 一律 405 + Allow: GET。
+ * （webServer 自 DSH 0.2.2-rc.2 起默认开启 auth: 'required' 鉴权；保留显式 admit 以兼容
+ * 0.2.1 / 0.2.2-rc.1，admit 的拒绝原样回给浏览器，服务缺席时整块不挂载——挂载与否由
+ * index.ts 的 ctx.inject 决定）；admit 之后还有一道 method 墙：非 GET 一律 405 + Allow: GET。
  *
  * - GET /zcode-executor/stream：NDJSON 流。连接即报当前连接态；已同步再补一轮
  *   hello+表+synced，新客户端不用等下一次变化就拿到全量。之后 watch 的行原样转发，
@@ -27,11 +27,11 @@ export declare const STREAM_ROUTE = "/zcode-executor/stream";
 export declare const SNAPSHOT_ROUTE = "/zcode-executor/snapshot";
 /** GET /zcode-executor/repo?cwd=…：cwd 的所属仓库。 */
 export declare const REPO_ROUTE = "/zcode-executor/repo";
-/** connection.admit 的回答：放行（带操作者信息）或拒绝状态（zen-remote 同款形状）。 */
+/** connection.admit 的回答：放行（带操作者信息）或拒绝状态（PeerAdmission: 401 | 403 | 503）。 */
 export type Admission = {
     readonly peer: unknown;
 } | {
-    readonly rejection: 401 | 403;
+    readonly rejection: 401 | 403 | 503;
 };
 /** webServer.register 需要的最小形状（由 index.ts 的接线绑到宿主服务上；测试收集调用）。 */
 export type RouteRegistrar = (route: {
