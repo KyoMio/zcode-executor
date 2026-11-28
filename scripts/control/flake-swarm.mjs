@@ -5,7 +5,7 @@
 //   子集已经覆盖了所有并发敏感面。--runs N --concurrency C，默认 30/4。
 // 判定：全部轮次 pass>0 且 fail=0 且 exit 0；并发组内可重复失败 = flake 实锤，把失败轮次的
 // stderr/stdout 尾巴带回报告（指路式：下一步怎么单独复现）。
-import { runNodeTest } from './lib.mjs';
+import { runNodeTest, UsageError } from './lib.mjs';
 
 const STRESS_FILES = [
   'test/run.test.mjs',
@@ -18,10 +18,10 @@ const STRESS_FILES = [
 export async function flakeSwarm({ runs = 30, concurrency = 4 }) {
   // R1-7：两个参数必须是正整数——非数字/零/负数直接拒绝（此前 NaN 轮空跑也报绿）
   if (!Number.isInteger(runs) || runs < 1) {
-    throw new (await import('./lib.mjs')).UsageError(`--runs 必须是正整数，收到：${runs}。用法示例：--runs 20`);
+    throw new UsageError(`--runs 必须是正整数，收到：${runs}。用法示例：--runs 20`);
   }
-  if (!Number.isInteger(concurrency) || concurrency < 1) {
-    throw new (await import('./lib.mjs')).UsageError(`--concurrency 必须是正整数，收到：${concurrency}。用法示例：--concurrency 4`);
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32) {
+    throw new UsageError(`--concurrency 必须是 1..32 的整数，收到：${concurrency}。用法示例：--concurrency 4`);
   }
   const results = [];
   const lanes = Array.from({ length: concurrency }, () => []);
@@ -49,8 +49,9 @@ export async function flakeSwarm({ runs = 30, concurrency = 4 }) {
   const ok = results.every(Boolean) && results.length === runs && failures.length === 0 && emptyRuns.length === 0;
   const totalPass = results.reduce((a, r) => a + (r?.pass ?? 0), 0);
   const human = [
-    `flake-swarm ${ok ? '通过' : '发现不稳定'}：${runs} 轮 × 并发 ${concurrency}，共 ${totalPass} 断言通过，${failures.length} 轮失败，耗时 ${Math.round(durationMs / 1000)}s`,
+    `flake-swarm ${ok ? '通过' : '发现不稳定'}：${runs} 轮 × 并发 ${concurrency}，共 ${totalPass} 断言通过，${failures.length} 轮失败${emptyRuns.length > 0 ? `，${emptyRuns.length} 轮空跑` : ''}，耗时 ${Math.round(durationMs / 1000)}s`,
     ...failures.slice(0, 5).map((f) => `  ✗ 第 ${f.iter} 轮：code=${f.code} fail=${f.fail}${f.timedOut ? '（超时强杀）' : ''}`),
+    ...emptyRuns.slice(0, 5).map((e) => `  ✗ 第 ${e.iter} 轮：0 用例通过（空跑）`),
   ].join('\n');
   return {
     ok,
@@ -60,6 +61,7 @@ export async function flakeSwarm({ runs = 30, concurrency = 4 }) {
     durationMs,
     totalPass,
     failedRuns: failures.map((f) => ({ iter: f.iter, code: f.code, fail: f.fail, timedOut: f.timedOut, stderrTail: f.stderrTail, stdoutTail: f.stdoutTail })),
+    emptyRuns: emptyRuns.map((e) => ({ iter: e.iter, code: e.code, pass: e.pass, tests: e.tests })),
     next: ok
       ? '高压下无竞态——队列锁/缓冲区/清理行为稳定'
       : `单独复现失败轮次：node --test ${STRESS_FILES.join(' ')}；连续两轮同点失败大概率是真 bug 不是 flake，按 pstack 排查止损规范先写最小复现`,

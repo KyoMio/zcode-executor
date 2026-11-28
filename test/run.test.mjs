@@ -1050,3 +1050,25 @@ test('ZCE-10：--task-type investigate 记进队列项与 state.current；非法
   assert.equal(state.current.taskType, 'investigate'); // 回合进行中 state 带类型（止损提示的依据）
   trackRunnerPids(env.runsDir);
 });
+
+test('ZCE-9：归档 checkpoint.md 与 proof.json 抹除 Jev API key 且落盘 0600 原子权限', async (t) => {
+  const jevKey = 'sk-jev-runner-e2e-secret-42';
+  const env = await setupSend(t, { script: { turns: [{ hang: true }] } });
+  const cfgPath = path.join(env.home, 'config.json');
+  const cfg = JSON.parse(await readFile(cfgPath, 'utf8'));
+  cfg.review = { enabled: true, jev: { apiKey: jevKey } };
+  await writeFile(cfgPath, JSON.stringify(cfg));
+  chmodSync(cfgPath, 0o600);
+  const repo = JSON.parse(await readFile(path.join(env.home, 'sessions.json'), 'utf8')).sessions[env.entry.id].cwd;
+  await writeFile(path.join(repo, '.executor-checkpoint.md'), `进展：已连 Jev ${jevKey}`);
+  const run = runBin(env.env, ['send', env.entry.id, '慢活', '--wait', '--timeout', '1']);
+  assert.equal(run.status, 3, `stdout: ${run.stdout} stderr: ${run.stderr}`);
+  const checkpointPath = path.join(env.runsDir, 'checkpoint.md');
+  const saved = await readFile(checkpointPath, 'utf8');
+  assert.equal(saved.includes(jevKey), false);
+  assert.match(saved, /<redacted>/);
+  if (process.platform !== 'win32') {
+    assert.equal(statSync(checkpointPath).mode & 0o777, 0o600);
+  }
+  trackRunnerPids(env.runsDir);
+});

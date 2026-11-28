@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -175,10 +175,16 @@ test('archiveCheckpoint：工作区有就复制进 runs，没有返回 null 且�
   await writeFile(path.join(dir, 'checkpoint.md'), '上一回合的旧断点');
   assert.equal(archiveCheckpoint({ cwd, dir }), null);
   assert.equal(readFileSync(path.join(dir, 'checkpoint.md'), 'utf8'), '上一回合的旧断点'); // 不被清掉
-  await writeFile(path.join(cwd, '.executor-checkpoint.md'), '已完成 A\n未完成 B');
-  const dst = archiveCheckpoint({ cwd, dir });
+  await writeFile(path.join(cwd, '.executor-checkpoint.md'), '已完成 A\n未完成 B\nkey=sk-jev-test-12345');
+  const dst = archiveCheckpoint({ cwd, dir, secrets: ['sk-jev-test-12345'] });
   assert.equal(dst, path.join(dir, 'checkpoint.md'));
-  assert.equal(readFileSync(dst, 'utf8'), '已完成 A\n未完成 B'); // 新断点覆盖旧的
+  const saved = readFileSync(dst, 'utf8');
+  assert.equal(saved.includes('sk-jev-test-12345'), false);
+  assert.match(saved, /<redacted>/);
+  assert.match(saved, /已完成 A\n未完成 B/);
+  if (process.platform !== 'win32') {
+    assert.equal(statSync(dst).mode & 0o777, 0o600);
+  }
 });
 
 // ---------- resumeHintFor ----------

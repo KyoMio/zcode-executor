@@ -71,6 +71,9 @@ export async function liveSmoke({ confirmSpend = false, dryRun = false, timeoutS
       '只想核协议链路就跑零额度的 zero-token --json，只想核行为就跑 mock-matrix --json'
     );
   }
+  if (!Number.isInteger(timeoutSec) || timeoutSec < 1) {
+    throw new UsageError(`--timeout 必须是 >= 1 的整数秒，收到：${timeoutSec}。用法示例：--timeout 600`);
+  }
   const plan = [
     '① 在白名单根下建临时工作目录 → zcode-executor new --cwd 显式登记',
     '② send 正文（依次建 3 个文件），后台回合',
@@ -179,6 +182,12 @@ export async function liveSmoke({ confirmSpend = false, dryRun = false, timeoutS
     }
     // R1-2③：通过条件钉死——cancel 场景必须 cancelled 结算；done 说明 cancel 没生效或发太晚
     steps.push({ step: 'settled', ok: lastOutcome === 'cancelled', note: `outcome=${lastOutcome ?? '超时未结算'}${lastOutcome === 'done' ? '（cancel 未生效，不算通过）' : ''}` });
+    // 等 detached runner 完成 session.close() + providerFile.dispose() + 删 lock 再查密钥目录残留
+    const lockPath = path.join(runDir, 'lock');
+    const lockDeadline = Date.now() + 15_000;
+    while (existsSync(lockPath) && Date.now() < lockDeadline) {
+      await sleep(200);
+    }
     // 临时密钥目录清零（RULES §6）
     const leftovers = readdirSync(os.tmpdir()).filter((n) => n.startsWith('zcode-executor-provider-'));
     steps.push({ step: 'no-key-residue', ok: leftovers.length === 0, note: leftovers.length ? `残留 ${leftovers.join(',')}` : '' });

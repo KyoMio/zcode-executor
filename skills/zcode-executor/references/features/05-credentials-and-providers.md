@@ -6,7 +6,7 @@
 
 **两种格式**：
 
-- `enc:v1:<iv>.<tag>.<密文>`（三段 base64url）：密钥 `sha256(ZCODE_CREDENTIAL_SECRET 或 fallback(platform:homedir:username))`；App 3.18 起候选表第一把是凭据旁的 `credential-secret` 文件（legacySecret）或 env 原样（未 trim 也能解）。
+- `enc:v1:<iv>.<tag>.<密文>`（三段 base64url）：候选密钥顺序为 `ZCODE_CREDENTIAL_SECRET` > `ZCODE_CREDENTIAL_SECRET_FILE` > 凭据旁的 `credential-secret` > `fallback(platform:homedir:username)`（`ZCODE_CREDENTIAL_SECRET` 与 `ZCODE_CREDENTIAL_SECRET_FILE` 互斥同设报错；未 trim 原样及 trim 后皆入候选表）。
 - `enc:v2:<源>:<密钥指纹>:<iv>.<tag>.<密文>`：源为 `os`（钥匙串 32 字节随机数，指纹匹配）或 `env`（`sha256(managed secret)`）；指纹对不上 = 存储不可用，**不换源**（照 App 口径）。
 - `credential-source` 钉源文件：内容为 `os\n` 才算钉到 os；钉了别的值整份按不可用处理。
 - 其它 `enc:<未知版本>` 前缀**不当明文放行**，直接报「格式不认得」（v0.6.2 前误放的根因）。
@@ -16,7 +16,8 @@
 ## provider 选路（pickProvider，D6 优先级）
 
 ```
-preferredProvider（显式指定，必须命中）
+new --provider <id>（显式指定，未命中直接退出码 2）
+/ config.preferredProvider（未命中记警告并按下列优先级回落）
 > account:*-individual-coding-plan（账号型个人版——key 最稳、按量风险小）
 > account:*-team-coding-plan
 > id 以 -coding-plan 结尾

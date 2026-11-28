@@ -23,7 +23,7 @@
 
 让**这一回合**吃 Start Plan 额度，其余与普通投递一致：立刻开跑、无号、不独占会话。
 
-**JWT 机制（decisions D21）**：Start Plan 的凭据是 App 经 `interaction/requestProviderRuntimeHeaders` 下发的 JWT（`{apiKey: <JWT>}`，无额外头）。安全边界：**JWT 只进内存与 JSON-RPC 参数，绝不落盘**；错误文案与返回值都不带凭据值。接口与键名是 App 私有实现——改了这条路就断，普通派单不受影响。
+**JWT 机制（decisions D21）**：Start Plan 的凭据由 `zcode app-server` 发反向请求 `interaction/requestProviderRuntimeHeaders` 向 `zcode-executor` 索取，后者在内存里返回解密后的 `zcodejwttoken`（`{headersApplied: true, requestAuth: {apiKey: <JWT>}}`，无额外头）。安全边界：**JWT 只进内存与 JSON-RPC 应答，绝不落盘**；错误文案与返回值都不带凭据值。接口与键名是 App 私有实现——改了这条路就断，普通派单不受影响。
 
 ## Gotchas
 

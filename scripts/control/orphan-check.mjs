@@ -11,12 +11,18 @@
 //  - 清理前逐项再核一次（操作时的二次核对）：进程身份按 pid+命令行重验（防 PID 复用误杀），
 //    目录重验仍在 tmpdir、前缀匹配、且无活进程引用。
 //  - 默认只报告；--cleanup 才动手；--dry-run 永远压过 --cleanup。
-import { readdirSync, statSync, existsSync, readFileSync, realpathSync } from 'node:fs';
+import { readdirSync, lstatSync, existsSync, readFileSync, realpathSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { runProcess } from './lib.mjs';
+
+// 仅匹配真正可能持有临时 provider 密钥目录的进程（排除自身与仓库路径字面量）
+const ACTIVE_KEY_PROC_RE = /zcode\.cjs|\b_runner\b|probe-core|real-send|real-review|probe\.mjs/;
+
+function hasActiveKeyProcess(procs) {
+  return procs.some((p) => p.pid !== process.pid && ACTIVE_KEY_PROC_RE.test(p.command));
+}
 
 function listProcesses() {
   const out = execFileSync('ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
@@ -72,12 +78,10 @@ export async function orphanCheck({ cleanup = false, dryRun = false }) {
     let ownership;
     let ownerDetail = null;
     if (isRunner) {
-      // R2-1（御史判决）：进程扫描是系统级的，归属核对只查当前数据目录会误杀别的
-      // ZCODE_EXECUTOR_HOME 实例里正常工作的 runner。规则改为：
+      // R2-1 / R3-1（御史判决）：进程扫描是系统级的，缺少不可继承的运行实例标识前，
+      // 无法把进程安全绑定到本实例。规则：
       //  owned   —— 本实例锁登记此 pid；
-      //  orphan  —— 能证明它属于本实例（命令行里的会话 id 在本实例 runs/ 下有目录）
-      //            且锁已失主（没有锁或锁内 pid 已死/被顶替）；
-      //  unknown —— 其余一律只报告：查不到归属不等于无主，可能是别的实例的正常任务
+      //  unknown —— 其余一律只报告：查不到归属或同名目录可被备份复制，跳过自动终止。
       if (lockPids.get(p.pid) !== undefined) {
         ownership = 'owned';
         ownerDetail = `本实例登记簿会话 ${lockPids.get(p.pid)} 的锁`;
@@ -124,28 +128,27 @@ export async function orphanCheck({ cleanup = false, dryRun = false }) {
   try {
     entries = readdirSync(tmp);
   } catch { /* tmpdir 读不到视为无残留 */ }
-  const livePids = new Set(procs.map((p) => p.pid));
+  const anyExecutorProcess = hasActiveKeyProcess(procs);
   for (const name of entries) {
     if (!name.startsWith('zcode-executor-provider-') && !name.startsWith('zcode-probe-')) continue;
     const full = path.join(tmp, name);
     let st = null;
     try {
-      st = statSync(full);
+      st = lstatSync(full);
     } catch {
       continue;
     }
-    if (!st.isDirectory()) continue;
-    const ageMinutes = Math.round((Date.now() - st.mtimeMs) / 60_000);
+    if (!st.isDirectory() || st.isSymbolicLink()) continue;
+    const ageMinutes = Math.floor((Date.now() - st.mtimeMs) / 60_000);
     const hasKey = existsSync(path.join(full, 'provider.json'));
     // 归属甄别：10 分钟内动过 → 可能正被使用（owned-by-recency，只报告）；
     // 更老的无法证明与活会话相关，但「无法证明无主」的保守面是：只要有活 runner 存在，
     // 老目录也可能是它正在用的（个人文件生命周期 = 子进程一生）——有活 runner 时一律 unknown
     // R2-1：个人密钥目录的生命周期跟着用它的子进程走，而子进程可能属于别的数据目录实例。
-    // 「本实例无活 runner」证明不了它无归属——必须系统里一个 zcode-executor/zcode 相关进程
+    // 「本实例无活 runner」证明不了它无归属——必须系统里一个可持密钥的 zcode 相关进程
     // 都没有，才能独立证明陈旧目录失主
     let ownership;
     let ownerDetail = null;
-    const anyExecutorProcess = procs.some((p) => /zcode-executor|zcode\.cjs/.test(p.command));
     if (ageMinutes < 10) {
       ownership = 'owned';
       ownerDetail = '10 分钟内有活动，可能正在使用';
@@ -160,38 +163,23 @@ export async function orphanCheck({ cleanup = false, dryRun = false }) {
   }
 
   // —— 清理：只有 orphan 进清单，操作前逐项再核一次 ——
+  // R3-1 不变量：进程一律只报告、零终止；--cleanup 仅清理可证明无主的临时密钥目录。
   const actions = [];
   if (effectiveCleanup) {
-    for (const p of findings.processes.filter((x) => x.ownership === 'orphan')) {
-      // 二次核对①：pid 仍是同一个进程（命令行一致，防 PID 复用误杀）
-      let stillSame = false;
-      try {
-        const now = execFileSync('ps', ['-p', String(p.pid), '-o', 'command='], { encoding: 'utf8', timeout: 5000 }).trim();
-        // 签名比对而非全串相等：runner 看 _runner + 会话 id、server 看 zcode.cjs——
-        // ps -p 与 -axo 的输出列格式不同，全串比较会误判身份变化
-        if (p.kind === 'executor-runner') {
-          const sid = /_runner\s+([A-Za-z0-9_-]+)/.exec(p.command)?.[1];
-          stillSame = now.includes('_runner') && (sid === undefined || now.includes(sid));
-        } else {
-          stillSame = now.includes('zcode.cjs');
-        }
-      } catch {
-        stillSame = false; // 进程已死：不用杀
-      }
-      if (!stillSame) {
-        actions.push({ target: `pid ${p.pid}`, action: 'SIGTERM', ok: true, skipped: '操作时复核：进程已不在或身份变化，跳过' });
-        continue;
-      }
-      // 二次核对②：身份核对期间没有被登记簿认领
-      if (isRunnerKind(p) && registeredLockPids(home).has(p.pid)) {
-        actions.push({ target: `pid ${p.pid}`, action: 'SIGTERM', ok: true, skipped: '操作时复核：已被登记簿认领，跳过' });
-        continue;
-      }
-      const r = await runProcess('kill', ['-TERM', String(p.pid)], { timeoutMs: 5_000 });
-      actions.push({ target: `pid ${p.pid}`, action: 'SIGTERM', ok: r.code === 0 });
-    }
+    const realTmp = realpathSync(tmp);
     for (const d of findings.tempDirs.filter((x) => x.ownership === 'orphan')) {
-      // 二次核对：路径仍在 tmpdir 内（防符号链接置换）、前缀仍匹配、无活 runner 新生
+      // 二次核对：拒绝符号链接、必须在 realTmp 直接子目录、前缀仍匹配、无活密钥进程新生
+      let lst = null;
+      try {
+        lst = lstatSync(d.path);
+      } catch {
+        actions.push({ target: d.path, action: 'rm -rf', ok: true, skipped: '目录已不在，跳过' });
+        continue;
+      }
+      if (lst.isSymbolicLink() || !lst.isDirectory()) {
+        actions.push({ target: d.path, action: 'rm -rf', ok: false, error: '操作时复核：目标是符号链接或非目录，拒绝删除' });
+        continue;
+      }
       let real = null;
       try {
         real = realpathSync(d.path);
@@ -199,12 +187,11 @@ export async function orphanCheck({ cleanup = false, dryRun = false }) {
         actions.push({ target: d.path, action: 'rm -rf', ok: true, skipped: '目录已不在，跳过' });
         continue;
       }
-      const realTmp = realpathSync(tmp);
-      if (!real.startsWith(realTmp + path.sep) || !path.basename(real).match(/^zcode-(executor-provider|probe)-/)) {
+      if (path.dirname(real) !== realTmp || !path.basename(real).match(/^zcode-(executor-provider|probe)-/)) {
         actions.push({ target: d.path, action: 'rm -rf', ok: false, error: '操作时复核：路径逃出 tmpdir 或前缀不符，拒绝删除' });
         continue;
       }
-      if (listProcesses().some((pr) => /zcode-executor|zcode\.cjs/.test(pr.command))) {
+      if (hasActiveKeyProcess(listProcesses())) {
         actions.push({ target: d.path, action: 'rm -rf', ok: true, skipped: '操作时复核：系统出现 zcode 系进程，无法证明无归属，跳过' });
         continue;
       }
@@ -221,7 +208,6 @@ export async function orphanCheck({ cleanup = false, dryRun = false }) {
   const unknownProcs = findings.processes.filter((p) => p.ownership === 'unknown');
   const orphanDirs = findings.tempDirs.filter((d) => d.ownership === 'orphan');
   const unknownDirs = findings.tempDirs.filter((d) => d.ownership === 'unknown');
-  const keyLeaks = orphanDirs.filter((d) => d.containsProviderKey).length;
   const found = orphans.length + orphanDirs.length + unknownProcs.length + unknownDirs.length > 0;
   const ok = effectiveCleanup ? actions.every((a) => a.ok) : true;
   const fmtP = (p) => `  pid ${p.pid} [${p.kind}/${p.ownership}] ${p.command.slice(0, 90)}（${p.ownerDetail}）`;
@@ -246,8 +232,4 @@ export async function orphanCheck({ cleanup = false, dryRun = false }) {
         ? '清理完毕——重跑 orphan-check --json 确认归零'
         : '无残留',
   };
-}
-
-function isRunnerKind(p) {
-  return p.kind === 'executor-runner';
 }

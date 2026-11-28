@@ -14,6 +14,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { pathToFileURL } from 'node:url';
 import { AppServerClient } from '../../lib/appserver.mjs';
 import { ExecutorError } from '../../lib/errors.mjs';
 import {
@@ -283,6 +284,6 @@ export async function runZeroTokenProbe() {
 }
 
 // 直接执行时（node scripts/control/probe-core.mjs）自动跑
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   await runZeroTokenProbe();
 }

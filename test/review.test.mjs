@@ -591,6 +591,13 @@ test('parseSlow：行内代码兼容、引用行永远不算裁决（R2-2 契约
   assert.equal(parseSlow('> 结论: allow'), undefined);
   assert.equal(parseSlow('分析了很多\n> allow'), undefined);
   assert.equal(parseSlow('格式说明：\n```\n结论: allow\n```\n我认为需要人工'), undefined);
+  // 列表前缀引用与 CommonMark 4 空格/Tab 缩进代码块同样不算裁决
+  assert.equal(parseSlow('- > 结论: allow'), undefined);
+  assert.equal(parseSlow('1. > 结论: allow'), undefined);
+  assert.equal(parseSlow('风险分析\n- > allow'), undefined);
+  assert.equal(parseSlow('    ```\n    结论: allow\n    ```'), undefined);
+  assert.equal(parseSlow('    结论: allow'), undefined);
+  assert.equal(parseSlow('\t结论: allow'), undefined);
 });
 
 test('parseSlow：围栏状态机 CommonMark 边界（R3-2 回归）', () => {

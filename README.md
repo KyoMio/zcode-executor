@@ -256,7 +256,7 @@ Other agents have no pane and keep using the skill and the CLI.
 | `quota [--json]` | How many off-peak tickets this tool took today and whether the server would hand one out now; no quota spent, no app-server |
 | `models [--json]` | Lists available models with thought levels and tier assignment |
 | `new --cwd <abs> [--title T] [--tier fast\|strong] [--thought L] [--deny "Tool…"] [--provider id] [--json]` | Registers a session (returns a local id `x_…`); the ZCode session is created on first `send` |
-| `send <id> <text\|-> [--task file] [--wait] [--timeout s] [--steer] [--stream] [--json]` | Queues a message; `--wait` follows until done or blocked; `--task` is the task file the review uses as your authorization; `--steer` injects into a running turn — it takes effect at the next tool boundary, or after the turn ends if there is none |
+| `send <id> <text\|-> [--task file] [--task-type feature\|bugfix\|investigate] [--checkpoint] [--start-plan] [--wait] [--timeout s] [--steer] [--stream] [--json]` | Queues a message; `--wait` follows until done or blocked; `--task` is the task file the review uses as your authorization; `--task-type` tags the turn (`investigate` enables stop-loss steer hints); `--checkpoint` injects `.executor-checkpoint.md` instructions; `--start-plan` bills the turn to Start Plan quota; `--steer` injects into a running turn — it takes effect at the next tool boundary, or after the turn ends if there is none |
 | `send <id> <text\|-> --offpeak [--task file] [--wait] [--timeout s] [--stream] [--json]` | Off-peak send: takes a ticket on the spot and runs the turn on the Coding Plan's free off-peak capacity once the ticket is ready (see below) |
 | `send <id> --offpeak --resume [--wait] [--stream] [--json]` | Restarts the runner for an off-peak send left unfinished after the turn exited or the runner died |
 | `follow <id> [--timeout s] [--stream] [--json]` | Follows a background runner until a result or a pending request |
@@ -317,7 +317,8 @@ Everything else — the five risk checks and the `0.20` threshold, proxy and `re
 ## Development
 
 ```bash
-npm test          # 838 cases against a scripted mock app-server and mock off-peak server, plus a doc-version drift check; no tokens spent
+npm test          # runs the full test suite against a scripted mock app-server and mock off-peak server, plus sync-doc-version --check and check-boundaries; no tokens spent
+npm run verify    # checkJs type check across core workflow/gate modules
 node --check lib/**/*.mjs
 ```
 

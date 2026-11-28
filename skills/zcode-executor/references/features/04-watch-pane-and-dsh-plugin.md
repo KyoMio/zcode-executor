@@ -13,7 +13,7 @@
 
 ## Claude Code hooks（hooks/）
 
-**红线：hooks/ 运行环境没有完整 Node 能力，绝对禁止 import 根 `lib/`**——静态扫描（check-boundaries）直接红。hooks 与后端的通信只有 stdio 单行 JSON。跨层共用的东西只能放 `lib/errors.mjs`。
+**红线：hooks/ 运行环境没有完整 Node 能力，绝对禁止 import 根 `lib/`（含 `lib/errors.mjs`）**——静态扫描（check-boundaries）直接红；共用的小逻辑保持自包含在 `hooks/` 内。hooks 与后端的通信只有 stdio 单行 JSON。
 
 ## dsh-plugin/
 
@@ -23,4 +23,4 @@
 
 1. **输出终端控制字符会被中和**（审计 D9-①）：执行端可控文本（挂起回显、流式回复）里的控制字符换成可见转义，但换行/制表保留，`--json` 解析回来一字不差——消费方不要再做二次转义。
 2. **watch 的 phase 文本是中文人读形**（执行中/挂起/执行进程已中断）——机器消费用 `phase` 字段原值，别解析中文。
-3. **proof 摘要在快照里**：`prematureStop` 或失败命令是打回信号；没有 proof.json 不打扰（静默）。
+3. **`watch` 快照不含 `proofSummary`**：`proofSummary` 只在 `status --json`、`runs/<id>/last.json` 与 `send`/`follow` 结束摘要里提供；`prematureStop` 或失败命令是打回信号，没有 `proof.json` 时为 `null`（不打扰）。

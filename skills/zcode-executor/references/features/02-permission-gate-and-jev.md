@@ -5,8 +5,8 @@
 ```
 permission.requested → 红线硬规则（本地零成本）
                      → Jev 前筛（可选，apiKey 配置启用）
-                     → ZCode 快筛（fast 档）
-                     → ZCode 慢判（review.thought，默认 low）
+                     → ZCode 快筛（与慢判共用 `review.model`/fast 档与 `review.thought`，默认 low；预算 300 tokens）
+                     → ZCode 慢判（同模型同思考档；预算 2000 tokens）
                      → 仍不确定 → 挂起转人工（pending.json + 退出码 5）
 ```
 
@@ -14,13 +14,13 @@ permission.requested → 红线硬规则（本地零成本）
 
 1. **裁决器只产出 `allow` 或 `ask`，绝不静默 `deny`**——拒绝动作只能由人工 `deny` 命令触发。模型给 `deny` 一律降级为 `ask`。
 2. **任何解析异常/超时一律安全降级为 `ask`**（写 `pending.json`）。解析器容忍 Markdown 加粗（`**允许**`）、前后空行与常见中文同义结论行；「Y 和 N 都出现」当 N——默认落到更谨慎的那边。
-3. **红线硬规则**先于一切模型调用：写执行副本外路径命中（`../` 越界、符号链接穿透也算），但系统临时目录（`/tmp` 本体，非链接穿透）在白名单内。
+3. **两条机械红线**先于一切模型调用：① `outside-worktree` 覆盖所有带路径参数的读写工具及缺有效路径参数的写工具（`ApplyPatch` 等），按内核语义逐段解析（`../` 与符号链接穿透同判），`os.tmpdir()` 本体（macOS 为 `/var/folders/...`，不是 `/tmp`；符号链接穿出仍拦）在白名单内；② `self-modify-approval` 拦截触碰数据目录或调用 `zcode-executor` CLI 的操作。
 4. **tool-summary 补全 `inputOmitted` 参数时严格按同名工具匹配**——绝不跨工具借用（3.14.1 真实 bug：`Read` 偷走过 `Write` 的参数）。
 
 ## 人工应答
 
 - `approve <id>` / `deny <id>` / `answer <id> <文字>`：应答写 `answer.json`（带 requestId 防串答），runner 轮询拾取继续回合。
-- 陈年 `answer.json`（无 requestId）不会被答——防止应答错位打到新挂起上。
+- 陈年 `answer.json`（缺 `requestId` 或与当前挂起 `requestId` 不一致）会被直接丢弃——防止应答错位打到新挂起上。
 - 已挂起的会话再 `send --wait` 立刻退出码 5，不重复等待。
 
 ## Jev 前筛

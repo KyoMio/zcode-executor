@@ -254,7 +254,7 @@ Claude 投递时面板会自动打开；状态栏汇总「N 个回合执行中�
 | `quota [--json]` | 今天本工具取过几次闲时号、服务器现在能不能取；不花额度、不起 app-server |
 | `models [--json]` | 列可用模型：思考等级、分到哪个等级 |
 | `new --cwd <绝对路径> [--title T] [--tier fast\|strong] [--thought 档] [--deny "工具…"] [--provider id] [--json]` | 登记会话（返回本地 id `x_…`）；ZCode 会话在第一次 `send` 时才建 |
-| `send <id> <正文\|-> [--task 文件] [--wait] [--timeout 秒] [--steer] [--stream] [--json]` | 投递；`--wait` 跟到结束或挂起；`--task` 是模型审批拿来当授权依据的任务单；`--steer` 往正在跑的回合插话——插话在下一个工具边界生效，没有边界时排到回合结束后执行 |
+| `send <id> <正文\|-> [--task 文件] [--task-type feature\|bugfix\|investigate] [--checkpoint] [--start-plan] [--wait] [--timeout 秒] [--steer] [--stream] [--json]` | 投递；`--wait` 跟到结束或挂起；`--task` 是模型审批拿来当授权依据的任务单；`--task-type` 标记任务类型（`investigate` 触发超时止损提示）；`--checkpoint` 注入 `.executor-checkpoint.md` 断点指令；`--start-plan` 走 Start Plan 额度；`--steer` 往正在跑的回合插话——插话在下一个工具边界生效，没有边界时排到回合结束后执行 |
 | `send <id> <正文\|-> --offpeak [--task 文件] [--wait] [--timeout 秒] [--stream] [--json]` | 闲时投递：当场取号，号就绪后用 Coding Plan 的免费闲时算力跑这一回合（见下面「闲时投递」） |
 | `send <id> --offpeak --resume [--wait] [--stream] [--json]` | 回合结束或 runner 崩了、闲时投递还没收尾时，重新拉起 runner 接着跑 |
 | `follow <id> [--timeout 秒] [--stream] [--json]` | 跟看后台 runner 直到有结果或挂起 |
@@ -315,7 +315,8 @@ chmod 600 ~/.zcode-executor/config.json
 ## 开发
 
 ```bash
-npm test          # 838 个用例对剧本驱动的 mock app-server 与 mock 闲时服务跑，外加文档版本号一致性检查；不花 token
+npm test          # 对剧本驱动的 mock app-server 与 mock 闲时服务跑全量测试，外加 sync-doc-version --check 与 check-boundaries 静态扫描；不花 token
+npm run verify    # 核心工作流与闸门模块的 checkJs 类型检查
 node --check lib/**/*.mjs
 ```
 
