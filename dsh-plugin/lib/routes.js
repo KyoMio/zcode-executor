@@ -2,7 +2,7 @@
  * dsh-zcode-executor 的三个 GET 路由，注册进宿主 webServer 前全部先过 connection.admit
  * （webServer 路由不走 DSH 的 /api 鉴权，写法照 dsh-zen-remote 的既有模式：admit 的拒绝
  * 原样回给浏览器，服务缺席时整块不挂载——挂载与否由 index.ts 的 ctx.inject 决定）；admit
- * 之后还有一道 method 墙：非 GET 一律 405 + Allow: GET（Task 8 ②，zen-remote 同款）。
+ * 之后还有一道 method 墙：非 GET 一律 405 + Allow: GET。
  *
  * - GET /zcode-executor/stream：NDJSON 流。连接即报当前连接态；已同步再补一轮
  *   hello+表+synced，新客户端不用等下一次变化就拿到全量。之后 watch 的行原样转发，
@@ -13,7 +13,7 @@
  *   zcode-executor 的 worktreeStatus().repo 一致（lib/cli/common.mjs）：common dir 叫
  *   .git 就取它的上一级（真实路径）；不是 git 仓、裸仓库、坏路径都回 { repo: null }。
  *   进程内按 cwd 缓存（成功才缓存，git 一时出错不该永久记成无仓库）。
- *   PB-6 起支持 `?sessionId=<id>`：宿主 sessions 服务 get(id) 的 header.cwd 解析出会话
+ *   也支持 `?sessionId=<id>`：宿主 sessions 服务 get(id) 的 header.cwd 解析出会话
  *   工作目录再走同一套解析与缓存——远程会话由 zen-remote 插件桥转发过来时只带 sessionId
  *   （cwd 是主服务端上的路径，子客户端无从知道）。两个参数都给时以 sessionId 为准；
  *   会话不存在 / 服务缺席 / 无 cwd 都回 { repo: null }，不影响 cwd 分支。
@@ -49,9 +49,8 @@ function refuse(res, rejection) {
     });
 }
 /**
- * method 墙（Task 8 ②，zen-remote 同款）：三条路由只认 GET。webServer 对不带 method 的
- * 请求按 GET 算；其余方法回 405 + Allow: GET 与 JSON 错误体。放在 admit 之后（zen-remote
- * 的墙序：admit 先行），admit 放行后的 GET 语义不变。
+ * method 墙：三条路由只认 GET。webServer 对不带 method 的
+ * 请求按 GET 算；其余方法回 405 + Allow: GET 与 JSON 错误体。放在 admit 之后，admit 放行后的 GET 语义不变。
  */
 function requireGet(req, res) {
     if ((req.method ?? 'GET') === 'GET')
@@ -109,7 +108,7 @@ const sharedRepoResolver = createRepoResolver();
 export function registerRoutes(deps) {
     const repoResolver = deps.repoResolver ?? sharedRepoResolver;
     const writeLine = (res, line) => {
-        // 背压结论（Task 8 ③ 评估，全文见 SPEC「Implementation Decisions」）：write 的返回值
+        // 背压结论（全文见 SPEC「Implementation Decisions」）：write 的返回值
         // 故意不查、不做 drain——单用户桌面端、本地回环、浏览器持续在读（响应头已带
         // X-Accel-Buffering: no 防反代攒批），表有界（首轮回放 240 条 ≈ 数百 KB，实测 244 行
         // 1.0s 内齐），write 返回 false 只是进了用户态缓冲等回环排空（毫秒级）。

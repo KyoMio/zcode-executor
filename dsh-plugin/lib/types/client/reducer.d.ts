@@ -23,7 +23,7 @@ export type WatchEvent = {
     type: 'connection';
     link: Link;
 };
-/** 初始状态（CC mod EMPTY_PANEL 的去展示字段版：展示用的连接态与时间归渲染层，Task 4/5）。 */
+/** 初始状态（CC mod EMPTY_PANEL 的去展示字段版：展示用的连接态与时间归渲染层）。 */
 export declare function emptyState(): ReducerState;
 /**
  * 处理一个事件，返回新状态（输入原样不动）。语义：

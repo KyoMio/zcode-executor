@@ -5,7 +5,7 @@ __modules["client/reducer.js"] = function (require, module, exports) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.emptyState = emptyState;
 exports.applyEvent = applyEvent;
-/** 初始状态（CC mod EMPTY_PANEL 的去展示字段版：展示用的连接态与时间归渲染层，Task 4/5）。 */
+/** 初始状态（CC mod EMPTY_PANEL 的去展示字段版：展示用的连接态与时间归渲染层）。 */
 function emptyState() {
     return { table: {}, baseline: {}, synced: false };
 }
@@ -55,7 +55,7 @@ function isEvent(msg, type) {
 __modules["client/session-cwd.js"] = function (require, module, exports) {
 "use strict";
 // src/client/session-cwd.ts —— 「当前项目」的派生（SPEC 客户端半场：优先主会话行，
-// 无会话退工作区列表），Task 5 接 DSH ctx 时用。纯函数：不 import、不 fetch、不碰 DOM，
+// 无会话退工作区列表）。纯函数：不 import、不 fetch、不碰 DOM，
 // 对缺字段容错（typeof 守卫）。
 //
 // 行形状照 dsh-zen-remote src/client/compat/types.ts 的结构镜像法：宿主两版的类型不同
@@ -65,7 +65,7 @@ __modules["client/session-cwd.js"] = function (require, module, exports) {
 // 同款挑选（全表找第一条 mainView retain）。工作区字段对照 ~/.dsh/profiles/node_modules/
 // @deepseek-ai/dsh-workspace/lib/types/types.d.ts 的 Workspace（path、updatedAt ISO-8601）。
 //
-// PB-6 起派生「主会话 id」与「侧」：远程会话（dsh-zen-remote 插件桥）在子客户端里用
+// 派生「主会话 id」与「侧」：远程会话（dsh-zen-remote 插件桥）在子客户端里用
 // `zr~<serverId>~<原始 id>` 的虚拟 id（zen-remote src/virtual-id.ts 的形状，serverId 是
 // 8 位 hex——这里只认前缀与分隔符，不复制 hex 校验：桥若放宽形状，误判成本机会让面板
 // 悄悄显示本机数据，比放过一个非标 serverId 危险）。侧决定面板数据源：远程侧的取数请求
@@ -80,7 +80,7 @@ exports.pickWorkspacePath = pickWorkspacePath;
 /**
  * 主视图会话的 cwd：目录里第一条 retainedBy.mainView > 0 的行。行缺 cwd（子代理行等）
  * 同样算没有——返回 null，调用方退工作区路径。
- * rows 是普通数组、按顺序先到先得（官方 publishMain 同款挑第一条）；T5 接线传
+ * rows 是普通数组、按顺序先到先得（官方 publishMain 同款挑第一条）；接线传
  * ctx.sessions.list() 的原序或 Object.values(byId 表) 皆可，本函数不排序。
  * @param rows - ctx.sessions.list 的行。
  * @returns 主视图会话的 cwd，没有主视图行或 cwd 缺失时 null。
@@ -92,7 +92,7 @@ function mainSessionCwdOf(rows) {
     return typeof row.cwd === 'string' && row.cwd !== '' ? row.cwd : null;
 }
 /**
- * 主视图会话的 id（PB-6）：与 mainSessionCwdOf 同一行（retainedBy.mainView > 0 的第一行）。
+ * 主视图会话的 id：与 mainSessionCwdOf 同一行（retainedBy.mainView > 0 的第一行）。
  * id 是 store 取数请求的 sessionId 参数（远程会话为 `zr~<serverId>~<id>` 虚拟形式，桥凭
  * 它改道）。行两种 id 形状都认（见 SessionRowLike 注）；都缺时 null——不带参数即本机行为。
  * @param rows - ctx.sessions.list 的行。
@@ -117,7 +117,7 @@ function firstMainViewRow(rows) {
 /** zen-remote 插件桥的虚拟会话 id 前缀（`zr~<serverId>~<原始 id>`，src/virtual-id.ts 同款）。 */
 exports.VIRTUAL_ID_PREFIX = 'zr~';
 /**
- * 会话 id → 侧（PB-6）：`zr~` 前缀 + 非空 serverId 段 = 远程侧；本机 id（session-…）、
+ * 会话 id → 侧：`zr~` 前缀 + 非空 serverId 段 = 远程侧；本机 id（session-…）、
  * null、以及前缀后面不带 serverId 段的坏形状都算本机（坏虚拟 id 打到本机路由自然兜底，
  * 不会让面板挂死）。同侧判定只比较 serverId 字符串，不解析它的含义。
  * @param id - 主会话 id（mainSessionIdOf 的产出；null = 没有主会话）。
@@ -158,7 +158,7 @@ function pickWorkspacePath(items) {
 __modules["client/store.js"] = function (require, module, exports) {
 "use strict";
 // src/client/store.ts —— 面板的快照取数 store：fetch GET /zcode-executor/stream 流式读
-// （ReadableStream + TextDecoder 按行切，逐行过 T2 归约器），流断开或 fetch 异常退化为
+// （ReadableStream + TextDecoder 按行切，逐行过归约器），流断开或 fetch 异常退化为
 // GET /zcode-executor/snapshot 每 pollMs 轮询兜底，并按 retryMs 重试流，流恢复即停轮询。
 // 对外 getState / subscribe（useSyncExternalStore 兼容）/ start / stop / setScopeRepo；
 // 内部状态 = 归约器三键（table/baseline/synced，src/client/reducer.ts）+ 连接态 link/message
@@ -173,10 +173,10 @@ __modules["client/store.js"] = function (require, module, exports) {
 // 下这正好是「整表换血 + 回到已同步」，断流期间错过的一切由此对齐。
 //
 // 连接态语义：link/message 只由服务端事件驱动（流的 connection 行、snapshot 响应体），
-// 照 T2 归约器语义进状态；唯传递层自己出问题时 store 合成连接行，且三种病因各说各话（Task 8 ⑥）：
+// 照归约器语义进状态；唯传递层自己出问题时 store 合成连接行，且三种病因分开表达：
 // 连 snapshot 都拉不到 → down「实时连接中断」（服务端已报 failed 时不覆盖——起不来的诊断优先）；
 // snapshot 回 401/403 → down「无权访问（admit 拒绝）」（传输是通的，病根在鉴权，不说「连接中断」）。
-// fetch 首响应限时 firstResponseMs（Task 8 ⑤）：服务器收 TCP 不回时 fetch 永久挂起，
+// fetch 首响应限时 firstResponseMs：服务器收 TCP 不回时 fetch 永久挂起，
 // 超时按连接失败走退化；响应头到达即拆闹钟，流/正文的后续读取不限时（空闲是常态）。
 // 流挂、轮询挂这类退化各 console.warn 一条（去重位拦周期性重复，恢复即复位），其余全程静默。
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -193,20 +193,19 @@ exports.SNAPSHOT_PATH = '/zcode-executor/snapshot';
 /** 与 src/routes.ts 的 REPO_ROUTE 一致（同上；GET /…?cwd=… 返回 { repo }）。 */
 exports.REPO_PATH = '/zcode-executor/repo';
 const LINKS = ['starting', 'live', 'down', 'failed'];
-/** admit 拒绝（snapshot 回 401/403）时合成的连接说明：传输是通的，病根在鉴权（Task 8 ⑥）。 */
+/** admit 拒绝（snapshot 回 401/403）时合成的连接说明：传输是通的，病根在鉴权。 */
 const AUTH_DENIED_MESSAGE = '无权访问（admit 拒绝）：本机登录态可能已失效，重新登录 DSH 后自动恢复';
-/** 子客户端 zen-remote 拦截层回未桥接时的响应标记：503 + 这个响应头（PB-6 协议）。 */
+/** 子客户端 zen-remote 拦截层回未桥接时的响应标记：503 + 这个响应头（decisions D28）。 */
 const UNBRIDGED_HEADER = 'x-zen-remote';
 const UNBRIDGED_HEADER_VALUE = 'unbridged';
 /** 未桥接体的错误码（协议定死；头是简写、体带 reason 细分）。 */
 const UNBRIDGED_CODE = 'zr-plugin-unbridged';
-/** 响应是不是子客户端拦截层回的「未桥接」（PB-6 协议）。store 的取数路径与
- *  index.tsx 的 repo 路径共用这一个判定。 */
+/** 响应是不是子客户端拦截层回的「未桥接」。store 的取数路径与 index.tsx 的 repo 路径共用这一个判定。 */
 function isUnbridgedResponse(res) {
     return res.status === 503 && res.headers.get(UNBRIDGED_HEADER) === UNBRIDGED_HEADER_VALUE;
 }
 /**
- * 未桥接 reason → 面板横幅的中文原因（PB-6 口径四类 + 其他附原文）。导出供测试对表。
+ * 未桥接 reason → 面板横幅的中文原因（四类专名 + 其他附原文）。导出供测试对表。
  * not-on-server 与 version-mismatch 都归「服务端未安装同版本插件」——前者没装、后者装
  * 的不是同一版，对用户是同一件事：两端装同版本。
  */
@@ -298,7 +297,7 @@ function createSnapshotStore(options) {
     /** 未桥接时节奏放宽到不短于 unbridgedRetryMs（「不疯狂重试」），平时照常规。 */
     const retryDelayNow = () => (unbridged ? Math.max(retryMs, unbridgedRetryMs) : retryMs);
     const pollDelayNow = () => (unbridged ? Math.max(pollMs, unbridgedRetryMs) : pollMs);
-    /** 响应是不是子客户端拦截层回的「未桥接」（PB-6 协议：503 + x-zen-remote: unbridged）。 */
+    /** 响应是不是子客户端拦截层回的「未桥接」（503 + x-zen-remote: unbridged）。 */
     const isUnbridged = isUnbridgedResponse;
     /** 未桥接体里的 reason（协议形状 {"ok":false,"error":{"code","reason"}}），读不出回 'unknown'。 */
     const reasonOfUnbridged = async (res) => {
@@ -325,7 +324,7 @@ function createSnapshotStore(options) {
             notify();
     };
     /**
-     * 首响应闹钟（Task 8 ⑤）：给一次 fetch 挂上「多久没等到响应头就 abort」的计时。
+     * 首响应闹钟：给一次 fetch 挂上「多久没等到响应头就 abort」的计时。
      * 响应头一到必须 disarm（之后的正文/流读不限时——流空闲本来就可能很久）；超时的 abort
      * 与 stop() 的主动 abort 都让 fetch 以 rejection 收场，靠 timedOut() 区分：前者算连接失败
      * 走退化，后者是主动停、静默。
@@ -440,7 +439,7 @@ function createSnapshotStore(options) {
                 noteUnbridged(await reasonOfUnbridged(res));
             }
             else if (res.status === 401 || res.status === 403) {
-                // 服务端明确拒了鉴权：传输其实是通的，「连接中断」会误导排障（Task 8 ⑥）
+                // 服务端明确拒了鉴权：传输其实是通的，「连接中断」会误导排障
                 noteAuthDenied();
             }
             else {
@@ -488,7 +487,7 @@ function createSnapshotStore(options) {
     /** 连 snapshot 都不可达：整个数据源看不见了，合成 down（已在 down / failed 不重复打扰订阅者）。 */
     const noteTransportDown = () => {
         // failed 是服务端自己的诊断（watch 起不来 + 原因），transport 全断盖不掉它——
-        // 「起不来」比「看不见」更接近病根，覆盖掉会误导排障（Task 8 ⑥）
+        // 「起不来」比「看不见」更接近病根，覆盖掉会误导排障
         if (state.link === 'down' || state.link === 'failed')
             return;
         const before = state;
@@ -497,7 +496,7 @@ function createSnapshotStore(options) {
             notify();
     };
     /** admit 拒绝（401/403）：连接态仍记 down（横幅位置不变），message 把病根与出路说清；
-     *  轮询照常继续，用户重新登录后下一轮自动恢复（Task 8 ⑥）。
+     *  轮询照常继续，用户重新登录后下一轮自动恢复。
      *  与 noteTransportDown 的守卫不对称是有意的：401/403 是服务端的权威响应而非本函数合成的
      *  down——响应能回来本身就证明传输是通的，病根在鉴权；所以它允许更新 failed（「起不来」的
      *  旧诊断在服务端亲口改判「请求被拒」时让位于更接近病根的说法），而 transport 全断只是
@@ -569,7 +568,7 @@ function createSnapshotStore(options) {
             alarm.disarm();
             // 连接已被换掉（侧切换重开 abort 旧流、新连接已顶上，streamController 不再是本
             // 连接）或主动 stop：静默收场——旧连接的收场不代表数据源健康状况，且侧切换每次
-            // 都会踩一遍，「退化」warn 纯属误报（PB-7b 修）。其余（真失败与超时）各打一条，
+            // 都会踩一遍，「退化」warn 属误报（decisions D28）。其余（真失败与超时）各打一条，
             // 去重位拦住重试期的周期性重复。
             if (streamController !== controller || !running)
                 return;
@@ -660,7 +659,7 @@ __modules["client/view.js"] = function (require, module, exports) {
 // 回复折叠判定。自 zcode-executor 的 hooks/view.mjs 逐字搬入（2026-10-07），只加 TypeScript
 // 类型不改逻辑；语义与其 test/view.test.mjs 对齐（本插件的 test/view.test.mjs 是等价改写）。
 // 不搬 CC mod 专属的 toastsFor / statusLine / applyLine / EMPTY_PANEL / startFailure；
-// scopeNote / repoName 也在搬运清单之外（面板层的范围说明与仓库名，Task 5 需要时再补）。
+// scopeNote / repoName 也在搬运清单之外（由面板层自行处理）。
 // 输入是 watch --json 的快照，字段表见 zcode-executor PRD 第 4 节与 lib/snapshot.mjs:242-260。
 // 纯函数：不 import lib/（mod 运行环境没有 Node 的约定沿用），不碰 DOM、不 fetch。
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -1218,8 +1217,7 @@ const jsx_runtime_1 = require("react/jsx-runtime");
 // sidebar.right.pane.tab 槽）。信息架构照 view.ts 的三段语义与 mockup/pane.html 的版式：
 // 摘要计数行（可点跳分段）+ 实时指示 + 时钟、范围切换（本项目/全部项目，chip 态组件内自持）、
 // 断连横幅、三段（吸顶标题、计数；挂起/中断/执行中/闲时排队/刚结束成卡片、其余一行一条且
-// 点行展开成卡片看回复、上限 20 条）、空态文案。数据来自 store（T4），过滤与文案全部走
-// view.ts 纯函数。
+// 点行展开成卡片看回复、上限 20 条）、空态文案。数据来自 store，过滤与文案全部走 view.ts 纯函数。
 // 面板只看不应答：全树没有任何 approve/deny/answer 控件（AGENTS.md 硬边界）。
 const react_1 = require("react");
 const view_ts_1 = require("./client/view.js");
@@ -1395,7 +1393,7 @@ const tab_def_ts_1 = require("./client/tab-def.js");
  * 注册右栏 tab 与本体槽位。挂载失败（比如插件重载时上下文已失活）把类型注册一并回滚，
  * 不留占死 id 的半挂载（better-sidebar 同款防守）。
  * @param ctx - 客户端根上下文。
- * @param store - 面板数据 store（T4），作为 Body 的业务面经槽位 inject 工厂下发。
+ * @param store - 面板数据 store，作为 Body 的业务面经槽位 inject 工厂下发。
  */
 function registerTasksTab(ctx, store) {
     let registered = false;
@@ -1800,7 +1798,7 @@ __modules["client/index.js"] = function (require, module, exports) {
  * apply 里四件事（生命周期全部挂本 fiber，插件卸载级联清掉）：
  * 1. 样式：模板字符串 CSS 一次注入 <style data-plugin="dsh-zcode-executor">（zen-remote 同款）；
  * 2. 数据：createSnapshotStore（baseUrl 同源根，路由常量与 store.ts 对齐）并 start；
- * 3. 范围与侧（PB-6）：订阅 ctx.sessions.list / ctx.workspaces.list，派生当前主会话 id 与
+ * 3. 范围与侧：订阅 ctx.sessions.list / ctx.workspaces.list，派生当前主会话 id 与
  *    cwd——id 交给 store.setSession（侧变化在 store 内部重开流：远程会话的取数带
  *    `?sessionId=` 由 zen-remote 插件桥改道到主服务端，本机/无会话不带）；repo 路由主会话
  *    存在时按 sessionId 解析（服务端用会话 cwd 判仓库），无主会话退工作区路径 `?cwd=`——
@@ -1822,7 +1820,7 @@ exports.inject = ['slots', 'sessions', 'workspaces'];
 /** 同源根：路由常量都以前导斜杠写死（store.ts 与 src/routes.ts 两处复制，测试防漂移）。 */
 const BASE_URL = '';
 /**
- * 「当前项目」变化时的换仓动作（PB-6）：调 repo 路由解析所属仓库进 store。主会话存在时
+ * 「当前项目」变化时的换仓动作：调 repo 路由解析所属仓库进 store。主会话存在时
  * 按 `?sessionId=<主会话 id>` 解析（服务端用该会话的 cwd 判仓库；远程会话由插件桥转发到
  * 主服务端解析，本地会话 id 原样到本机路由），无主会话退回工作区路径 `?cwd=`。
  * 解析失败 / 不是 git 仓（repo null）/ 两者都没有 → scopeRepo 置 null，
@@ -1842,7 +1840,7 @@ async function routeScopeRepo(store, target, isCurrent) {
         const res = await fetch(`${BASE_URL}${store_ts_1.REPO_PATH}?${query}`);
         if ((0, store_ts_1.isUnbridgedResponse)(res)) {
             // 未桥接：面板横幅已有原因文案（store 侧合成），repo 解析不到是同一件事的另一半，
-            // 不再打「解析失败」warn 重复报障（PB-7b）；scope 照失败路径落到「显示全部」。
+            // 不再打「解析失败」warn 重复报障；scope 照失败路径落到「显示全部」。
             if (isCurrent())
                 store.setScopeRepo(null);
             return;

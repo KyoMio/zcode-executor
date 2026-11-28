@@ -1,5 +1,5 @@
 // src/client/session-cwd.ts —— 「当前项目」的派生（SPEC 客户端半场：优先主会话行，
-// 无会话退工作区列表），Task 5 接 DSH ctx 时用。纯函数：不 import、不 fetch、不碰 DOM，
+// 无会话退工作区列表）。纯函数：不 import、不 fetch、不碰 DOM，
 // 对缺字段容错（typeof 守卫）。
 //
 // 行形状照 dsh-zen-remote src/client/compat/types.ts 的结构镜像法：宿主两版的类型不同
@@ -9,7 +9,7 @@
 // 同款挑选（全表找第一条 mainView retain）。工作区字段对照 ~/.dsh/profiles/node_modules/
 // @deepseek-ai/dsh-workspace/lib/types/types.d.ts 的 Workspace（path、updatedAt ISO-8601）。
 //
-// PB-6 起派生「主会话 id」与「侧」：远程会话（dsh-zen-remote 插件桥）在子客户端里用
+// 派生「主会话 id」与「侧」：远程会话（dsh-zen-remote 插件桥）在子客户端里用
 // `zr~<serverId>~<原始 id>` 的虚拟 id（zen-remote src/virtual-id.ts 的形状，serverId 是
 // 8 位 hex——这里只认前缀与分隔符，不复制 hex 校验：桥若放宽形状，误判成本机会让面板
 // 悄悄显示本机数据，比放过一个非标 serverId 危险）。侧决定面板数据源：远程侧的取数请求
@@ -33,7 +33,7 @@ export interface WorkspaceRowLike {
 /**
  * 主视图会话的 cwd：目录里第一条 retainedBy.mainView > 0 的行。行缺 cwd（子代理行等）
  * 同样算没有——返回 null，调用方退工作区路径。
- * rows 是普通数组、按顺序先到先得（官方 publishMain 同款挑第一条）；T5 接线传
+ * rows 是普通数组、按顺序先到先得（官方 publishMain 同款挑第一条）；接线传
  * ctx.sessions.list() 的原序或 Object.values(byId 表) 皆可，本函数不排序。
  * @param rows - ctx.sessions.list 的行。
  * @returns 主视图会话的 cwd，没有主视图行或 cwd 缺失时 null。
@@ -45,7 +45,7 @@ export function mainSessionCwdOf(rows: ReadonlyArray<SessionRowLike>): string | 
 }
 
 /**
- * 主视图会话的 id（PB-6）：与 mainSessionCwdOf 同一行（retainedBy.mainView > 0 的第一行）。
+ * 主视图会话的 id：与 mainSessionCwdOf 同一行（retainedBy.mainView > 0 的第一行）。
  * id 是 store 取数请求的 sessionId 参数（远程会话为 `zr~<serverId>~<id>` 虚拟形式，桥凭
  * 它改道）。行两种 id 形状都认（见 SessionRowLike 注）；都缺时 null——不带参数即本机行为。
  * @param rows - ctx.sessions.list 的行。
@@ -73,7 +73,7 @@ export const VIRTUAL_ID_PREFIX = 'zr~';
 export type SessionSide = { readonly kind: 'local' } | { readonly kind: 'remote'; readonly serverId: string };
 
 /**
- * 会话 id → 侧（PB-6）：`zr~` 前缀 + 非空 serverId 段 = 远程侧；本机 id（session-…）、
+ * 会话 id → 侧：`zr~` 前缀 + 非空 serverId 段 = 远程侧；本机 id（session-…）、
  * null、以及前缀后面不带 serverId 段的坏形状都算本机（坏虚拟 id 打到本机路由自然兜底，
  * 不会让面板挂死）。同侧判定只比较 serverId 字符串，不解析它的含义。
  * @param id - 主会话 id（mainSessionIdOf 的产出；null = 没有主会话）。

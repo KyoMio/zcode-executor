@@ -1,5 +1,5 @@
 // src/client/store.ts —— 面板的快照取数 store：fetch GET /zcode-executor/stream 流式读
-// （ReadableStream + TextDecoder 按行切，逐行过 T2 归约器），流断开或 fetch 异常退化为
+// （ReadableStream + TextDecoder 按行切，逐行过归约器），流断开或 fetch 异常退化为
 // GET /zcode-executor/snapshot 每 pollMs 轮询兜底，并按 retryMs 重试流，流恢复即停轮询。
 // 对外 getState / subscribe（useSyncExternalStore 兼容）/ start / stop / setScopeRepo；
 // 内部状态 = 归约器三键（table/baseline/synced，src/client/reducer.ts）+ 连接态 link/message
@@ -14,10 +14,10 @@
 // 下这正好是「整表换血 + 回到已同步」，断流期间错过的一切由此对齐。
 //
 // 连接态语义：link/message 只由服务端事件驱动（流的 connection 行、snapshot 响应体），
-// 照 T2 归约器语义进状态；唯传递层自己出问题时 store 合成连接行，且三种病因各说各话（Task 8 ⑥）：
+// 照归约器语义进状态；唯传递层自己出问题时 store 合成连接行，且三种病因分开表达：
 // 连 snapshot 都拉不到 → down「实时连接中断」（服务端已报 failed 时不覆盖——起不来的诊断优先）；
 // snapshot 回 401/403 → down「无权访问（admit 拒绝）」（传输是通的，病根在鉴权，不说「连接中断」）。
-// fetch 首响应限时 firstResponseMs（Task 8 ⑤）：服务器收 TCP 不回时 fetch 永久挂起，
+// fetch 首响应限时 firstResponseMs：服务器收 TCP 不回时 fetch 永久挂起，
 // 超时按连接失败走退化；响应头到达即拆闹钟，流/正文的后续读取不限时（空闲是常态）。
 // 流挂、轮询挂这类退化各 console.warn 一条（去重位拦周期性重复，恢复即复位），其余全程静默。
 
@@ -54,8 +54,8 @@ export interface SnapshotStoreOptions {
   /** 流断开后重试流式连接的间隔，默认 3000。 */
   retryMs?: number;
   /**
-   * 首响应超时：fetch 发出后多久还没等到响应头就按连接失败走退化，默认 15000（Task 8 ⑤；
-   * 15 秒的量级照 zen-remote relay-client.ts:70 的DEFAULT_REQUEST_TIMEOUT_MS 同款先例）。
+   * 首响应超时：fetch 发出后多久还没等到响应头就按连接失败走退化，默认 15000（
+   * 量级照 zen-remote relay-client.ts:70 的 DEFAULT_REQUEST_TIMEOUT_MS 同款先例）。
    * 服务器收下 TCP 却不回时 fetch 会永久挂起——流挂着轮询永不启动、轮询挂着合成不了 down。
    * 只限时到响应头为止：流连上后本来就可能长时间无行（watch 空闲），限时正文会掐死健康的流。
    */
@@ -87,7 +87,7 @@ export interface SnapshotStore {
   /** 停取数：断在途请求（AbortController）、清轮询与重试定时器。状态保留不清屏。 */
   stop(): void;
   /**
-   * 换当前主会话（PB-6）：id 存起来给 stream/snapshot 请求当 `?sessionId=` 参数；它的
+   * 换当前主会话：id 存起来给 stream/snapshot 请求当 `?sessionId=` 参数；它的
    * 「侧」（session-cwd.ts 的 sideOfSessionId）与正在跑的连接不同侧时——本机 ↔ 远程、
    * 或两台远程主服务端之间——关掉当前流、清空面板数据、按新侧重开；同侧内换会话不重开
    * 流（数据是整机的，只有后续请求改用新参数）。没在取数时只记参数，下次 start 生效。
@@ -99,23 +99,22 @@ export interface SnapshotStore {
 
 const LINKS: ReadonlyArray<string> = ['starting', 'live', 'down', 'failed'];
 
-/** admit 拒绝（snapshot 回 401/403）时合成的连接说明：传输是通的，病根在鉴权（Task 8 ⑥）。 */
+/** admit 拒绝（snapshot 回 401/403）时合成的连接说明：传输是通的，病根在鉴权。 */
 const AUTH_DENIED_MESSAGE = '无权访问（admit 拒绝）：本机登录态可能已失效，重新登录 DSH 后自动恢复';
 
-/** 子客户端 zen-remote 拦截层回未桥接时的响应标记：503 + 这个响应头（PB-6 协议）。 */
+/** 子客户端 zen-remote 拦截层回未桥接时的响应标记：503 + 这个响应头（decisions D28）。 */
 const UNBRIDGED_HEADER = 'x-zen-remote';
 const UNBRIDGED_HEADER_VALUE = 'unbridged';
 /** 未桥接体的错误码（协议定死；头是简写、体带 reason 细分）。 */
 const UNBRIDGED_CODE = 'zr-plugin-unbridged';
 
-/** 响应是不是子客户端拦截层回的「未桥接」（PB-6 协议）。store 的取数路径与
- *  index.tsx 的 repo 路径共用这一个判定。 */
+/** 响应是不是子客户端拦截层回的「未桥接」。store 的取数路径与 index.tsx 的 repo 路径共用这一个判定。 */
 export function isUnbridgedResponse(res: Response): boolean {
   return res.status === 503 && res.headers.get(UNBRIDGED_HEADER) === UNBRIDGED_HEADER_VALUE;
 }
 
 /**
- * 未桥接 reason → 面板横幅的中文原因（PB-6 口径四类 + 其他附原文）。导出供测试对表。
+ * 未桥接 reason → 面板横幅的中文原因（四类专名 + 其他附原文）。导出供测试对表。
  * not-on-server 与 version-mismatch 都归「服务端未安装同版本插件」——前者没装、后者装
  * 的不是同一版，对用户是同一件事：两端装同版本。
  */
@@ -216,7 +215,7 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
   const retryDelayNow = (): number => (unbridged ? Math.max(retryMs, unbridgedRetryMs) : retryMs);
   const pollDelayNow = (): number => (unbridged ? Math.max(pollMs, unbridgedRetryMs) : pollMs);
 
-  /** 响应是不是子客户端拦截层回的「未桥接」（PB-6 协议：503 + x-zen-remote: unbridged）。 */
+  /** 响应是不是子客户端拦截层回的「未桥接」（503 + x-zen-remote: unbridged）。 */
   const isUnbridged = isUnbridgedResponse;
 
   /** 未桥接体里的 reason（协议形状 {"ok":false,"error":{"code","reason"}}），读不出回 'unknown'。 */
@@ -243,7 +242,7 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
   };
 
   /**
-   * 首响应闹钟（Task 8 ⑤）：给一次 fetch 挂上「多久没等到响应头就 abort」的计时。
+   * 首响应闹钟：给一次 fetch 挂上「多久没等到响应头就 abort」的计时。
    * 响应头一到必须 disarm（之后的正文/流读不限时——流空闲本来就可能很久）；超时的 abort
    * 与 stop() 的主动 abort 都让 fetch 以 rejection 收场，靠 timedOut() 区分：前者算连接失败
    * 走退化，后者是主动停、静默。
@@ -353,7 +352,7 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
         //（请求始终带 sessionId，桥恢复后自动接上）
         noteUnbridged(await reasonOfUnbridged(res));
       } else if (res.status === 401 || res.status === 403) {
-        // 服务端明确拒了鉴权：传输其实是通的，「连接中断」会误导排障（Task 8 ⑥）
+        // 服务端明确拒了鉴权：传输其实是通的，「连接中断」会误导排障
         noteAuthDenied();
       } else {
         if (!res.ok) throw new Error(`snapshot HTTP ${res.status}`);
@@ -401,7 +400,7 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
   /** 连 snapshot 都不可达：整个数据源看不见了，合成 down（已在 down / failed 不重复打扰订阅者）。 */
   const noteTransportDown = (): void => {
     // failed 是服务端自己的诊断（watch 起不来 + 原因），transport 全断盖不掉它——
-    // 「起不来」比「看不见」更接近病根，覆盖掉会误导排障（Task 8 ⑥）
+    // 「起不来」比「看不见」更接近病根，覆盖掉会误导排障
     if (state.link === 'down' || state.link === 'failed') return;
     const before = state;
     accept({ type: 'connection', link: 'down', message: '实时连接中断，正在重试' });
@@ -409,7 +408,7 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
   };
 
   /** admit 拒绝（401/403）：连接态仍记 down（横幅位置不变），message 把病根与出路说清；
-   *  轮询照常继续，用户重新登录后下一轮自动恢复（Task 8 ⑥）。
+   *  轮询照常继续，用户重新登录后下一轮自动恢复。
    *  与 noteTransportDown 的守卫不对称是有意的：401/403 是服务端的权威响应而非本函数合成的
    *  down——响应能回来本身就证明传输是通的，病根在鉴权；所以它允许更新 failed（「起不来」的
    *  旧诊断在服务端亲口改判「请求被拒」时让位于更接近病根的说法），而 transport 全断只是
@@ -471,7 +470,7 @@ export function createSnapshotStore(options: SnapshotStoreOptions): SnapshotStor
       alarm.disarm();
       // 连接已被换掉（侧切换重开 abort 旧流、新连接已顶上，streamController 不再是本
       // 连接）或主动 stop：静默收场——旧连接的收场不代表数据源健康状况，且侧切换每次
-      // 都会踩一遍，「退化」warn 纯属误报（PB-7b 修）。其余（真失败与超时）各打一条，
+      // 都会踩一遍，「退化」warn 属误报（decisions D28）。其余（真失败与超时）各打一条，
       // 去重位拦住重试期的周期性重复。
       if (streamController !== controller || !running) return;
       if (!warnedDegraded) {

@@ -3,7 +3,7 @@
 //
 // 为什么 require 而不静态 import：primitives 是 0.1.7/0.2.0 两版宿主都静态播种的平台词
 // （2026-10-07 在 0.2.0-rc.2 的 dsh-web-frontend 启动脚本 rM() 里核实，zen-remote 的
-// check-client-externals 白名单亦证），静态 import 本可成立；但按 T5 要求两条路都留——
+// check-client-externals 白名单亦证），静态 import 本可成立；但仍保留两条路径：
 // require 放进 try/catch，宿主模块表真拿不到时探测得 null、面板全部走自绘降级，插件不崩。
 // 探测函数（pickComponent / pickMarkdownText）是纯函数，node --test 直接喂数据断言。
 // （图标探测 pickIcon 曾在此，2026-10-07 撤除——真机两族图标光学大小不一，面板图标统一

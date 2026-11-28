@@ -2,7 +2,7 @@
 // baseline, synced }，出下一个状态。语义对应 zcode-executor CC mod hooks/view.mjs 的 applyLine
 // 去 toast 版（面板不弹提示、不算状态栏，连接态改由连接事件驱动；基线/同步语义与其一致）。
 // 行形状出处：zcode-executor PRD 第 4 节 watch 段（hello / session / synced / removed）；
-// 纯函数：不碰 DOM、不 fetch，输入对象不被修改（React 渲染层与 store（Task 4）直接可依赖）。
+// 纯函数：不碰 DOM、不 fetch，输入对象不被修改（React 渲染层与 store 直接可依赖）。
 // 快照字段可缺（旧版 CLI 容错，SPEC 用户故事 24）：缺 id 的行整行忽略。
 import type { SessionSnapshot } from './view.ts';
 
@@ -24,7 +24,7 @@ export type WatchEvent =
   | { type: 'removed'; id?: string }
   | { type: 'connection'; link: Link };
 
-/** 初始状态（CC mod EMPTY_PANEL 的去展示字段版：展示用的连接态与时间归渲染层，Task 4/5）。 */
+/** 初始状态（CC mod EMPTY_PANEL 的去展示字段版：展示用的连接态与时间归渲染层）。 */
 export function emptyState(): ReducerState {
   return { table: {}, baseline: {}, synced: false };
 }

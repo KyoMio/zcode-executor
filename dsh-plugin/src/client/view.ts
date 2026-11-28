@@ -5,7 +5,7 @@
 // 回复折叠判定。自 zcode-executor 的 hooks/view.mjs 逐字搬入（2026-10-07），只加 TypeScript
 // 类型不改逻辑；语义与其 test/view.test.mjs 对齐（本插件的 test/view.test.mjs 是等价改写）。
 // 不搬 CC mod 专属的 toastsFor / statusLine / applyLine / EMPTY_PANEL / startFailure；
-// scopeNote / repoName 也在搬运清单之外（面板层的范围说明与仓库名，Task 5 需要时再补）。
+// scopeNote / repoName 也在搬运清单之外（由面板层自行处理）。
 // 输入是 watch --json 的快照，字段表见 zcode-executor PRD 第 4 节与 lib/snapshot.mjs:242-260。
 // 纯函数：不 import lib/（mod 运行环境没有 Node 的约定沿用），不碰 DOM、不 fetch。
 
@@ -55,7 +55,7 @@ export interface SessionSnapshot {
   offpeakQueue?: OffpeakQueue | null;
 }
 
-/** 已结束会话的结果与卡片标题的文案 + 配色名（配色映射归渲染层，Task 5）。 */
+/** 已结束会话的结果与卡片标题的文案 + 配色名（配色映射归渲染层）。 */
 export interface Outcome {
   glyph: string;
   label: string;

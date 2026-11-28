@@ -1,5 +1,5 @@
 /**
- * 配置热重载守卫（Task 8 ①，todo.md T3 移交项）。execPath / watchMode / announceToAgent
+ * 配置热重载守卫。execPath / watchMode / announceToAgent
  * 三个 Config 字段全是 volatile（DSH 的设置服务只渲染 volatile 字段，src/config.ts），于是
  * 「保存了要重载才生效的配置」没法骑在 volatility 旗标上：DSH 对 volatile-only 的保存**不重启
  * 插件行**，只在本行上下文广播 `loader/volatile-update` 事件（cordis-plugin-loader 1.0.5 /

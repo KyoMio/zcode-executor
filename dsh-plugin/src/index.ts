@@ -1,17 +1,17 @@
 /**
  * dsh-zcode-executor，host 半场（Node）。
  *
- * Task 3 接线：按 watchMode 起 `zcode-executor watch --json` 子进程（src/watch-process.ts，
+ * 按 watchMode 起 `zcode-executor watch --json` 子进程（src/watch-process.ts，
  * always 常驻到 fiber dispose；on-demand 由 stream 路由的活跃连接数起停），并把三个路由挂进
  * 宿主 webServer（src/routes.ts，全部先过 connection.admit）。webServer / connection 用
  * ctx.inject 惰性注入（照 dsh-zen-remote 的 absent-half 模式）：composition 里没有这两个
  * 服务时回调根本不执行——插件行照常加载，只是不挂路由、不起 watch。
  *
- * 派单教学（Task 7）：ensureSkillLink 幂等软链 ~/.dsh/skills/zcode-executor → 包内 skill 目录
+ * 派单教学：ensureSkillLink 幂等软链 ~/.dsh/skills/zcode-executor → 包内 skill 目录
  * （src/skill-link.ts），systemPrompt 公告把派单通道与「挂起按授权分流」写进智能体的系统提示。
  * 浏览器半边经 package.json 的 dsh.client 声明走 exports["./client"]。
  *
- * 插件桥（PB-6）：另起 ctx.inject(['zenRemote'], …) 向 dsh-zen-remote 2.1 登记桥声明
+ * 插件桥：另起 ctx.inject(['zenRemote'], …) 向 dsh-zen-remote 2.1 登记桥声明
  * （src/bridge.ts），远程会话里 zen-remote 的子客户端把三条路由改道到主服务端执行；
  * 没装 zen-remote 时该 inject 永不触发，插件照常。
  */
@@ -53,7 +53,7 @@ interface SystemPromptSlice {
 }
 
 /**
- * 智能体系统提示里的派单公告（Task 7）。两三句说清通道是什么、细节去哪查、
+ * 智能体系统提示里的派单公告。两三句说清通道是什么、细节去哪查、
  * 工作模式与授权边界；具体分流和应答安全条件以 skill 为准。
  */
 const ANNOUNCE_TO_AGENT = [
@@ -72,7 +72,7 @@ export function apply(ctx: Context, config: RowConfig = {}): void {
   // 重载插件行，apply 重跑、这里读到新值）。
   const settings = resolveWatchSettings(config)
 
-  // 配置热重载（Task 8 ①，照 zen-remote 先例）：设置页保存只动 volatile 字段时宿主不重启
+  // 配置热重载：设置页保存只动 volatile 字段时宿主不重启
   // 插件行、只广播 loader/volatile-update——监听它并对解析值做指纹比对，变了就重载行，
   // watch 进程与路由随之用新 execPath/watchMode 重建；announceToAgent 同样走行重载
   // （公告的 section 生命周期挂在行上），不精细到只撤销公告。
@@ -80,9 +80,7 @@ export function apply(ctx: Context, config: RowConfig = {}): void {
 
   // 教学件一：skill 软链。幂等，占名者不指向本包只 warn；dispose 由 ensureSkillLink
   // 内部挂在行 effect 上（只清自己的链接）。失败非致命，不阻断插件加载。
-  // 软链没就绪（foreign/error）时公告仍会引用 skill「zcode-executor」——智能体会被告知去
-  // 查一个可能不存在的 skill，这里补一行 warn 把两者连起来（T7 评审 Optional 的最小联动，
-  // 不改公告文案本身）。
+  // 软链没就绪（foreign/error）时公告仍会引用 skill「zcode-executor」，补一行 warn 把两者连起来。
   void ensureSkillLink(ctx, defaultDshHome()).then((handle) => {
     if (handle.outcome !== 'foreign' && handle.outcome !== 'error') return
     ctx.logger.warn(
@@ -106,7 +104,7 @@ export function apply(ctx: Context, config: RowConfig = {}): void {
     }
   })
 
-  // 插件桥（PB-6）：向 dsh-zen-remote 2.1 登记桥声明（三条路由的转发许可）。放在
+  // 插件桥：向 dsh-zen-remote 2.1 登记桥声明（三条路由的转发许可）。放在
   // webServer 注入之外单独一支：装没装 zen-remote、装的是哪种角色，都与本插件的路由
   // 半场无关。dispose 由 registerBridgeDeclaration 内部挂 inject 子 fiber 的 effect。
   registerBridgeDeclaration(ctx, ctx.logger)
@@ -124,9 +122,9 @@ export function apply(ctx: Context, config: RowConfig = {}): void {
         register: (route) => webCtx.webServer.register(route),
         admit: (req) => webCtx.connection.admit(req),
         watch,
-        // repo 路由的 sessionId 分支（PB-6）：每请求现查宿主 sessions 服务（它可能晚于
+        // repo 路由的 sessionId 分支：每请求现查宿主 sessions 服务（它可能晚于
         // 本注入就绪；缺席回 null → 路由回 {repo:null}，不影响 cwd 分支）。get(id) 的
-        // header.cwd 是会话当前工作目录（zen-remote sessionUploadRoot 同款读法）。
+        // header.cwd 是会话当前工作目录。
         resolveSessionCwd: (sessionId) => {
           const sessions = webCtx.get('sessions') as
             | { get?(id: string): { header?: { cwd?: unknown } } | undefined }
