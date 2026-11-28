@@ -593,6 +593,22 @@ test('parseSlow：行内代码兼容、引用行永远不算裁决（R2-2 契约
   assert.equal(parseSlow('格式说明：\n```\n结论: allow\n```\n我认为需要人工'), undefined);
 });
 
+test('parseSlow：围栏状态机 CommonMark 边界（R3-2 回归）', () => {
+  const ticks = '`';
+  // 御史 fence-boundary 三变体：四反引号围栏里的较短/另一种分隔符只是内容，
+  // 围栏外的正式裁决绝不能被吞
+  const mk = (inner) => [ticks.repeat(4) + 'text', inner, ticks.repeat(4), '结论: deny fixture-rule'].join('\n');
+  assert.deepEqual(parseSlow(mk('普通示例文本')), { decision: 'deny', ruleId: 'fixture-rule' });
+  assert.deepEqual(parseSlow(mk('~~~')), { decision: 'deny', ruleId: 'fixture-rule' });
+  assert.deepEqual(parseSlow(mk(ticks.repeat(3))), { decision: 'deny', ruleId: 'fixture-rule' });
+  // 闭栏须同字符、长度足够：五反引号能关三反引号开的栏，两反引号+波浪不能
+  assert.deepEqual(parseSlow('```\n结论: allow\n' + ticks.repeat(5) + '\n结论: deny x'), { decision: 'deny', ruleId: 'x' });
+  // 波浪围栏独立成组
+  assert.deepEqual(parseSlow('~~~\n结论: allow\n~~~\n结论: deny write-outside 理由: x'), { decision: 'deny', ruleId: 'write-outside', reason: 'x' });
+  // 未配对围栏：余下全文按栏内处理，解析不出（保守落 ask）
+  assert.equal(parseSlow('分析\n```\n结论: allow\n结论: deny x'), undefined);
+});
+
 test('parseSlow：列表符号前缀（- 结论: allow / 1. 结论: deny x）', () => {
   assert.deepEqual(parseSlow('- 结论: allow'), { decision: 'allow' });
   assert.deepEqual(parseSlow('1. 结论: deny net-exfil'), { decision: 'deny', ruleId: 'net-exfil' });

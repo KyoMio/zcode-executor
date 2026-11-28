@@ -91,21 +91,13 @@ export async function orphanCheck({ cleanup = false, dryRun = false }) {
             ? '命令行里读不到会话 id，无法证明属于本实例'
             : `会话 ${sid} 不在本实例 runs/ 下——可能是别的数据目录的任务，只报告`;
         } else {
-          // 属于本实例：看锁是否失主。锁不存在或锁内 pid 不是本进程/已死 → 证明无主
-          let lockPid = null;
-          try {
-            lockPid = JSON.parse(readFileSync(path.join(home, 'runs', sid, 'lock'), 'utf8'))?.pid ?? null;
-          } catch { /* 无锁 */ }
-          if (lockPid === p.pid) {
-            ownership = 'owned'; // 理论上已被上面的 lockPids 命中，防御性保留
-            ownerDetail = '锁一致';
-          } else if (lockPid !== null && pidAlive(lockPid)) {
-            ownership = 'unknown';
-            ownerDetail = `会话 ${sid} 的锁指向另一个活 pid ${lockPid}，身份存疑`;
-          } else {
-            ownership = 'orphan';
-            ownerDetail = `属于本实例（会话 ${sid}）且锁已失主（${lockPid === null ? '无锁' : `锁内 pid ${lockPid} 已死`}）`;
-          }
+          // R3-1（御史判决）：同名会话目录不足以证明归属——备份一份已完成会话，
+          // 两个数据目录就有相同的会话登记和 runs 目录，这个状态不需要任何人伪造。
+          // 锁文件同样会被备份复制，也无法把进程绑定到本 home。缺少不可继承的
+          // 运行实例标识（如 home 绝对路径+创建时 nonce）之前，一律 unknown 只报告，
+          // 跳过自动终止。「宁可漏清，不可错杀」——收窄的覆盖边界记录在 Proof §4。
+          ownership = 'unknown';
+          ownerDetail = `会话 ${sid} 的同名目录可被备份副本复制，无法把进程绑定到本实例，只报告`;
         }
       }
     } else {
