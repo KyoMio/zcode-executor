@@ -896,7 +896,8 @@ test('T2.4b：resume 其它错误 → runner 退出、state exited、send --wait
 test('ZCE-8：done 回合采集工作区 .executor-proof.json 落盘 proof.json，status --json 暴露 proofSummary', async (t) => {
   const env = await setupSend(t);
   const repo = JSON.parse(await readFile(path.join(env.home, 'sessions.json'), 'utf8')).sessions[env.entry.id].cwd;
-  // 执行端收尾时写的证据（这里由测试代替执行端提前放好——mock 不会写文件）
+  // R1-3 新语义：回合开始前就存在且指纹不变的 .executor-proof.json 是上一轮遗留，
+  // 不算本轮产出——提前放好的文件不该被认领，proofSummary 必须是 null
   await writeFile(path.join(repo, '.executor-proof.json'), JSON.stringify({
     commands: [
       { cmd: 'npm test', exitCode: 0, summary: '847 passed, 0 failed' },
@@ -909,35 +910,71 @@ test('ZCE-8：done 回合采集工作区 .executor-proof.json 落盘 proof.json�
   const run = runBin(env.env, ['send', env.entry.id, '干活', '--wait', '--json']);
   assert.equal(run.status, 0, `stderr: ${run.stderr}`);
   const last = JSON.parse(run.stdout);
-  assert.deepEqual(last.proofSummary, { commands: 2, failed: 1, artifacts: 1, unverified: 1, prematureStop: false });
-  assert.equal(last.resumeHint, null); // done 回合不给续跑命令
-  // 落盘：runs/<id>/proof.json，证据不留在业务仓库的 git 里（文件是工作区未跟踪文件，由模板约定清理）
-  const disk = JSON.parse(await readFile(path.join(env.runsDir, 'proof.json'), 'utf8'));
-  assert.equal(disk.source, 'workspace-file');
-  assert.equal(disk.commands.length, 2);
-  // status --json 同源输出
-  const status = JSON.parse(runBin(env.env, ['status', env.entry.id, '--json']).stdout);
-  assert.deepEqual(status.proofSummary, last.proofSummary);
-  assert.equal(status.steerHint, null); // 不是 investigate
+  assert.equal(last.proofSummary, null); // 指纹不变的遗留文件不认领（R1-3 端到端）
+  assert.equal(existsSync(path.join(env.runsDir, 'proof.json')), false);
+  // 第二投沿用同一文件（执行端忘了重写）——依然不认领、不冒充
+  const second = runBin(env.env, ['send', env.entry.id, '第二投', '--wait', '--json']);
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(JSON.parse(second.stdout).proofSummary, null);
+  assert.equal(existsSync(path.join(env.runsDir, 'proof.json')), false);
   trackRunnerPids(env.runsDir);
 });
 
-test('ZCE-8：没写证据的回合 proof.json 不残留（上一回合的证据不冒充）', async (t) => {
-  const env = await setupSend(t);
+test('ZCE-8：回合进行中写入的 .executor-proof.json 被认领（基线语义正面通道）', async (t) => {
+  // 真实时序：文件在回合开始时不存在、回合进行中由执行端写出。这里用 proof.mjs 的
+  // 基线快照原语验证同一条认领路径（端到端 mock 无法让 mock 代替执行端写文件——
+  // runBin 是阻塞 spawn；workspace-file 的 collectProof 集成路径由本用例 + 上例两端夹住）
+  const { snapshotProofFile, collectProof } = await import('../lib/proof.mjs');
+  const { mkdtemp: mkdtempAsync, writeFile: wf } = await import('node:fs/promises');
+  const cwd = await mkdtempAsync(path.join(os.tmpdir(), 'zce-proof-claim-'));
+  const dir = await mkdtempAsync(path.join(os.tmpdir(), 'zce-proof-run-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }).catch(() => {}));
+  t.after(() => rm(dir, { recursive: true, force: true }).catch(() => {}));
+  const baseline = snapshotProofFile(cwd); // 回合开始：无文件
+  await wf(path.join(cwd, '.executor-proof.json'), JSON.stringify({
+    commands: [{ cmd: 'npm test', exitCode: 0, summary: '847 passed' }, { cmd: 'npm run lint', exitCode: 1, summary: '2 errors' }],
+    artifacts: ['shots/home.png'],
+    unverified: ['未在真机验证'],
+    prematureStop: false,
+  }));
+  const proof = collectProof({ cwd, dir, messageText: '', secrets: [], baseline });
+  assert.equal(proof.commands.length, 2);
+  const disk = JSON.parse(await readFile(path.join(dir, 'proof.json'), 'utf8'));
+  assert.equal(disk.source, 'workspace-file');
+  // 同一文件第二轮基线（指纹一致）→ 不认领
+  const baseline2 = snapshotProofFile(cwd);
+  const stale = collectProof({ cwd, dir, messageText: '', secrets: [], baseline: baseline2 });
+  assert.equal(stale, null);
+});
+
+test('ZCE-8：失败围栏不被旧工作区文件压住（R1-3 御史场景复刻）', async (t) => {
+  // 御史实测场景：第一轮遗留 .executor-proof.json，第二轮最终回复带失败围栏——
+  // 旧文件绝不能压住本轮围栏，proofSummary 必须反映围栏里的 failed=1。
+  // 注意（R1-3 复盘）：跨 runner 的回合每轮都 spawn 新 mock 进程，sendCount 归零重放 turns[0]——
+  // 多轮剧本只在同一 runner 生命周期内（并发 send）才有效。围栏文本放唯一回合，两轮都推它；
+  // 断言目标在第二轮：旧工作区文件不得压住本轮围栏
+  const proofBlock = ['```executor-proof', JSON.stringify({ commands: [{ cmd: 'npm test', exitCode: 1, summary: 'red' }], prematureStop: false }), '```'].join('\n');
+  const env = await setupSend(t, {
+    script: {
+      turns: [
+        { events: [{ type: 'model.streaming', payload: { kind: 'text_delta', delta: `第二轮\n${proofBlock}` } }] },
+      ],
+    },
+  });
   const repo = JSON.parse(await readFile(path.join(env.home, 'sessions.json'), 'utf8')).sessions[env.entry.id].cwd;
+  // 遗留的旧证据文件（指纹在两轮间不变）
   await writeFile(path.join(repo, '.executor-proof.json'), JSON.stringify({ commands: [{ cmd: 'npm test', exitCode: 0 }] }));
   const first = runBin(env.env, ['send', env.entry.id, '第一投', '--wait', '--json']);
   assert.equal(first.status, 0, first.stderr);
-  assert.ok(existsSync(path.join(env.runsDir, 'proof.json'))); // 第一投有证据
-  await rm(path.join(repo, '.executor-proof.json'), { force: true }); // 执行端按模板清理后，第二投没写新的
   const second = runBin(env.env, ['send', env.entry.id, '第二投', '--wait', '--json']);
   assert.equal(second.status, 0, second.stderr);
   const last = JSON.parse(second.stdout);
-  assert.equal(last.proofSummary, null); // 没证据如实报 null——上游据此打回
-  assert.equal(existsSync(path.join(env.runsDir, 'proof.json')), false); // 第一投的残留被清掉
+  // 围栏（本轮新证据）必须赢过指纹不变的旧文件
+  assert.deepEqual(last.proofSummary, { commands: 1, failed: 1, artifacts: 0, unverified: 0, prematureStop: false });
+  const disk = JSON.parse(await readFile(path.join(env.runsDir, 'proof.json'), 'utf8'));
+  assert.equal(disk.source, 'message-fence');
   trackRunnerPids(env.runsDir);
 });
-
 test('ZCE-8：工作区没文件时最终回复的 executor-proof 围栏块兜底（message-fence）', async (t) => {
   const proofBlock = ['```executor-proof', JSON.stringify({ commands: [{ cmd: 'npm test', exitCode: 0, summary: 'green' }], prematureStop: false }), '```'].join('\n');
   const env = await setupSend(t, {

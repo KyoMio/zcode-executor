@@ -25,7 +25,7 @@ new（登记，本地 id）→ send（入队，runner 起）→ 回合跑 → fo
 
 1. **回合默认超时 3600s**：长任务派单时显式给更长 `--timeout`；超时取消回合后重投是浪费额度——超时场景先读 `runs/<id>/checkpoint.md` 断点续跑。
 2. **`send` 快照语义**：审批认的是入队那一刻的 `--task` 文件内容。之后再改任务单文件对本次审批无效——改了就要带 `--task` 重投。
-3. **steer 的注入时点**：`send --steer` 必须等 `events.jsonl` 里出现首个工具边界（第一条 tool 事件）。此前 app-server 未进执行循环，插话会丢或被拒（-32010）。3.12 起回合忙时 `session/send` 直接拒绝，插话走 `v4/command sendText`。
+3. **steer 的提交时机与生效时机是两回事**：提交侧，mock 实测 `turn.started` 后（无需等首个工具事件）`--steer` 就能拿到 queued/accepted；生效侧，插话在**下一个工具边界**落地，没有边界时排到回合结束后执行。回合刚起（turn.started 之前）注入仍可能丢——等 events 出现 `turn.started` 再发。3.12 起回合忙时 `session/send` 直接拒绝，插话走 `v4/command sendText`。
 4. **runner 锁**：同一 worktree 同时至多一个活 runner（`linkSync` 原子锁）。第二个 `_runner` 退出码 2；pid 死掉的陈年锁会被新 runner 覆盖接管。
 5. **investigate 止损**：`--task-type investigate` 超 900s 未结算时，CLI 会提示可用 `--steer` 注入止损指令退回汇报——别无限等。
 6. **连续三四轮返工不过，改任务单而不是再投**：执行端有完整判断力，反复失败通常是任务描述不清。写 `tasks/T-xxx-fix.md` 说明差在哪再投同一会话。

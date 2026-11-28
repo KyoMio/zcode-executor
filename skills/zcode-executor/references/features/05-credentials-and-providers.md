@@ -28,7 +28,7 @@ preferredProvider（显式指定，必须命中）
 
 ## Gotchas
 
-1. **报错先看 `error.data.details`**——`-32601`（方法删了）/`-32602`（参数形状不对）等真错误码在 details，顶层 message 只是套话。3.12 删掉的东西：`workspace/updateProviderRegistry`、`create` 的 `runtimeModel` 字段（改用 `model` + 顶层 `thoughtLevel`）。
+1. **报错先看 details**：JSON-RPC 数值错误码在 `error.code`（包装进 ExecutorError 后是 `err.details.code`），`error.data.details` 补充上下文（方法名、原因）——顶层 message 常只是套话。3.12 删掉的东西：`workspace/updateProviderRegistry`、`create` 的 `runtimeModel` 字段（改用 `model` + 顶层 `thoughtLevel`）。
 2. **api-key 型 provider 不会要运行时头**：`interaction/requestProviderRuntimeHeaders` 只在特定场景发（start plan JWT）。模型请求直接用个人文件里的 key。
 3. **凭据探针是零 token 的**：`control-executor doctor` 含凭据键可读性检查（只报成功/失败+长度，永不打印明文）。
 4. **`ZCODE_DATA_BASE_DIR` 决定凭据根**：测试用夹具目录 + 固定测试密钥，全程不读真实 `~/.zcode`。

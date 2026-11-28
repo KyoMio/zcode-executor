@@ -153,9 +153,45 @@ async function runWithClient(dir, provider, personalFile) {
     -32602,
   );
 
-  // 新形状 create：model + 顶层 thoughtLevel + toolDenylist 试探（docs/reference/zcode-app-server-protocol.md「3.12.2 变化」）
+  // 新形状 create 共用的模型选择（deferred 与 immediate 两条链都用）
   const modelId = provider.models[0]?.modelId;
   const model = buildModelSelection(provider, modelId, 'high');
+
+  // 规格零额度链（R1-7）：deferred create → list 断言【不含】→ close。
+  // 真机事实（verified.md 198 行）：deferred 建的会话 create 成功、close 回 {closed:true}，
+  // 前后 session/list 都不列它——deferred 链的列表契约是「不出现」，与 immediate 相反。
+  let deferredId = null;
+  try {
+    const dc = await client.request(
+      'session/create',
+      { workspace, mode: 'build', persistence: 'deferred', titleGenerationEnabled: false, thoughtLevel: 'high', model },
+      { timeoutMs: 20_000 },
+    );
+    deferredId = dc?.session?.sessionId;
+    okStep('create-deferred', { sessionId: deferredId });
+  } catch (err) {
+    failStep('create-deferred', err);
+  }
+  if (deferredId !== undefined && deferredId !== null) {
+    try {
+      const lr = await client.request('session/list', { workspace }, { timeoutMs: 20_000 });
+      const ids = extractSessionIds(lr);
+      emit({ step: 'list-excludes-deferred', ok: !ids.includes(deferredId) });
+    } catch (err) {
+      failStep('list-excludes-deferred', err);
+    }
+    try {
+      await client.request('session/close', { sessionId: deferredId }, { timeoutMs: 20_000 });
+      okStep('close-deferred', {});
+    } catch (err) {
+      failStep('close-deferred', err);
+    }
+  } else {
+    emit({ step: 'list-excludes-deferred', ok: false, error: 'deferred create 未成功，无法断言列表契约' });
+    emit({ step: 'close-deferred', ok: false, error: 'deferred create 未成功' });
+  }
+
+  // 新形状 create：model + 顶层 thoughtLevel + toolDenylist 试探（docs/reference/zcode-app-server-protocol.md「3.12.2 变化」）
   const createParams = {
     workspace,
     mode: 'build',

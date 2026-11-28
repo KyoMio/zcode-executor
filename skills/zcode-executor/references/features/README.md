@@ -14,6 +14,6 @@
 
 ## 全域 Gotchas（任何一份之前先记住这三条）
 
-1. **ZCode 报错的真身在 `error.data.details`**——顶层 message 经常只有套话，details 里才有方法名、错误码和原因。排障第一步永远是展开 details。
-2. **`--steer` 必须等 `events.jsonl` 出现首个工具边界后再注入**——回合刚起就插话，app-server 还没进执行循环，steer 会静默丢失或报拒绝。
+1. **ZCode 报错的真身在 details**——数值错误码在 `error.code`（`err.details.code`），`error.data.details` 带方法名和原因，顶层 message 经常只有套话。排障第一步永远是展开 details。
+2. **`--steer` 的提交与生效要分开看**——`turn.started` 后即可提交（queued/accepted），但生效在下一个工具边界；回合刚起就注入可能丢。
 3. **`hooks/`（Claude Code mod）不能依赖完整 Node 环境**——只可用 stdio 单行 JSON 通信，绝对禁止 import 根 `lib/`（静态扫描红线，违反即构建失败）。

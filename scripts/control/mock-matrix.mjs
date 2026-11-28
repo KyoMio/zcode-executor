@@ -50,7 +50,8 @@ export async function mockMatrix({ json }) {
   const results = [];
   for (const item of MATRIX) {
     const r = await runNodeTest(item.files, { namePattern: item.pattern, timeoutMs: 300_000 });
-    const ran = (r.tests ?? 0) > 0 || (r.pass ?? 0) > 0;
+    // R1-7：必须真有命名用例跑过——文件级 ✔（零匹配时 Node 照样计 pass）不算数
+    const ran = (r.namedPasses ?? []).length > 0;
     const ok = ran && r.code === 0 && (r.fail ?? 1) === 0;
     results.push({
       scenario: item.scenario,
@@ -59,6 +60,7 @@ export async function mockMatrix({ json }) {
       tests: r.tests,
       pass: r.pass,
       fail: r.fail,
+      namedPasses: r.namedPasses,
       durationMs: undefined,
       ...(ok ? {} : {
         next: ran

@@ -26,6 +26,16 @@ try {
   output = `${err.stdout ?? ''}${err.stderr ?? ''}`;
 }
 
+// R1-6：编译器输出必须能认出是 tsc 诊断——tsc 二进制缺失/损坏时 execFileSync 仍会
+// 「跑起来」但输出是 node 的模块错误而不是 error TS 行，lines 为空会误判零错误报绿。
+// 编译器没产出任何诊断且退出非零、或输出里出现 node 内部错误字样，都保持失败状态。
+const looksLikeCompilerFailure = tscFailed && !/error TS\d+/.test(output);
+if (looksLikeCompilerFailure) {
+  const tail = output.trim().split('\n').slice(-5).join('\n');
+  console.error(`check-types: tsc 退出非零但没有一条 TS 诊断——编译器本身没正常工作（可能 typescript 未安装或损坏）。先 npm install 再重跑。输出尾巴：\n${tail}`);
+  process.exit(1);
+}
+
 const lines = output.split('\n').filter((l) => /error TS/.test(l));
 const targetErrors = lines.filter((l) => TARGETS.some((t) => l.startsWith(`${t}(`)));
 const otherCount = lines.length - targetErrors.length;

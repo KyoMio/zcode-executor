@@ -37,13 +37,15 @@ function linesOf(file) {
 
 // ── 检查 1：四层依赖方向 ──
 // 外壳（bin/ + lib/cli/ + hooks/ + dsh-plugin/）→ 工作流 → 闸门 → 协议；跨层共用只许 lib/errors.mjs。
-const IMPORT_RE = /(?:import|export)[^'"]*from\s*['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]\s*\)|require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+// R1-6：副作用导入（import '../x.mjs'——没有 from 也没有绑定）此前完全漏检，
+// 规格给的对抗示例能带着 hooks 跨层导入拿到 exit 0。补第一个 alternation。
+const IMPORT_RE = /import\s*['"]([^'"]+)['"]|(?:import|export)[^'"]*from\s*['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]\s*\)|require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
 
 function importsOf(file) {
   const src = readFileSync(file, 'utf8');
   const out = [];
   for (const m of src.matchAll(IMPORT_RE)) {
-    const spec = m[1] ?? m[2] ?? m[3];
+    const spec = m[1] ?? m[2] ?? m[3] ?? m[4];
     if (spec !== undefined) out.push({ spec, line: src.slice(0, m.index).split('\n').length });
   }
   return out;

@@ -55,11 +55,16 @@ test('未知旗标：退出码 2 且报出可用旗标清单', () => {
   assert.match(r.stderr, /--json/);
 });
 
-test('flake-swarm 参数形状：--runs/--concurrency 解析进结果', () => {
-  // 不真跑测试套件——用 runs=0 验证参数解析与空报告形状
-  const r = run(['flake-swarm', '--runs', '0', '--concurrency', '1', '--json']);
-  assert.equal(r.status, 0);
-  const out = JSON.parse(r.stdout);
-  assert.equal(out.runs, 0);
-  assert.equal(out.concurrency, 1);
+test('flake-swarm 参数校验：非正整数拒绝（退出码 2），多余位置参数拒绝', () => {
+  const bad = run(['flake-swarm', '--runs', '0', '--json']);
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /正整数/);
+  const nan = run(['flake-swarm', '--runs', 'abc', '--json']);
+  assert.equal(nan.status, 2);
+});
+
+test('live-smoke 多余位置参数拒绝（`--confirm-spend false` 的 false 不许静默吞掉）', () => {
+  const r = run(['live-smoke', '--confirm-spend', 'false', '--json']);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /位置参数/);
 });

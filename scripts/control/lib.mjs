@@ -103,10 +103,22 @@ export async function runNodeTest(files, { namePattern, timeoutMs = 300_000, con
     const m = r.stdout.match(new RegExp(`^(?:ℹ|#) ${label} (\\d+)`, 'm'));
     return m ? Number(m[1]) : null;
   };
+  // 命名用例证据（R1-7）：文件级通过不算命名用例——Node 会把零匹配的测试文件本身计成 1 pass，
+  // 光看计数会假绿。stdout 非 TTY 时 Node 用 TAP 报告（ok N - <名字>），TTY 用 spec（✔ <名字>），两种都认
+  const namedPasses = [];
+  for (const l of r.stdout.split('\n')) {
+    let name = null;
+    const spec = /^✔\s+(.+?)\s*\(\d/.exec(l);
+    if (spec) name = spec[1];
+    const tap = /^ok \d+ - (.+)$/.exec(l);
+    if (tap) name = tap[1].trim();
+    if (name && !name.endsWith('.test.mjs') && !name.endsWith('.mjs')) namedPasses.push(name);
+  }
   return {
     ...r,
     pass: count('pass'),
     fail: count('fail'),
     tests: count('tests'),
+    namedPasses,
   };
 }

@@ -65,7 +65,12 @@ async function main() {
       break;
     }
     case 'live-smoke': {
-      const { flags } = parseArgs(rest, { values: ['timeout'], booleans: ['json', 'confirm-spend', 'dry-run'] });
+      const { flags, positionals } = parseArgs(rest, { values: ['timeout'], booleans: ['json', 'confirm-spend', 'dry-run'] });
+      // 支付相关命令拒绝多余位置参数（R1 御史实测：`--confirm-spend false` 的 false 曾被静默丢弃，
+      // 使用者以为关掉了实际没关——宁可报错也不猜）
+      if (positionals.length > 0) {
+        throw new UsageError(`live-smoke 不接受位置参数：${positionals.join(' ')}。如果想说 false，直接不写 --confirm-spend 就是拒绝`);
+      }
       const { liveSmoke } = await import('./control/live-smoke.mjs');
       result = await liveSmoke({
         confirmSpend: !!flags['confirm-spend'],
@@ -77,10 +82,9 @@ async function main() {
     case 'flake-swarm': {
       const { flags } = parseArgs(rest, { values: ['runs', 'concurrency'], booleans: ['json'] });
       const { flakeSwarm } = await import('./control/flake-swarm.mjs');
-      result = await flakeSwarm({
-        runs: flags.runs ? Number(flags.runs) : 30,
-        concurrency: flags.concurrency ? Number(flags.concurrency) : 4,
-      });
+      const runsN = flags.runs === undefined ? 30 : Number(flags.runs);
+      const concN = flags.concurrency === undefined ? 4 : Number(flags.concurrency);
+      result = await flakeSwarm({ runs: runsN, concurrency: concN });
       break;
     }
     default:

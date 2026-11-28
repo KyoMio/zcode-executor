@@ -16,6 +16,13 @@ const STRESS_FILES = [
 ];
 
 export async function flakeSwarm({ runs = 30, concurrency = 4 }) {
+  // R1-7：两个参数必须是正整数——非数字/零/负数直接拒绝（此前 NaN 轮空跑也报绿）
+  if (!Number.isInteger(runs) || runs < 1) {
+    throw new (await import('./lib.mjs')).UsageError(`--runs 必须是正整数，收到：${runs}。用法示例：--runs 20`);
+  }
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new (await import('./lib.mjs')).UsageError(`--concurrency 必须是正整数，收到：${concurrency}。用法示例：--concurrency 4`);
+  }
   const results = [];
   const lanes = Array.from({ length: concurrency }, () => []);
   for (let i = 0; i < runs; i += 1) lanes[i % concurrency].push(i);
@@ -37,7 +44,9 @@ export async function flakeSwarm({ runs = 30, concurrency = 4 }) {
   }));
   const durationMs = Date.now() - startedAt;
   const failures = results.filter((r) => r && (r.code !== 0 || (r.fail ?? 1) !== 0 || r.timedOut));
-  const ok = results.every(Boolean) && failures.length === 0;
+  // R1-7：零用例的轮次不算成功（跑空了不是绿了）；完成轮数必须等于请求轮数
+  const emptyRuns = results.filter((r) => r && !failures.includes(r) && (r.pass ?? 0) === 0);
+  const ok = results.every(Boolean) && results.length === runs && failures.length === 0 && emptyRuns.length === 0;
   const totalPass = results.reduce((a, r) => a + (r?.pass ?? 0), 0);
   const human = [
     `flake-swarm ${ok ? '通过' : '发现不稳定'}：${runs} 轮 × 并发 ${concurrency}，共 ${totalPass} 断言通过，${failures.length} 轮失败，耗时 ${Math.round(durationMs / 1000)}s`,
