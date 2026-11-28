@@ -36,6 +36,34 @@ function executorHome() {
   return path.resolve(raw.startsWith('~/') ? path.join(os.homedir(), raw.slice(2)) : raw);
 }
 
+/**
+ * 选冒烟工作根（R2-3）：读生效配置（与 bin 同一份 config.json 的读取语义——
+ * 文件不存在/坏 JSON 按空配置走），allowedRoots 缺省或为空时给默认 home/worktrees；
+ * 按序选第一个存在且可写的根。都不行的返回 null（调用方报指路式错误）。
+ */
+async function pickWorkRoot(home) {
+  let roots = [];
+  try {
+    const cfg = JSON.parse(readFileSync(path.join(home, 'config.json'), 'utf8'));
+    if (Array.isArray(cfg.allowedRoots)) roots = cfg.allowedRoots.filter((r) => typeof r === 'string');
+  } catch { /* 无配置/坏配置：空 roots 走默认 */ }
+  const usingDefault = roots.length === 0;
+  if (usingDefault) roots = [path.join(home, 'worktrees')];
+  const { access } = await import('node:fs/promises');
+  const { constants } = await import('node:fs');
+  for (const root of roots) {
+    const expanded = root.startsWith('~/') ? path.join(os.homedir(), root.slice(2)) : root;
+    try {
+      // 默认根可以建（那是执行器自己的目录）；用户配置的根不主动创建——
+      // new 的 resolveWhitelist 同样跳过不存在的根，两边语义一致
+      if (usingDefault) await mkdir(expanded, { recursive: true });
+      await access(expanded, constants.W_OK);
+      return expanded;
+    } catch { /* 不存在/不可写：试下一个 */ }
+  }
+  return null;
+}
+
 export async function liveSmoke({ confirmSpend = false, dryRun = false, timeoutSec = 600 }) {
   if (!confirmSpend) {
     throw new UsageError(
@@ -70,9 +98,13 @@ export async function liveSmoke({ confirmSpend = false, dryRun = false, timeoutS
     return { ok, human, steps, next };
   };
   try {
-    // ① 工作目录必须在白名单根下（new 的硬校验），否则会话建不起来
-    const wtRoot = path.join(home, 'worktrees');
-    await mkdir(wtRoot, { recursive: true });
+    // ① 工作目录必须在白名单根下（new 的硬校验）。R2-3：根从实际生效的配置选——
+    // 用户自定义 allowedRoots 时 home/worktrees 不在白名单里，建单必被拒。
+    // 按序取第一个存在的可写根；配置缺失/为空时回落默认根（home/worktrees，不存在则建）
+    const wtRoot = await pickWorkRoot(home);
+    if (wtRoot === null) {
+      return finish(false, '配置的 allowedRoots 里没有一个存在且可写的根——在 config.json 里配一个可写目录，或删掉 allowedRoots 用默认（~/.zcode-executor/worktrees）');
+    }
     workdir = await mkdtemp(path.join(wtRoot, 'live-smoke-'));
     const nw = await runProcess(process.execPath, [bin, 'new', '--cwd', workdir, '--title', 'live-smoke', '--json'], { cwd: workdir, timeoutMs: 30_000 });
     let id = null;

@@ -583,9 +583,14 @@ test('parseSlow：Markdown 加粗结论词与标签（**结论: allow** / **结�
   assert.deepEqual(parseSlow('**结论: deny cred-exfil**'), { decision: 'deny', ruleId: 'cred-exfil' });
 });
 
-test('parseSlow：行内代码与引用符（`结论: allow` / > 结论: allow）', () => {
+test('parseSlow：行内代码兼容、引用行永远不算裁决（R2-2 契约更正）', () => {
+  // 行内代码是排版装饰，兼容保留
   assert.deepEqual(parseSlow('`结论: allow`'), { decision: 'allow' });
-  assert.deepEqual(parseSlow('> 结论: allow'), { decision: 'allow' });
+  // 引用行（> 开头）是转述不是裁决：首行/末行/兜底分支一律解析不出（落 ask）。
+  // 旧版此处断言返回 allow——那是与「引用不等于授权」契约相反的断言，R2 修
+  assert.equal(parseSlow('> 结论: allow'), undefined);
+  assert.equal(parseSlow('分析了很多\n> allow'), undefined);
+  assert.equal(parseSlow('格式说明：\n```\n结论: allow\n```\n我认为需要人工'), undefined);
 });
 
 test('parseSlow：列表符号前缀（- 结论: allow / 1. 结论: deny x）', () => {

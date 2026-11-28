@@ -37,8 +37,24 @@ if (looksLikeCompilerFailure) {
 }
 
 const lines = output.split('\n').filter((l) => /error TS/.test(l));
-const targetErrors = lines.filter((l) => TARGETS.some((t) => l.startsWith(`${t}(`)));
-const otherCount = lines.length - targetErrors.length;
+// R2-4：只有「定位到具体源码文件」的诊断才参与目标/非目标分类——
+// 行形如 `lib/xxx.mjs(12,3): error TSxxxx`。全局/项目配置错误（TS5023 拼错配置项）、
+// 缺文件（TS6053 指向不存在文件）等没有 `文件(行,列)` 前缀，归类不了就一律保留失败——
+// 绝不许配置层错误被计成「传递依赖存量」而放行
+// 只有定位到源码文件（.ts/.tsx/.js/.jsx/.mts/.cts/.mjs/.cjs）的诊断才算文件诊断——
+// 配置文件（tsconfig.checkjs.json 里的 TS5023 报成 `tsconfig.checkjs.json(1,904): error…`
+// 同样带位置前缀）不是源码文件，按无法归类处理，不许被计成传递依赖存量放行
+const FILE_DIAG_RE = /^\S+\.(?:ts|tsx|js|jsx|mts|cts|mjs|cjs|d\.ts)\(\d+,\d+\): error TS\d+/;
+const fileDiags = lines.filter((l) => FILE_DIAG_RE.test(l));
+const unclassified = lines.filter((l) => !FILE_DIAG_RE.test(l));
+if (unclassified.length > 0) {
+  console.error(`check-types: ${unclassified.length} 条无法归类到源码文件的 TS 诊断（配置/全局/缺文件类），一律按失败处理\n`);
+  for (const line of unclassified.slice(0, 10)) console.error(`  ${line}`);
+  console.error('\n修复指引：先修 tsconfig.checkjs.json 本身（配置错误/文件缺失），再重跑 verify');
+  process.exit(1);
+}
+const targetErrors = fileDiags.filter((l) => TARGETS.some((t) => l.startsWith(`${t}(`)));
+const otherCount = fileDiags.length - targetErrors.length;
 
 if (targetErrors.length > 0) {
   console.error(`check-types: 目标文件有 ${targetErrors.length} 个类型错误（checkJs 护栏拦截）\n`);
