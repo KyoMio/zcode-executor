@@ -25,6 +25,7 @@ import { createInterface } from 'node:readline';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+console.error('real-send.mjs 已并入 control-executor（ZCE-4）：真机冒烟建议用 node scripts/control-executor.mjs live-smoke --confirm-spend。本脚本保留可用。');
 import { AppServerClient } from '../lib/appserver.mjs';
 import { attachSession } from '../lib/session.mjs';
 import { createPendingGate } from '../lib/pending.mjs';

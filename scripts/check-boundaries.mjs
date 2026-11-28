@@ -160,11 +160,13 @@ for (const readme of ['README.md', 'README.zh-CN.md']) {
   const file = join(root, readme);
   if (!existsSync(file)) continue;
   const src = readFileSync(file, 'utf8');
+  // 无数字徽章（tests-passing）= 已消除手工同步债的合规形态，直接过
+  if (/tests-passing/.test(src) && !/tests-\d+%20passing/.test(src)) continue;
   const m = /tests-(\d+)%20passing/.exec(src);
   if (m === null) {
     fail('文档测试数', file, 1,
-      `${readme} 找不到 tests-NNN%20passing 徽章`,
-      '要么恢复徽章并保持数字同步，要么删掉手写数字改用动态区间描述（如 tests-passing 不写数字），消除手工同步债。');
+      `${readme} 找不到 tests-NNN%20passing 徽章或无数字 tests-passing 徽章`,
+      '要么恢复徽章并保持数字同步，要么删掉手写数字改用无数字徽章（tests-passing），消除手工同步债。');
     continue;
   }
   const documented = Number(m[1]);

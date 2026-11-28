@@ -9,6 +9,7 @@
 // 不负责：npm test（这条脚本不进测试）、会话的创建与挂起。
 import path from 'node:path';
 import process from 'node:process';
+console.error('real-review.mjs 已并入 control-executor（ZCE-4）：模型审批链真机核对仍在本子命令；统一入口为 node scripts/control-executor.mjs。');
 import { loadConfig } from '../lib/config.mjs';
 import { loadZcodeConfig, resolveReviewSelection } from '../lib/models.mjs';
 import { EXECUTOR_PROVIDER_ID, pickProvider, writePersonalProviderFile } from '../lib/providers.mjs';

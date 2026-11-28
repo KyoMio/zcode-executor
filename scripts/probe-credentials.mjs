@@ -10,6 +10,7 @@ import { createDecipheriv, createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+console.error('probe-credentials.mjs 已并入 control-executor（ZCE-4）：凭据键检查含在 node scripts/control-executor.mjs doctor --json。本脚本保留可用。');
 
 const PREFIX = 'enc:v1:';
 const json = process.argv.includes('--json');
