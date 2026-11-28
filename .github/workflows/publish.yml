@@ -22,8 +22,10 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      # 零依赖，没有 install 一步。npm test 里含 sync-doc-version --check：
-      # README 徽章和两份插件清单的版本号落后于 package.json 就在这里挂掉。
+      # 运行时零依赖；typescript/@types/node 是 devDependencies（test:ci 末尾的 npm run verify 用），
+      # npm ci --ignore-scripts 只装开发依赖，不进发布包。test:ci 同时包含 sync-doc-version --check
+      # 与 check-boundaries：文档版本号或边界门禁落后于 package.json 就在这里挂掉。
+      - run: npm ci --ignore-scripts
       - run: npm run test:ci
 
       # tag 名与 package.json 版本一致（v0.1.0 ↔ "version": "0.1.0"）。
