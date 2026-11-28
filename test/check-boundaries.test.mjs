@@ -129,3 +129,25 @@ test('check-boundaries CLI：JSX 正反用例退出码——含 TODO 裸 URL 的
     },
   );
 });
+
+test('scanExcuseComments：嵌套 JSX 闭合后回到代码区——元素后的真注释必须命中（ZCE-7 R2）', () => {
+  // 嵌套元素整体结束后，下一行的 // TODO 是真实代码注释，必须命中
+  const nested = 'const v = <div><span>text</span></div>;\n// TODO: localize';
+  const hits = scanExcuseComments(nested);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].line, 2);
+
+  // 片段嵌套同理
+  const fragment = 'const v = <><span>text</span></>;\n// TODO: localize';
+  assert.equal(scanExcuseComments(fragment).length, 1);
+
+  // 条件表达式里的子元素闭合后，花括号代码区内的注释必须命中
+  const conditional = 'const v = <main>{cond && <div>ready</div> /* TODO: localize */}</main>;';
+  const condHits = scanExcuseComments(conditional);
+  assert.equal(condHits.length, 1);
+  assert.equal(condHits[0].match, 'TODO');
+
+  // 反例保持：嵌套 JSX 文本区内的裸 URL 与撇号仍不是代码
+  const prose = 'const v = <div><span>https://example.test/TODO</span>Don\'t</div>;';
+  assert.equal(scanExcuseComments(prose).length, 0);
+});

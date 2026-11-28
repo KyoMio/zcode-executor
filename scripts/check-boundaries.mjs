@@ -152,9 +152,10 @@ export function extractComments(src) {
       if (ch === '<') {
         const next = src[i + 1];
         if (next !== undefined && /[A-Za-z/>]/.test(next)) {
-          stack.push('jsxtag');
+          const closing = next === '/';
+          stack.push(closing ? 'jsxclosetag' : 'jsxtag');
           braceDepths.push(0);
-          if (next !== '/') jsxDepth += 1; // </x> 与 </> 是闭合，不新增层
+          if (!closing) jsxDepth += 1; // </x> 与 </> 是闭合，不新增层
           i += 1;
           continue;
         }
@@ -166,14 +167,15 @@ export function extractComments(src) {
       continue;
     }
 
-    if (mode === 'jsxtag') {
+    if (mode === 'jsxtag' || mode === 'jsxclosetag') {
+      const isCloseTagMode = mode === 'jsxclosetag';
       if (ch === '\n') {
         line += 1;
         i += 1;
         continue;
       }
-      if (ch === '{') {
-        // 属性里的表达式花括号回到代码区
+      if (!isCloseTagMode && ch === '{') {
+        // 属性里的表达式花括号回到代码区（闭合标签不会有属性表达式）
         stack.push('code');
         braceDepths.push(0);
         i += 1;
@@ -196,30 +198,28 @@ export function extractComments(src) {
         }
         continue;
       }
-      if (ch === '/') {
-        if (src[i + 1] === '>') {
-          // 自闭合 </x> 之前的 />：这一层不开口
-          jsxDepth = Math.max(0, jsxDepth - 1);
+      if (!isCloseTagMode && ch === '/' && src[i + 1] === '>') {
+        // 自闭合开口标签：这一层不开口，弹出自己恢复父状态（父文本或代码）
+        jsxDepth = Math.max(0, jsxDepth - 1);
+        stack.pop();
+        braceDepths.pop();
+        if (jsxDepth === 0 && topMode() === 'jsxtext') {
           stack.pop();
           braceDepths.pop();
-          if (jsxDepth === 0 && topMode() === 'jsxtext') {
-            stack.pop();
-            braceDepths.pop();
-          }
-          i += 2;
-          continue;
         }
-        i += 1;
+        i += 2;
         continue;
       }
       if (ch === '>') {
-        const wasClose = isCloseTag(src, i);
         stack.pop();
         braceDepths.pop();
-        if (wasClose) {
-          // 闭合标签：元素层数配平；归零时连文本区一起退出，回到上级代码模式
+        if (isCloseTagMode) {
+          // 闭合标签：弹出自己对应的文本层，恢复父层状态（嵌套时回到父元素文本区，
+          // 最外层归零时回到包裹 JSX 的代码区）。每个开口标签都压入了一层 jsxtext，
+          // 与闭合标签一一对应，因此这里无条件弹出——只在全局层数归零才弹会让
+          // 嵌套元素的文本层残留，后续真实代码被当文案吞掉。
           jsxDepth = Math.max(0, jsxDepth - 1);
-          if (jsxDepth === 0 && topMode() === 'jsxtext') {
+          if (topMode() === 'jsxtext') {
             stack.pop();
             braceDepths.pop();
           }
@@ -245,6 +245,13 @@ export function extractComments(src) {
       // 进入 JSX 元素（首个标签直接进文本区决策由 jsxtag 的 > 完成）
       jsxDepth += 1;
       stack.push('jsxtag');
+      braceDepths.push(0);
+      i += 1;
+      continue;
+    }
+    if (ch === '<' && src[i + 1] === '/') {
+      // 代码区里撞上闭合标签（括号表达式内嵌 JSX 的收尾）：按闭合标签走
+      stack.push('jsxclosetag');
       braceDepths.push(0);
       i += 1;
       continue;
